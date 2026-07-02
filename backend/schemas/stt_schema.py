@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 # CommonDocumentSchema는 팀 공통 14개 필수 키를 담고 있는 부모 클래스입니다.
 from backend.schemas.common_schema import CommonDocumentSchema
 
@@ -26,6 +26,23 @@ class STTMetadata(BaseModel):
 
 
 # 3. 최종 STT 결과 구조 (팀 공통 스키마를 상속받아 14개 공통 키를 자동으로 포함합니다)
-class STTResultSchema(CommonDocumentSchema):
-    transcription: List[TranscriptionItem]
-    metadata: STTMetadata
+class STTResultSchema(BaseModel):
+    id: str
+    title: str
+
+    type: str = "consultation_audio"
+    source: str = "voice"
+
+    room_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+    content: Optional[str] = None
+    summary: Optional[str] = None
+
+    transcription: list[TranscriptionItem] = Field(default_factory=list)
+    metadata: Optional[STTMetadata] = None
+
+    language: str = "ko"
+    created_at: str
+    status: str = "processed"
+    error: Optional[str] = None

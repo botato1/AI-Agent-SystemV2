@@ -4,6 +4,15 @@ from pydantic import BaseModel, Field
 
 from backend.schemas.common_schema import CommonDocumentSchema
 
+DocumentType = Literal[
+    "contract",
+    "consultation_audio",
+    "consultation_note",
+    "precedent_ref",
+    "evidence",
+]
+DocumentSource = Literal["text", "pdf", "docx", "md", "image"]
+DocumentStatus = Literal["uploaded", "processing", "processed", "error"]
 
 # RAG 검색용 청크 하나의 구조
 class ChunkSchema(BaseModel):
@@ -11,6 +20,10 @@ class ChunkSchema(BaseModel):
     page_number: int     # 원본 문서 페이지 번호
     content_type: str    # text / table / image / diagram
     content: str         # 청크 내용
+
+    # v2 계약서 조항 분석용
+    clause: Optional[str] = None
+    clause_title: Optional[str] = None
 
 
 # 문서 처리 관련 메타데이터
@@ -22,21 +35,37 @@ class DocumentMetadata(BaseModel):
 
 
 # 최종 문서 처리 결과 구조
-class DocumentResultSchema(CommonDocumentSchema):
-    content_markdown: str
-    chunks: List[ChunkSchema]
-    metadata: DocumentMetadata
+class DocumentResultSchema(BaseModel):
+    id: str
+    title: str
+    type: DocumentType
+    source: DocumentSource
+
+    content_markdown: Optional[str] = None
+    summary: Optional[str] = None
+
+    chunks: list[ChunkSchema] = Field(default_factory=list)
+    metadata: Optional[DocumentMetadata] = None
+
+    created_at: str
+    status: DocumentStatus = "processed"
+    error: Optional[str] = None
 
 
 # 문서 메타데이터 저장 요청 구조
 class DocumentMetadataSaveRequest(BaseModel):
     document_id: str = Field(..., min_length=1)   # 8003에서 받은 document_id
     room_id: str = Field(..., min_length=1)        # 채팅방 ID
-    filename: str = Field(..., min_length=1)       # 원본 파일명
+    conversation_id: Optional[str] = None
 
-    type: Literal["document", "meeting"] = "document"  # 문서 유형
+    filename: str = Field(..., min_length=1)       # 원본 파일명
+    type: DocumentType  # 문서 유형
 
     file_path: Optional[str] = None                # 8003 원본 파일 저장 경로
     json_path: Optional[str] = None                # 8003 JSON 저장 경로
+
     content_markdown: Optional[str] = None         # 마크다운 형식의 문서 전체 텍스트
     summary: Optional[str] = None                  # 문서 요약
+
+    page_count: Optional[int] = None
+    confidence_score: Optional[float] = None
