@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 다크모드 (기본값) */
+:root,
+[data-theme="dark"] {
+  --bg-primary: #1c1a1a;
+  --bg-secondary: #161616;
+  --bg-elevated: #2a2a2a;
+  --text-primary: #e5e5e5;
+  --text-secondary: #9ca3af;
+  --border: #2e303a;
+  --accent: #3a4a6b;
+  --accent-text: #8fa3c4;
+  --danger: #e24b4a;
+}
+
+/* 라이트모드 */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7f7f5;
+  --bg-elevated: #f0f0ee;
+  --text-primary: #1a1a1a;
+  --text-secondary: #6b6b6b;
+  --border: #e3e2df;
+  --accent: #2c3e5d;
+  --accent-text: #2c3e5d;
+  --danger: #d14343;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+#root {
+  min-height: 100vh;
+}
