@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import ChatArea from '../components/Home/ChatArea'
 
 interface Props {
@@ -7,6 +9,18 @@ interface Props {
 }
 
 export default function Home({ activeRoomId, setActiveRoomId, onRoomCreated }: Props) {
+  const location = useLocation()
+
+  // 대시보드 카드 클릭으로 넘어온 경우 해당 채팅방 자동으로 열기
+  useEffect(() => {
+    const state = location.state as { roomId?: string } | null
+    if (state?.roomId) {
+      setActiveRoomId(state.roomId)
+      // state 초기화 (뒤로가기 시 반복 실행 방지)
+      window.history.replaceState({}, '')
+    }
+  }, [location.state])
+
   return (
     <div className="flex flex-col h-screen">
       {/* 상단 헤더 */}
