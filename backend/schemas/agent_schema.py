@@ -1,8 +1,8 @@
-from typing import Any, Literal, Optional, TypedDict, List
+from typing import Literal, Optional, TypedDict, List
 
-# todo: v1/v2 question_type 통합 필요. 지금은 v1/v2가 혼재되어 있음.
-# v1 - 지금 실제로 라우팅에 쓰이는 값 (agent_graph.py / classifier.py / ollama_service.py)
-QUESTION_TYPES_V1 = [
+
+# v1 - 현재 실제 라우팅에 쓰이는 값 (agent_graph.py / classifier.py / ollama_service.py)
+QuestionTypeV1 = Literal[
     "task_from_rag",
     "task_from_memory",
     "knowledge_search",
@@ -10,33 +10,48 @@ QUESTION_TYPES_V1 = [
     "summary_from_rag",
 ]
 
-# v2 - 노드가 이 값들을 실제로 분기/생성하도록 마이그레이션되기 전까지는 미사용(승주랑 qustion_type 맞춰야함. 추후 수정예정)
-QUESTION_TYPES_V2 = [
-    "general",
-    "rag_search",
-    "legal_analysis",
-    "legal_task_generate",
-    "case_card_generate",
+# v2 - 법률 서비스 기준 question_type
+# 모델1 의도분류 또는 UI 버튼/팝업 트리거로 설정됨
+QuestionTypeV2 = Literal[
+    "contract_risk_check",   # 계약서 위험조항 검증
+    "statute_search",        # 법조문 검색
+    "precedent_search",      # 판례 검색
+    "legal_search",          # 법조문 + 판례 통합 검색
+    "general_answer",        # 법률 무관 일반 답변
+    "consultation_summary",  # 상담 요약/사건카드 생성, 모델1 분류가 아니라 UI 직접 트리거
 ]
+
+# v1/v2 혼용 기간 동안 함께 허용
+QuestionType = QuestionTypeV1 | QuestionTypeV2
+
+# 업로드 문서 type
+DocumentType = Literal[
+    "contract",
+    "evidence",
+    "consultation_audio",
+    "consultation_note",
+    "precedent_ref",
+]
+
 
 class AgentState(TypedDict):
     # 1. 기본 요청 정보
     user_id: Optional[str]
     room_id: str            # v1 호환용 -> v2 기능 안정화 되면 삭제
     conversation_id: str    # 사건방 ID
-    user_message: str
-    source: str
+    user_message: str       # 현재 사용자 입력
+    source: str             # 입력 출처: text/file/audio/button 등
     created_at: str
     messages: List[dict]    # 이전 대화
 
-    # 2. 문서 / STT  파일 처리 결과
+    # 2. 문서 / STT 파일 처리 결과
     document_json: Optional[dict]
     target_document_id: Optional[str]
     target_filename: Optional[str]
     target_document_ids: Optional[List[str]]
-    document_ids: List[str]
-    document_context: List[dict]
-    document_type: Optional[str]  # contract/consultation_audio/consultation_note/precedent_ref/evidence
+    document_ids: List[str]         # 현재 conversation_id에 연결된 전체 문서 ID 목록
+    document_context: List[dict]    # conversation_id 기준 문서 메타/컨텍스트 목록
+    document_type: Optional[DocumentType]  # contract/consultation_audio/consultation_note/precedent_ref/evidence
 
     # 계약서 조항 분리 결과
     contract_clauses: List[dict]
@@ -54,21 +69,23 @@ class AgentState(TypedDict):
     rag_search_result: Optional[dict]
 
     rag_query: Optional[str]
-    rag_filter: Optional[dict]
+    rag_filter: Optional[dict]      # ChromaDB where 필터: {"document_id": "..."} 또는 {"conversation_id": "..."}
     retrieved_docs: List[dict]
     low_confidence: bool
     sources: List[dict]
-    legal_refs: List[dict]           # v2: 법령/판례 근거
+    legal_refs: List[dict]          # v2: 법령/판례 근거
 
     # 4. 질문 유형 판단 결과
-    question_type: str
+    question_type: Optional[QuestionType]  # 모델1 의도분류 결과 또는 UI 버튼/팝업에서 직접 설정된 작업 타입
     need_general_answer: bool
     need_memory: bool
     need_rag: bool
-    need_task_extract: bool          # v1 호환용
-    need_legal_analysis: bool        # v2
-    need_task_generate: bool         # v2
-    need_case_card: bool             # v2
+    need_task_extract: bool         # v1 호환용
+    need_legal_analysis: bool       # v2: 법률 분석 필요 여부
+    need_task_generate: bool        # v2: 법률 기반 후속 조치/업무 생성 필요 여부
+    need_case_card: bool            # v2: 사건카드 생성/업데이트 필요 여부
+    need_user_documents: bool       # v2: user_documents 검색 필요 여부
+    need_legal_corpus: bool         # v2: legal_corpus 검색 필요 여부
 
     # 5. 법률 분석 결과
     legal_issues: List[str]
@@ -78,13 +95,14 @@ class AgentState(TypedDict):
 
     # 6. LLM / 업무 추출 결과
     summary: Optional[str]
-    tasks: List[dict]                # v1 호환용
-    action_items: List[dict]         # v2: 법률 할일 생성 결과
+    tasks: List[dict]               # v1 호환용
+    action_items: List[dict]        # v2: 법률 후속 조치/액션 아이템
     final_answer: Optional[str]
 
     # 7. 사건 카드
     case_card: Optional[dict]
     case_summary: Optional[str]
+    case_card_requested: bool       # 사건카드 생성/업데이트 버튼 요청 여부
 
     # 8. Graph / 오류 결과
     graph_data: Optional[dict]
