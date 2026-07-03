@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from backend.schemas.chat_schema import ChatRequest
 from backend.schemas.response_schema import ChatResponseSchema
 from backend.schemas.agent_schema import AgentState
+from backend.schemas.type_schema import DEFAULT_QUESTION_TYPE
 from backend.db.crud import (
     insert_message,
     get_messages,
@@ -181,11 +182,17 @@ def build_chat_response(state: AgentState) -> ChatResponseSchema:
         "need_memory": state.get("need_memory"),
         "need_rag": state.get("need_rag"),
         "need_task_extract": state.get("need_task_extract"),
+        "need_legal_analysis": state.get("need_legal_analysis"),
+        "need_task_generate": state.get("need_task_generate"),
+        "need_case_card": state.get("need_case_card"),
+        "need_user_documents": state.get("need_user_documents"),
+        "need_legal_corpus": state.get("need_legal_corpus"),
         "target_document_id": state.get("target_document_id"),
         "target_filename": state.get("target_filename"),
         "rag_filter": state.get("rag_filter"),
         "low_confidence": state.get("low_confidence"),
         "retrieved_docs_count": len(retrieved_docs),
+        "legal_refs_count": len(state.get("legal_refs") or []),
     }
 
     return ChatResponseSchema(
@@ -222,31 +229,74 @@ def create_initial_state(request: ChatRequest, messages: list | None = None) -> 
     else:
         rag_filter = None
 
+    document_ids = [
+        doc.get("id") or doc.get("document_id")
+        for doc in documents
+        if isinstance(doc, dict) and (doc.get("id") or doc.get("document_id"))
+    ]
+
     return {
+        # 1. 기본 요청 정보
+        "user_id": getattr(request, "user_id", None),
         "room_id": request.room_id,
+        "conversation_id": request.room_id,
         "user_message": request.content,
         "source": request.source,
         "created_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
         "messages": normalize_messages_for_state(messages),
+
+        # 2. 문서 / STT 파일 처리 결과
         "document_json": None,
+        "target_document_id": target_document_id,
+        "target_filename": target_filename,
+        "target_document_ids": target_document_ids,
+        "document_ids": document_ids,
+        "document_context": documents or [],
+        "document_type": None,
+        "contract_clauses": [],
+
+        # 3. 이전 대화 / RAG 검색 결과
         "memory_context": None,
+        "save_target_content": None,
         "rag_context": None,
         "rag_search_result": None,
+        "rag_query": request.content,
+        "rag_filter": rag_filter,
         "retrieved_docs": [],
         "low_confidence": False,
         "sources": [],
-        "target_document_id": target_document_id,
-        "target_filename": target_filename,
-        "rag_filter": rag_filter,
-        "question_type": "general_answer",
+        "legal_refs": [],
+
+        # 4. 질문 유형 판단 결과
+        "question_type": DEFAULT_QUESTION_TYPE,
         "need_general_answer": True,
         "need_memory": False,
         "need_rag": False,
         "need_task_extract": False,
+        "need_legal_analysis": False,
+        "need_task_generate": False,
+        "need_case_card": False,
+        "need_user_documents": False,
+        "need_legal_corpus": False,
+
+        # 5. 법률 분석 결과
+        "legal_issues": [],
+        "risk_clauses": [],
+        "missing_checks": [],
+        "recommendations": [],
+
+        # 6. LLM / 업무 추출 결과
         "summary": None,
         "tasks": [],
+        "action_items": [],
         "final_answer": None,
-        "save_target_content": None,
+
+        # 7. 사건 카드
+        "case_card": None,
+        "case_summary": None,
+        "case_card_requested": False,
+
+        # 8. Graph / 오류 결과
         "graph_data": None,
         "current_step": "chat_service",
         "error": None,
