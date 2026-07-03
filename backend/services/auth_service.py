@@ -284,7 +284,7 @@ def update_profile(access_token: str, request: ProfileUpdateRequest) -> ProfileR
                 detail="비밀번호 변경 시 현재 비밀번호가 필요합니다.",
             )
 
-        _validate_new_password(request.new_password)
+        _validate_password_format(request.new_password)
 
         password_hash = user.get("user_password")
 
