@@ -28,16 +28,27 @@ class Settings:
         "qwen2.5"
     )
 
+    # JWT 토큰 서명에 사용할 비밀키
+    JWT_SECRET_KEY: str | None = os.getenv("JWT_SECRET_KEY")
 
+    # JWT 알고리즘
+    JWT_ALGORITHM: str = os.getenv(
+        "JWT_ALGORITHM",
+        "HS256"
+    )
+
+    # Access Token 만료 시간
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
+        os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15")
+    )
+
+    # Refresh Token 만료 시간
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(
+        os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7")
+    )
 
     # 파일 저장 경로 (NAS 연결 시 활성화)
     # STORAGE_PATH: str = os.getenv("STORAGE_PATH", "storage/uploads")
-
-
-
-    # Notion API 관련 값
-    NOTION_TOKEN: str | None = os.getenv("NOTION_TOKEN")
-    NOTION_DATABASE_ID: str | None = os.getenv("NOTION_DATABASE_ID")
 
 
 # 다른 파일에서 settings.SQLITE_DB_PATH 이런 식으로 쓰기 위한 객체
