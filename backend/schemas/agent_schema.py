@@ -1,38 +1,6 @@
-from typing import Literal, Optional, TypedDict, List
+from typing import Optional, TypedDict, List
 
-
-# v1 - 현재 실제 라우팅에 쓰이는 값 (agent_graph.py / classifier.py / ollama_service.py)
-QuestionTypeV1 = Literal[
-    "task_from_rag",
-    "task_from_memory",
-    "knowledge_search",
-    "general_answer",
-    "summary_from_rag",
-]
-
-# v2 - 법률 서비스 기준 question_type
-# 모델1 의도분류 또는 UI 버튼/팝업 트리거로 설정됨
-QuestionTypeV2 = Literal[
-    "contract_risk_check",   # 계약서 위험조항 검증
-    "statute_search",        # 법조문 검색
-    "precedent_search",      # 판례 검색
-    "legal_search",          # 법조문 + 판례 통합 검색
-    "general_answer",        # 법률 무관 일반 답변
-    "consultation_summary",  # 상담 요약/사건카드 생성, 모델1 분류가 아니라 UI 직접 트리거
-]
-
-# v1/v2 혼용 기간 동안 함께 허용
-QuestionType = QuestionTypeV1 | QuestionTypeV2
-
-# 업로드 문서 type
-DocumentType = Literal[
-    "contract",
-    "evidence",
-    "consultation_audio",
-    "consultation_note",
-    "precedent_ref",
-]
-
+from backend.schemas.type_schema import QuestionType, DocumentType
 
 class AgentState(TypedDict):
     # 1. 기본 요청 정보
@@ -51,7 +19,7 @@ class AgentState(TypedDict):
     target_document_ids: Optional[List[str]]
     document_ids: List[str]         # 현재 conversation_id에 연결된 전체 문서 ID 목록
     document_context: List[dict]    # conversation_id 기준 문서 메타/컨텍스트 목록
-    document_type: Optional[DocumentType]  # contract/consultation_audio/consultation_note/precedent_ref/evidence
+    document_type: Optional[DocumentType]  # v1/v2 혼용 기간 동안 document/meeting/voice도 임시 허용
 
     # 계약서 조항 분리 결과
     contract_clauses: List[dict]
@@ -76,7 +44,7 @@ class AgentState(TypedDict):
     legal_refs: List[dict]          # v2: 법령/판례 근거
 
     # 4. 질문 유형 판단 결과
-    question_type: Optional[QuestionType]  # 모델1 의도분류 결과 또는 UI 버튼/팝업에서 직접 설정된 작업 타입
+    question_type: QuestionType  # 모델1 의도분류 결과 또는 UI 버튼/팝업에서 직접 설정된 작업 타입
     need_general_answer: bool
     need_memory: bool
     need_rag: bool

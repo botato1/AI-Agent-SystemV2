@@ -1,16 +1,8 @@
 # 공통 문서/STT 타입 정의 (v2 기준)
 from typing import Optional, Literal, Any
-
 from pydantic import BaseModel, Field
 
-# 자료 종류
-CommonType = Literal[
-    "contract",             # 계약서
-    "consultation_audio",   # 상담 녹취록
-    "consultation_note",    # 상담 기록/메모
-    "precedent_ref",        # 판례 참고 자료
-    "evidence",             # 증거 자료
-]
+from backend.schemas.type_schema import DocumentType, DEFAULT_DOCUMENT_TYPE
 
 # common_schema는 문서 + STT 공통 구조이므로 voice 포함 가능
 CommonSource = Literal["voice", "text", "pdf", "docx", "md", "image"]
@@ -23,7 +15,7 @@ class CommonDocumentSchema(BaseModel):
     title: str
 
     # v2 법률 도메인 기준 자료 유형
-    type: CommonType
+    type: DocumentType = DEFAULT_DOCUMENT_TYPE
 
     # 입력 형식
     source: CommonSource

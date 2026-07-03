@@ -3,14 +3,8 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel, Field
 
 from backend.schemas.common_schema import CommonDocumentSchema
+from backend.schemas.type_schema import DocumentType, DEFAULT_DOCUMENT_TYPE
 
-DocumentType = Literal[
-    "contract",
-    "consultation_audio",
-    "consultation_note",
-    "precedent_ref",
-    "evidence",
-]
 DocumentSource = Literal["text", "pdf", "docx", "md", "image"]
 DocumentStatus = Literal["uploaded", "processing", "processed", "error"]
 
@@ -38,7 +32,7 @@ class DocumentMetadata(BaseModel):
 class DocumentResultSchema(BaseModel):
     id: str
     title: str
-    type: DocumentType
+    type: DocumentType = DEFAULT_DOCUMENT_TYPE
     source: DocumentSource
 
     content_markdown: Optional[str] = None
@@ -59,7 +53,7 @@ class DocumentMetadataSaveRequest(BaseModel):
     conversation_id: Optional[str] = None
 
     filename: str = Field(..., min_length=1)       # 원본 파일명
-    type: DocumentType  # 문서 유형
+    type: DocumentType = DEFAULT_DOCUMENT_TYPE
 
     file_path: Optional[str] = None                # 8003 원본 파일 저장 경로
     json_path: Optional[str] = None                # 8003 JSON 저장 경로
