@@ -47,6 +47,9 @@ class Settings:
         os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7")
     )
 
+    DATA_ENCRYPTION_MASTER_KEY: str | None = os.getenv("DATA_ENCRYPTION_MASTER_KEY")
+    DATA_ENCRYPTION_KEY_VERSION: str = os.getenv("DATA_ENCRYPTION_KEY_VERSION", "v1")
+
     # 파일 저장 경로 (NAS 연결 시 활성화)
     # STORAGE_PATH: str = os.getenv("STORAGE_PATH", "storage/uploads")
 
