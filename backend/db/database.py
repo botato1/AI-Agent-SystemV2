@@ -1,5 +1,6 @@
 # backend/db/database.py
 # SQLite 데이터베이스 연결 및 초기화
+
 import sqlite3
 from pathlib import Path
 
@@ -23,10 +24,24 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
+    # 0. users
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id         TEXT NOT NULL UNIQUE,
+        user_password   TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        role            TEXT NOT NULL DEFAULT 'member',
+        created_at      TEXT NOT NULL,
+        last_login_at   TEXT
+    )
+    """)
+
     # 1. conversations
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS conversations (
         id         TEXT PRIMARY KEY,
+        user_id    TEXT,
         title      TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -120,9 +135,7 @@ def init_db():
     )
     """)
 
-    # 8. room_document_links (방-문서 다대다 연결)
-    # 한 문서가 여러 방에 연결되거나, 한 방에 여러 문서가 연결될 수 있다.
-    # RAG 검색 시 room_id → document_id 목록 조회에 사용한다.
+    # 8. room_document_links
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS room_document_links (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,29 +146,48 @@ def init_db():
     )
     """)
 
-    # ── 마이그레이션 (기존 DB에 컬럼/테이블 없을 때 자동 추가) ────
+    # ── 마이그레이션: 기존 DB에 컬럼/테이블 없을 때 자동 추가 ──
     migrations = [
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         TEXT NOT NULL UNIQUE,
+            user_password   TEXT NOT NULL,
+            name            TEXT NOT NULL,
+            role            TEXT NOT NULL DEFAULT 'member',
+            created_at      TEXT NOT NULL,
+            last_login_at   TEXT
+        )
+        """,
+        "ALTER TABLE conversations ADD COLUMN user_id TEXT",
         "ALTER TABLE documents ADD COLUMN json_path TEXT DEFAULT ''",
         "ALTER TABLE documents ADD COLUMN content_markdown TEXT DEFAULT ''",
         "ALTER TABLE documents ADD COLUMN metadata TEXT DEFAULT '{}'",
-        "ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'medium'",
         "ALTER TABLE documents ADD COLUMN chroma_status TEXT DEFAULT 'pending'",
-        # room_document_links 테이블 추가
-        """CREATE TABLE IF NOT EXISTS room_document_links (
+        "ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'medium'",
+        """
+        CREATE TABLE IF NOT EXISTS room_document_links (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             room_id     TEXT NOT NULL,
             document_id TEXT NOT NULL,
             created_at  TEXT NOT NULL,
             UNIQUE(room_id, document_id)
-        )""",
+        )
+        """,
     ]
 
     for sql in migrations:
         try:
             cursor.execute(sql)
-            print(f"[migration] 적용: {sql[:60]}...")
-        except Exception:
-            pass
+            print(f"[migration] 적용: {sql.strip()[:60]}...")
+        except sqlite3.OperationalError as e:
+            # 이미 존재하는 컬럼이면 무시
+            if "duplicate column name" in str(e).lower():
+                pass
+            else:
+                print(f"[migration] 건너뜀: {sql.strip()[:60]}... / {e}")
+        except Exception as e:
+            print(f"[migration] 실패: {sql.strip()[:60]}... / {e}")
 
     conn.commit()
     conn.close()

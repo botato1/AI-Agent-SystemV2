@@ -17,6 +17,179 @@ def make_conversation_title(content: str, max_length: int = 30) -> str:
         return content[:max_length] + "..."
     return content
 
+# ==========================================
+# 0. users CRUD
+# ==========================================
+
+# 회원가입 시 users 테이블에 사용자 정보 저장
+# user_password에는 해시된 비밀번호를 저장
+def create_user(user_id: str, user_password: str, name: str, role: str = "member") -> dict:
+    now = get_utc_now()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO users (
+            user_id,
+            user_password,
+            name,
+            role,
+            created_at,
+            last_login_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            user_password,
+            name,
+            role,
+            now,
+            None,
+        ),
+    )
+
+    created_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": created_id,
+        "user_id": user_id,
+        "name": name,
+        "role": role,
+        "created_at": now,
+        "last_login_at": None,
+    }
+
+# 로그인 ID로 사용자를 조회
+# 로그인 시 아이디 중복 확인 / 비밀번호 검증에 사용
+def get_user_by_user_id(user_id: str) -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            id,
+            user_id,
+            user_password,
+            name,
+            role,
+            created_at,
+            last_login_at
+        FROM users
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
+
+# 내부 사용자 PK(id)로 사용자 조회
+# JWT 토큰 검증 후 현재 사용자 정보를 가져올 떄 사용
+def get_user_by_id(id: int | str) -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            id,
+            user_id,
+            user_password,
+            name,
+            role,
+            created_at,
+            last_login_at
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
+
+# 회원가입 시 user_id 중복 여부를 확인
+def is_user_id_exists(user_id: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT 1
+        FROM users
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return row is not None
+
+# 사용자 이름을 수정
+def update_user_profile(id: int | str, name: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE users
+        SET name = ?
+        WHERE id = ?
+        """,
+        (name, id),
+    )
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    return updated > 0
+
+# 사용자 비밀번호 해시를 수정
+def update_user_password(id: int | str, user_password: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE users
+        SET user_password = ?
+        WHERE id = ?
+        """,
+        (user_password, id),
+    )
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    return updated > 0
+
+# 로그인 성공 시 마지막 로그인 시간을 갱신
+def update_user_last_login(id: int | str) -> bool:
+    now = get_utc_now()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE users
+        SET last_login_at = ?
+        WHERE id = ?
+        """,
+        (now, id),
+    )
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    return updated > 0
+
 
 # ==========================================
 # 1. conversations CRUD
