@@ -10,15 +10,17 @@ RUN apt-get update && apt-get install -y \
 
 COPY backend/modules/stt/stt_requirements_v2.txt .
 
-# torch는 CUDA 12.1 전용 인덱스에서 설치
+# torch는 CUDA 12.1 전용 인덱스에서 설치 (CPU 버전 설치 방지)
 RUN python3.11 -m pip install --no-cache-dir \
     torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 RUN python3.11 -m pip install --no-cache-dir -r stt_requirements_v2.txt
 
-# 상대 import 유지 (stt/ 패키지 구조)
+# 상대 import 유지를 위해 stt/ 서브디렉토리로 복사
 COPY backend/modules/stt/ ./stt/
+
 RUN mkdir -p /app/stt/uploads
 
 EXPOSE 8001
+
 CMD ["python3.11", "-m", "uvicorn", "stt.main:app", "--host", "0.0.0.0", "--port", "8001"]

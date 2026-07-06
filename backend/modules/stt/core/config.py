@@ -1,26 +1,49 @@
 import os
 import logging
-import platform
-import sys
+import torch
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 기본 디렉토리 설정
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-
-# 운영체제별 확장자 처리 (Windows는 .exe 포함)
-EXE_EXT = ".exe" if platform.system() == "Windows" else ""
-
-# AI 엔진 및 스크립트 경로
-WHISPER_CLI = os.path.join(BASE_DIR, "whisper.cpp", "build", "bin", f"whisper-cli{EXE_EXT}")
-WHISPER_MODEL = os.path.join(BASE_DIR, "whisper.cpp", "models", "ggml-large-v3-turbo.bin")
-DIARIZE_SCRIPT = os.path.join(BASE_DIR, "diarize_engine.py")
-
-# 현재 활성화된 파이썬(가상환경) 실행 경로를 자동으로 가져옴
-PYTHON_EXEC = sys.executable
-
-# uploads 폴더 자동 생성
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ──────────────────────────────────────────
+# 디바이스 자동 감지 (RTX 5090 서버 / 맥북 / CPU 폴백)
+# ──────────────────────────────────────────
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+    COMPUTE_TYPE = "float16"   # RTX 5090 32GB VRAM 풀파워 모드
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    DEVICE = "cpu"             # faster-whisper(CTranslate2)는 MPS 미지원, CPU로 폴백
+    COMPUTE_TYPE = "int8"
+else:
+    DEVICE = "cpu"
+    COMPUTE_TYPE = "int8"
+
+# ──────────────────────────────────────────
+# faster-whisper 모델 설정
+# ──────────────────────────────────────────
+WHISPER_MODEL_SIZE = "large-v3" if DEVICE == "cuda" else "large-v3-turbo"
+WHISPER_BEAM_SIZE = 10 if DEVICE == "cuda" else 5
+WHISPER_LANGUAGE = "ko"
+
+# ──────────────────────────────────────────
+# pyannote 화자 분리 설정
+# ──────────────────────────────────────────
+HF_TOKEN = os.getenv("HF_TOKEN")
+DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+MIN_SPEAKERS = 2
+MAX_SPEAKERS = 5
 
 # 로거 설정
 logger = logging.getLogger("vigo_project")
 logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(handler)
+
+logger.info(f"⚙️  실행 디바이스: {DEVICE} / compute_type: {COMPUTE_TYPE} / 모델: {WHISPER_MODEL_SIZE}")
