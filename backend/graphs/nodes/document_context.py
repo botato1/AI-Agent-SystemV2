@@ -6,30 +6,42 @@ from backend.db.crud import (
 )
 
 
-def _resolve_document_ids(state: AgentState, room_id: str) -> list[str]:
+# TODO: PR #7(feature/backend)이 merge되어 get_document_by_id_for_user()가
+# 들어오면 room_id 대조가 아니라 user_id 기준으로 완전히 검증하도록 교체할 것.
+def _verify_document_ids_belong_to_room(document_ids: list[str], room_id: str) -> list[str]:
+    verified = []
+    for document_id in document_ids:
+        document = get_document_by_id(document_id)
+        if document and document.get("conversation_id") == room_id:
+            verified.append(document_id)
+    return verified
+
+
+def _resolve_document_ids(state: AgentState, room_id: str, user_id: str) -> list[str]:
     if state.get("target_document_id"):
-        return [state["target_document_id"]]
+        return _verify_document_ids_belong_to_room([state["target_document_id"]], room_id)
 
     if state.get("target_document_ids"):
-        return list(state["target_document_ids"])
+        return _verify_document_ids_belong_to_room(list(state["target_document_ids"]), room_id)
 
     target_filename = state.get("target_filename")
     if target_filename and room_id:
-        document = get_document_by_title_and_room(room_id, target_filename)
+        document = get_document_by_title_and_room(room_id, target_filename, user_id)
         if document:
             return [document["id"]]
 
     if room_id:
-        return get_document_ids_by_room(room_id)
+        return get_document_ids_by_room(room_id, user_id)
 
     return []
 
 
 def document_context_node(state: AgentState) -> dict:
     room_id = state.get("conversation_id") or state.get("room_id") or ""
+    user_id = state.get("user_id")
 
     try:
-        document_ids = _resolve_document_ids(state, room_id)
+        document_ids = _resolve_document_ids(state, room_id, user_id)
 
         document_context = []
         for document_id in document_ids:
@@ -47,7 +59,7 @@ def document_context_node(state: AgentState) -> dict:
 
         document_type = document_context[0]["document_type"] if document_context else None
 
-        rag_filter = {"conversation_id": room_id}
+        rag_filter = {**(state.get("rag_filter") or {}), "conversation_id": room_id}
         if document_ids:
             rag_filter["document_id"] = {"$in": document_ids}
 
@@ -65,7 +77,7 @@ def document_context_node(state: AgentState) -> dict:
             "document_ids": [],
             "document_context": [],
             "document_type": None,
-            "rag_filter": {},
+            "rag_filter": state.get("rag_filter") or {},
             "current_step": "document_context_node",
             "error": str(e),
         }
