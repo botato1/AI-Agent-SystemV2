@@ -7,8 +7,13 @@ WORKDIR /app
 # 시스템 패키지 설치 (필요한 경우)
 RUN apt-get update && apt-get install -y \
     gcc \
-    curl \ 
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --version
+
+# torch(+cu121)는 용량이 커서(약 780MB) requirements.txt와 분리한다.
+# requirements.txt가 바뀌어도 이 레이어는 캐시되어 재다운로드하지 않는다.
+RUN pip install --no-cache-dir torch==2.5.1+cu121 torchaudio==2.5.1+cu121 torchvision==0.20.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 
 # requirements.txt 먼저 복사 후 패키지 설치
 # (코드 변경 시 캐시 활용을 위해 분리)
