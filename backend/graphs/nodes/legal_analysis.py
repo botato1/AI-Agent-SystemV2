@@ -42,10 +42,9 @@ def _build_analysis_source(state: AgentState) -> str:
     if case_summary:
         parts.append(f"[상담 요약]\n{case_summary}")
 
-    rag_context = state.get("rag_context") or []
-    if rag_context:
-        ref_lines = [item.get("content", "") for item in rag_context if isinstance(item, dict)]
-        parts.append("[법령/판례 근거]\n" + "\n\n".join(ref_lines))
+    rag_context = state.get("rag_context") or ""
+    if rag_context.strip():
+        parts.append(f"[법령/판례 근거]\n{rag_context}")
 
     return "\n\n".join(parts).strip()
 

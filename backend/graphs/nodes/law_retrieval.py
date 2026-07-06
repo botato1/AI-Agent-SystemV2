@@ -43,19 +43,21 @@ def law_retrieval_node(state: AgentState) -> dict:
             for doc in documents
         ]
 
-        law_context = [
-            {
-                "content": doc.get("content"),
-                "title": doc.get("title"),
-                "source": doc.get("source"),
-                "score": doc.get("score"),
-            }
-            for doc in documents
-        ]
+        # AgentState.rag_context는 v1 호환을 위해 문자열로 다룬다
+        # (answer_node/ollama_service가 rag_context.strip()을 호출함).
+        law_context_text = "\n\n".join(
+            f"[{doc.get('title', '')}]\n{doc.get('content', '')}" for doc in documents
+        )
+        existing_rag_context = state.get("rag_context") or ""
+        merged_rag_context = (
+            f"{existing_rag_context}\n\n{law_context_text}".strip()
+            if existing_rag_context
+            else law_context_text
+        )
 
         return {
             "rag_query": rag_query,
-            "rag_context": (state.get("rag_context") or []) + law_context,
+            "rag_context": merged_rag_context,
             "legal_refs": (state.get("legal_refs") or []) + law_refs,
             "sources": (state.get("sources") or []) + law_refs,
             "rag_search_result": result,
@@ -68,7 +70,7 @@ def law_retrieval_node(state: AgentState) -> dict:
     except Exception as e:
         return {
             "rag_query": state.get("rag_query"),
-            "rag_context": state.get("rag_context") or [],
+            "rag_context": state.get("rag_context") or "",
             "legal_refs": state.get("legal_refs") or [],
             "sources": state.get("sources") or [],
             "rag_search_result": None,
