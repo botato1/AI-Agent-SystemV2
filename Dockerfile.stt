@@ -1,21 +1,13 @@
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    python3.11 ffmpeg curl \
-    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+RUN apt-get update && apt-get install -y ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/modules/stt/stt_requirements_v2.txt .
-
-# torch는 CUDA 12.1 전용 인덱스에서 설치 (CPU 버전 설치 방지)
-RUN python3.11 -m pip install --no-cache-dir \
-    "torch==2.5.1+cu121" "torchaudio==2.5.1+cu121" \
-    --index-url https://download.pytorch.org/whl/cu121
-
-RUN python3.11 -m pip install --no-cache-dir -r stt_requirements_v2.txt
+RUN pip install --no-cache-dir -r stt_requirements_v2.txt
 
 # 상대 import 유지를 위해 stt/ 서브디렉토리로 복사
 COPY backend/modules/stt/ ./stt/
@@ -24,4 +16,4 @@ RUN mkdir -p /app/stt/uploads
 
 EXPOSE 8001
 
-CMD ["python3.11", "-m", "uvicorn", "stt.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["python", "-m", "uvicorn", "stt.main:app", "--host", "0.0.0.0", "--port", "8001"]
