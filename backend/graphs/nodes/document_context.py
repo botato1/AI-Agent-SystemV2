@@ -6,12 +6,23 @@ from backend.db.crud import (
 )
 
 
+# TODO: PR #7(feature/backend)이 merge되어 get_document_by_id_for_user()가
+# 들어오면 room_id 대조가 아니라 user_id 기준으로 완전히 검증하도록 교체할 것.
+def _verify_document_ids_belong_to_room(document_ids: list[str], room_id: str) -> list[str]:
+    verified = []
+    for document_id in document_ids:
+        document = get_document_by_id(document_id)
+        if document and document.get("conversation_id") == room_id:
+            verified.append(document_id)
+    return verified
+
+
 def _resolve_document_ids(state: AgentState, room_id: str, user_id: str) -> list[str]:
     if state.get("target_document_id"):
-        return [state["target_document_id"]]
+        return _verify_document_ids_belong_to_room([state["target_document_id"]], room_id)
 
     if state.get("target_document_ids"):
-        return list(state["target_document_ids"])
+        return _verify_document_ids_belong_to_room(list(state["target_document_ids"]), room_id)
 
     target_filename = state.get("target_filename")
     if target_filename and room_id:
