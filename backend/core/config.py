@@ -1,9 +1,33 @@
+import json
 import os
+
 from dotenv import load_dotenv
 
 
 # .env 파일에 적힌 환경변수 값을 불러옴
 load_dotenv()
+
+
+# DATA_ENCRYPTION_MASTER_KEYS는 env에서 문자열로만 들어오므로
+# JSON 형태({"v1": "base64...", "v2": "base64..."})로 파싱해 dict로 변환한다.
+# 마스터 키 로테이션 시 이전 버전 키를 이 dict에 계속 남겨둔 채 새 버전을 추가해야
+# 과거 데이터의 복호화가 계속 가능하다.
+def _parse_master_keys(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            "DATA_ENCRYPTION_MASTER_KEYS는 JSON 객체 형식이어야 합니다. "
+            '예: {"v1": "base64...", "v2": "base64..."}'
+        ) from e
+
+    if not isinstance(parsed, dict):
+        raise ValueError("DATA_ENCRYPTION_MASTER_KEYS는 JSON 객체({...}) 형식이어야 합니다.")
+
+    return parsed
 
 
 class Settings:
@@ -47,7 +71,16 @@ class Settings:
         os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7")
     )
 
+    # 하위호환용 단일 마스터 키 (DATA_ENCRYPTION_MASTER_KEYS 미설정 시 fallback)
     DATA_ENCRYPTION_MASTER_KEY: str | None = os.getenv("DATA_ENCRYPTION_MASTER_KEY")
+
+    # 버전별 마스터 키 목록. 로테이션 지원을 위해 여러 버전을 동시에 보관.
+    # .env 예: DATA_ENCRYPTION_MASTER_KEYS={"v1": "base64...", "v2": "base64..."}
+    DATA_ENCRYPTION_MASTER_KEYS: dict[str, str] = _parse_master_keys(
+        os.getenv("DATA_ENCRYPTION_MASTER_KEYS")
+    )
+
+    # 현재 신규 암호화에 사용할 활성 마스터 키 버전
     DATA_ENCRYPTION_KEY_VERSION: str = os.getenv("DATA_ENCRYPTION_KEY_VERSION", "v1")
 
     # 파일 저장 경로 (NAS 연결 시 활성화)
