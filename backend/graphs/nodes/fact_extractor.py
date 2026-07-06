@@ -24,7 +24,9 @@ def _extract_text_from_document_json(document_json: dict) -> str:
 
 
 def fact_extractor_node(state: AgentState) -> dict:
-    if state.get("document_type") not in CONSULTATION_DOCUMENT_TYPES:
+    needs_case_summary = state.get("need_case_card") or state.get("need_legal_analysis")
+
+    if state.get("document_type") not in CONSULTATION_DOCUMENT_TYPES or not needs_case_summary:
         return {
             "case_summary": state.get("case_summary"),
             "summary": state.get("summary"),
@@ -38,8 +40,8 @@ def fact_extractor_node(state: AgentState) -> dict:
 
         if not text:
             return {
-                "case_summary": None,
-                "summary": None,
+                "case_summary": state.get("case_summary"),
+                "summary": state.get("summary"),
                 "current_step": "fact_extractor_node",
                 "error": "fact_source_empty",
             }
@@ -55,8 +57,8 @@ def fact_extractor_node(state: AgentState) -> dict:
 
     except Exception as e:
         return {
-            "case_summary": None,
-            "summary": None,
+            "case_summary": state.get("case_summary"),
+            "summary": state.get("summary"),
             "current_step": "fact_extractor_node",
             "error": str(e),
         }
