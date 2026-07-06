@@ -20,6 +20,29 @@ def get_connection():
     return conn
 
 
+def warn_legacy_conversations_without_user(cursor):
+    """
+    Auth 도입 전 생성되어 user_id가 NULL인 기존 채팅방을 확인한다.
+
+    주의:
+    - 기존 데이터의 소유자를 알 수 없기 때문에 자동으로 특정 사용자에게 이관하지 않는다.
+    - 필요한 경우 별도 수동 백필 스크립트로 특정 테스트 계정에 이관한다.
+    """
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM conversations
+        WHERE user_id IS NULL
+    """)
+    legacy_count = cursor.fetchone()[0]
+
+    if legacy_count > 0:
+        print(
+            f"[database] Auth 적용 전 생성된 user_id=NULL 채팅방이 {legacy_count}개 있습니다. "
+            "이 데이터는 사용자 소유자를 알 수 없어 기본적으로 조회되지 않습니다. "
+            "필요한 경우 수동 백필 스크립트로 특정 테스트 계정에 이관하세요."
+        )
+
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -38,6 +61,7 @@ def init_db():
     """)
 
     # 1. conversations
+    # user_id에는 로그인 아이디가 아니라 users.id 값을 문자열로 저장
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS conversations (
         id         TEXT PRIMARY KEY,
@@ -146,6 +170,47 @@ def init_db():
     )
     """)
 
+    # 9. indexes
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_conversations_user_id
+    ON conversations(user_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
+    ON messages(conversation_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_documents_conversation_id
+    ON documents(conversation_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id
+    ON tasks(conversation_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tasks_document_id
+    ON tasks(document_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id
+    ON document_chunks(document_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_room_document_links_room_id
+    ON room_document_links(room_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_room_document_links_document_id
+    ON room_document_links(document_id)
+    """)
+
     # ── 마이그레이션: 기존 DB에 컬럼/테이블 없을 때 자동 추가 ──
     migrations = [
         """
@@ -188,6 +253,10 @@ def init_db():
                 print(f"[migration] 건너뜀: {sql.strip()[:60]}... / {e}")
         except Exception as e:
             print(f"[migration] 실패: {sql.strip()[:60]}... / {e}")
+
+    # Auth 도입 전 생성된 기존 user_id=NULL 데이터 확인
+    # 보안상 자동 백필하지 않고 경고만 출력한다.
+    warn_legacy_conversations_without_user(cursor)
 
     conn.commit()
     conn.close()

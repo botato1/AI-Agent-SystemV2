@@ -195,7 +195,7 @@ def update_user_last_login(id: int | str) -> bool:
 # 1. conversations CRUD
 # ==========================================
 
-def create_conversation(title: str) -> str:
+def create_conversation(title: str, user_id: str) -> str:
     conv_id = str(uuid.uuid4())
     now = get_utc_now()
 
@@ -205,21 +205,21 @@ def create_conversation(title: str) -> str:
         """
         INSERT INTO conversations (
             id,
+            user_id,
             title,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (conv_id, title, now, now),
+        (conv_id, str(user_id), title, now, now),
     )
     conn.commit()
     conn.close()
 
     return conv_id
 
-
-def ensure_conversation(conversation_id: str, title: str = "새 채팅"):
+def ensure_conversation(conversation_id: str, user_id: str, title: str = "새 채팅"):
     now = get_utc_now()
 
     conn = get_connection()
@@ -229,8 +229,9 @@ def ensure_conversation(conversation_id: str, title: str = "새 채팅"):
         SELECT id
         FROM conversations
         WHERE id = ?
+          AND user_id = ?
         """,
-        (conversation_id,),
+        (conversation_id, str(user_id)),
     )
 
     if cursor.fetchone() is None:
@@ -238,13 +239,14 @@ def ensure_conversation(conversation_id: str, title: str = "새 채팅"):
             """
             INSERT INTO conversations (
                 id,
+                user_id,
                 title,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (conversation_id, title, now, now),
+            (conversation_id, str(user_id), title, now, now),
         )
     else:
         cursor.execute(
@@ -252,15 +254,16 @@ def ensure_conversation(conversation_id: str, title: str = "새 채팅"):
             UPDATE conversations
             SET updated_at = ?
             WHERE id = ?
+              AND user_id = ?
             """,
-            (now, conversation_id),
+            (now, conversation_id, str(user_id)),
         )
 
     conn.commit()
     conn.close()
 
 
-def update_conversation_timestamp(conversation_id: str):
+def update_conversation_timestamp(conversation_id: str, user_id: str) -> bool:
     now = get_utc_now()
 
     conn = get_connection()
@@ -270,14 +273,18 @@ def update_conversation_timestamp(conversation_id: str):
         UPDATE conversations
         SET updated_at = ?
         WHERE id = ?
+          AND user_id = ?
         """,
-        (now, conversation_id),
+        (now, conversation_id, str(user_id)),
     )
+    updated = cursor.rowcount
     conn.commit()
     conn.close()
 
+    return updated > 0
 
-def get_conversations() -> list:
+
+def get_conversations(user_id: str) -> list:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -298,8 +305,10 @@ def get_conversations() -> list:
                 ORDER BY d2.created_at DESC
                 LIMIT 1
             )
+        WHERE c.user_id = ?
         ORDER BY c.updated_at DESC
-        """
+        """,
+        (str(user_id),),
     )
     rows = cursor.fetchall() or []
     conn.close()
@@ -307,16 +316,18 @@ def get_conversations() -> list:
     return [dict(row) for row in rows]
 
 
-def get_conversation_by_id(room_id: str):
+def get_conversation_by_id(room_id: str, user_id: str) -> dict | None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, title, created_at, updated_at
+        SELECT id, user_id, title, created_at, updated_at
         FROM conversations
         WHERE id = ?
+          AND user_id = ?
+        LIMIT 1
         """,
-        (room_id,),
+        (room_id, str(user_id)),
     )
     row = cursor.fetchone()
     conn.close()
@@ -324,9 +335,24 @@ def get_conversation_by_id(room_id: str):
     return dict(row) if row else None
 
 
-def delete_conversation(room_id: str) -> bool:
+def delete_conversation(room_id: str, user_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM conversations
+        WHERE id = ?
+          AND user_id = ?
+        LIMIT 1
+        """,
+        (room_id, str(user_id)),
+    )
+
+    if cursor.fetchone() is None:
+        conn.close()
+        return False
 
     cursor.execute(
         """
@@ -339,6 +365,7 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM messages
@@ -346,6 +373,7 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM tasks
@@ -353,6 +381,7 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM documents
@@ -360,6 +389,7 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM summaries
@@ -367,6 +397,7 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM important_facts
@@ -374,6 +405,7 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM room_document_links
@@ -381,12 +413,14 @@ def delete_conversation(room_id: str) -> bool:
         """,
         (room_id,),
     )
+
     cursor.execute(
         """
         DELETE FROM conversations
         WHERE id = ?
+          AND user_id = ?
         """,
-        (room_id,),
+        (room_id, str(user_id)),
     )
 
     deleted_count = cursor.rowcount
@@ -395,26 +429,97 @@ def delete_conversation(room_id: str) -> bool:
 
     return deleted_count > 0
 
-
-def delete_all_conversations_and_messages() -> dict:
+def delete_all_conversations_and_messages(user_id: str) -> dict:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM document_chunks")
-    cursor.execute("DELETE FROM tasks")
-    cursor.execute("DELETE FROM messages")
-    cursor.execute("DELETE FROM summaries")
-    cursor.execute("DELETE FROM important_facts")
-    cursor.execute("DELETE FROM room_document_links")
-    cursor.execute("DELETE FROM documents")
-    cursor.execute("DELETE FROM conversations")
+    cursor.execute(
+        """
+        DELETE FROM document_chunks
+        WHERE document_id IN (
+            SELECT d.id
+            FROM documents d
+            JOIN conversations c ON c.id = d.conversation_id
+            WHERE c.user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM tasks
+        WHERE conversation_id IN (
+            SELECT id FROM conversations WHERE user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM messages
+        WHERE conversation_id IN (
+            SELECT id FROM conversations WHERE user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM summaries
+        WHERE conversation_id IN (
+            SELECT id FROM conversations WHERE user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM important_facts
+        WHERE conversation_id IN (
+            SELECT id FROM conversations WHERE user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM room_document_links
+        WHERE room_id IN (
+            SELECT id FROM conversations WHERE user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM documents
+        WHERE conversation_id IN (
+            SELECT id FROM conversations WHERE user_id = ?
+        )
+        """,
+        (str(user_id),),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM conversations
+        WHERE user_id = ?
+        """,
+        (str(user_id),),
+    )
 
     conn.commit()
     conn.close()
 
     return {
         "status": "success",
-        "message": "모든 채팅방과 메시지를 삭제했습니다.",
+        "message": "현재 사용자의 모든 채팅방과 메시지를 삭제했습니다.",
     }
 
 
@@ -422,34 +527,42 @@ def delete_all_conversations_and_messages() -> dict:
 # 2. messages CRUD
 # ==========================================
 
-def insert_message(conversation_id: str, role: str, content: str) -> str:
+def insert_message(conversation_id: str, role: str, content: str, user_id: str) -> str:
     msg_id = str(uuid.uuid4())
     now = get_utc_now()
 
     conn = get_connection()
     cursor = conn.cursor()
+
     cursor.execute(
         """
-        SELECT id
+        SELECT id, user_id
         FROM conversations
         WHERE id = ?
+        LIMIT 1
         """,
         (conversation_id,),
     )
+    conversation = cursor.fetchone()
 
-    if cursor.fetchone() is None:
+    if conversation is not None and str(conversation["user_id"]) != str(user_id):
+        conn.close()
+        raise PermissionError("채팅방 접근 권한이 없습니다.")
+
+    if conversation is None:
         title = make_conversation_title(content) if role == "user" else "새 채팅"
         cursor.execute(
             """
             INSERT INTO conversations (
                 id,
+                user_id,
                 title,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (conversation_id, title, now, now),
+            (conversation_id, str(user_id), title, now, now),
         )
 
     cursor.execute(
@@ -465,13 +578,15 @@ def insert_message(conversation_id: str, role: str, content: str) -> str:
         """,
         (msg_id, conversation_id, role, content, now),
     )
+
     cursor.execute(
         """
         UPDATE conversations
         SET updated_at = ?
         WHERE id = ?
+          AND user_id = ?
         """,
-        (now, conversation_id),
+        (now, conversation_id, str(user_id)),
     )
 
     conn.commit()
@@ -480,17 +595,19 @@ def insert_message(conversation_id: str, role: str, content: str) -> str:
     return msg_id
 
 
-def get_messages(conversation_id: str) -> list:
+def get_messages(conversation_id: str, user_id: str) -> list:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, role, content, created_at
-        FROM messages
-        WHERE conversation_id = ?
-        ORDER BY created_at ASC
+        SELECT m.id, m.role, m.content, m.created_at
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.conversation_id = ?
+          AND c.user_id = ?
+        ORDER BY m.created_at ASC
         """,
-        (conversation_id,),
+        (conversation_id, str(user_id)),
     )
     rows = cursor.fetchall() or []
     conn.close()
@@ -498,15 +615,20 @@ def get_messages(conversation_id: str) -> list:
     return [dict(row) for row in rows]
 
 
-def delete_message(message_id: str) -> bool:
+def delete_message(message_id: str, user_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
         DELETE FROM messages
         WHERE id = ?
+          AND conversation_id IN (
+              SELECT id
+              FROM conversations
+              WHERE user_id = ?
+          )
         """,
-        (message_id,),
+        (message_id, str(user_id)),
     )
     deleted_count = cursor.rowcount
     conn.commit()
@@ -669,27 +791,29 @@ def save_document_metadata(doc: dict) -> str:
     return doc_id
 
 
-def get_documents(conversation_id: str) -> list:
+def get_documents(conversation_id: str, user_id: str) -> list:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
         SELECT
-            id,
-            title,
-            type,
-            source,
-            summary,
-            status,
-            chroma_status,
-            created_at,
-            json_path,
-            metadata
-        FROM documents
-        WHERE conversation_id = ?
-        ORDER BY created_at DESC
+            d.id,
+            d.title,
+            d.type,
+            d.source,
+            d.summary,
+            d.status,
+            d.chroma_status,
+            d.created_at,
+            d.json_path,
+            d.metadata
+        FROM documents d
+        JOIN conversations c ON c.id = d.conversation_id
+        WHERE d.conversation_id = ?
+          AND c.user_id = ?
+        ORDER BY d.created_at DESC
         """,
-        (conversation_id,),
+        (conversation_id, str(user_id)),
     )
     rows = cursor.fetchall() or []
     conn.close()
@@ -723,6 +847,40 @@ def get_document_by_id(document_id: str) -> dict | None:
         LIMIT 1
         """,
         (document_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
+
+def get_document_by_id_for_user(document_id: str, user_id: str) -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            d.id,
+            d.conversation_id,
+            d.title,
+            d.type,
+            d.source,
+            d.file_path,
+            d.json_path,
+            d.content_markdown,
+            d.summary,
+            d.status,
+            d.chroma_status,
+            d.notion_url,
+            d.error,
+            d.metadata,
+            d.created_at
+        FROM documents d
+        JOIN conversations c ON c.id = d.conversation_id
+        WHERE d.id = ?
+          AND c.user_id = ?
+        LIMIT 1
+        """,
+        (document_id, str(user_id)),
     )
     row = cursor.fetchone()
     conn.close()
@@ -1229,60 +1387,108 @@ def get_documents_by_chroma_status(status: str) -> list:
 # 8. room_document_links CRUD
 # ==========================================
 
-def link_document_to_room(room_id: str, document_id: str) -> bool:
+def link_document_to_room(room_id: str, document_id: str, user_id: str) -> bool:
     now = get_utc_now()
     conn = get_connection()
     cursor = conn.cursor()
+
     try:
         cursor.execute(
             """
-            INSERT OR IGNORE INTO room_document_links (room_id, document_id, created_at)
+            SELECT id
+            FROM conversations
+            WHERE id = ?
+              AND user_id = ?
+            LIMIT 1
+            """,
+            (room_id, str(user_id)),
+        )
+
+        if cursor.fetchone() is None:
+            return False
+
+        cursor.execute(
+            """
+            SELECT d.id
+            FROM documents d
+            JOIN conversations c ON c.id = d.conversation_id
+            WHERE d.id = ?
+              AND c.user_id = ?
+            LIMIT 1
+            """,
+            (document_id, str(user_id)),
+        )
+
+        if cursor.fetchone() is None:
+            return False
+
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO room_document_links (
+                room_id,
+                document_id,
+                created_at
+            )
             VALUES (?, ?, ?)
             """,
             (room_id, document_id, now),
         )
+
         conn.commit()
-        return cursor.rowcount > 0
+        return True
+
     except Exception as e:
         print(f"[link_document_to_room] 오류: {e}")
         return False
+
     finally:
         conn.close()
 
 
-def unlink_document_from_room(room_id: str, document_id: str) -> bool:
+def unlink_document_from_room(room_id: str, document_id: str, user_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
         DELETE FROM room_document_links
-        WHERE room_id = ? AND document_id = ?
+        WHERE room_id = ?
+          AND document_id = ?
+          AND room_id IN (
+              SELECT id
+              FROM conversations
+              WHERE user_id = ?
+          )
         """,
-        (room_id, document_id),
+        (room_id, document_id, str(user_id)),
     )
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
+
     return deleted > 0
 
 
-def get_document_ids_by_room(room_id: str) -> list[str]:
+def get_document_ids_by_room(room_id: str, user_id: str) -> list[str]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT document_id FROM room_document_links
-        WHERE room_id = ?
-        ORDER BY created_at DESC
+        SELECT rdl.document_id
+        FROM room_document_links rdl
+        JOIN conversations c ON c.id = rdl.room_id
+        WHERE rdl.room_id = ?
+          AND c.user_id = ?
+        ORDER BY rdl.created_at DESC
         """,
-        (room_id,),
+        (room_id, str(user_id)),
     )
     rows = cursor.fetchall() or []
     conn.close()
+
     return [row["document_id"] for row in rows]
 
 
-def get_documents_by_room_id_v2(room_id: str) -> list:
+def get_documents_by_room_id_v2(room_id: str, user_id: str) -> list:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1290,21 +1496,26 @@ def get_documents_by_room_id_v2(room_id: str) -> list:
         SELECT d.id, d.title, d.type, d.source, d.chroma_status, d.created_at
         FROM room_document_links rdl
         JOIN documents d ON d.id = rdl.document_id
+        JOIN conversations room_c ON room_c.id = rdl.room_id
+        JOIN conversations doc_c ON doc_c.id = d.conversation_id
         WHERE rdl.room_id = ?
+          AND room_c.user_id = ?
+          AND doc_c.user_id = ?
         ORDER BY rdl.created_at DESC
         """,
-        (room_id,),
+        (room_id, str(user_id), str(user_id)),
     )
     rows = cursor.fetchall() or []
     conn.close()
+
     return [dict(row) for row in rows]
 
 
-def get_documents_by_room_id(room_id: str) -> list:
-    return get_documents_by_room_id_v2(room_id)
+def get_documents_by_room_id(room_id: str, user_id: str) -> list:
+    return get_documents_by_room_id_v2(room_id, user_id)
 
 
-def get_document_by_title_and_room(room_id: str, title: str) -> dict | None:
+def get_document_by_title_and_room(room_id: str, title: str, user_id: str) -> dict | None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1312,11 +1523,18 @@ def get_document_by_title_and_room(room_id: str, title: str) -> dict | None:
         SELECT d.id, d.title, d.type, d.source, d.chroma_status, d.created_at
         FROM room_document_links rdl
         JOIN documents d ON d.id = rdl.document_id
-        WHERE rdl.room_id = ? AND d.title LIKE ?
-        ORDER BY rdl.created_at DESC LIMIT 1
+        JOIN conversations room_c ON room_c.id = rdl.room_id
+        JOIN conversations doc_c ON doc_c.id = d.conversation_id
+        WHERE rdl.room_id = ?
+          AND room_c.user_id = ?
+          AND doc_c.user_id = ?
+          AND d.title LIKE ?
+        ORDER BY rdl.created_at DESC
+        LIMIT 1
         """,
-        (room_id, f"%{title}%"),
+        (room_id, str(user_id), str(user_id), f"%{title}%"),
     )
     row = cursor.fetchone()
     conn.close()
+
     return dict(row) if row else None

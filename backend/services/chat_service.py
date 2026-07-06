@@ -10,6 +10,7 @@ from backend.db.crud import (
     insert_message,
     get_messages,
     get_documents,
+    get_conversation_by_id,
 )
 from backend.graphs.agent_graph import agent_graph
 
@@ -212,22 +213,39 @@ def run_agent_graph(state: AgentState) -> AgentState:
 
 
 # AgentState 초기화
-def create_initial_state(request: ChatRequest, messages: list | None = None) -> AgentState:
+def create_initial_state(request: ChatRequest, user_id: str, messages: list | None = None) -> AgentState:    
     target_document_id, target_filename = _resolve_target_document(request)
     target_document_ids = request.target_document_ids or []
 
-    documents = get_documents(request.room_id)
+    documents = get_documents(request.room_id, user_id)
+
+    base_filter = {
+        "user_id": str(user_id)
+    }
 
     if target_document_id:
-        rag_filter = {"document_id": target_document_id}
+        rag_filter = {
+            **base_filter,
+            "document_id": target_document_id,
+            }
     elif target_filename:
-        rag_filter = {"filename": target_filename}
+        rag_filter = {
+            **base_filter,
+            "filename": target_filename,
+            }
     elif target_document_ids:
-        rag_filter = {"document_ids": target_document_ids}
+        rag_filter = {
+            **base_filter,
+            "document_ids": target_document_ids,
+            }
     elif documents:
-        rag_filter = {"room_id": request.room_id}
+        rag_filter = {
+            **base_filter,
+            "room_id": request.room_id,
+            "conversation_id": request.room_id,
+            }
     else:
-        rag_filter = None
+        rag_filter = base_filter
 
     document_ids = [
         doc.get("id") or doc.get("document_id")
@@ -237,7 +255,7 @@ def create_initial_state(request: ChatRequest, messages: list | None = None) -> 
 
     return {
         # 1. 기본 요청 정보
-        "user_id": getattr(request, "user_id", None),
+        "user_id": str(user_id),
         "room_id": request.room_id,
         "conversation_id": request.room_id,
         "user_message": request.content,
@@ -305,15 +323,40 @@ def create_initial_state(request: ChatRequest, messages: list | None = None) -> 
 
 # 채팅 처리
 # 채팅 요청을 처리하고 최종 응답을 반환
-async def handle_chat(request: ChatRequest) -> ChatResponseSchema:
-    insert_message(conversation_id=request.room_id, role="user", content=request.content)
+async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
+    # room_id가 있으면 현재 사용자의 채팅방인지 먼저 확인
+    # 없으면 insert_message에서 새 채팅방 생성 가능
+    room = get_conversation_by_id(request.room_id, user_id)
 
-    messages = get_messages(request.room_id)
-    state = create_initial_state(request, messages=messages)
+    # 현재 사용자 소유가 아닌 room_id로 접근한 경우
+    # 단, 완전히 새 room_id인지 / 타 사용자 room_id인지는 crud에서 한 번 더 막아야 안전함
+    try:
+        insert_message(
+            conversation_id=request.room_id,
+            role="user",
+            content=request.content,
+            user_id=user_id,
+        )
+    except PermissionError:
+        raise
+
+    messages = get_messages(request.room_id, user_id)
+
+    state = create_initial_state(
+        request=request,
+        user_id=user_id,
+        messages=messages,
+    )
 
     result_state = await asyncio.to_thread(run_agent_graph, state)
 
     answer = result_state.get("final_answer") or "응답을 생성하지 못했습니다."
-    insert_message(conversation_id=request.room_id, role="assistant", content=answer)
+
+    insert_message(
+        conversation_id=request.room_id,
+        role="assistant",
+        content=answer,
+        user_id=user_id,
+    )
 
     return build_chat_response(result_state)
