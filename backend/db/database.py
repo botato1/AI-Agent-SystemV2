@@ -20,6 +20,29 @@ def get_connection():
     return conn
 
 
+def warn_legacy_conversations_without_user(cursor):
+    """
+    Auth 도입 전 생성되어 user_id가 NULL인 기존 채팅방을 확인한다.
+
+    주의:
+    - 기존 데이터의 소유자를 알 수 없기 때문에 자동으로 특정 사용자에게 이관하지 않는다.
+    - 필요한 경우 별도 수동 백필 스크립트로 특정 테스트 계정에 이관한다.
+    """
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM conversations
+        WHERE user_id IS NULL
+    """)
+    legacy_count = cursor.fetchone()[0]
+
+    if legacy_count > 0:
+        print(
+            f"[database] Auth 적용 전 생성된 user_id=NULL 채팅방이 {legacy_count}개 있습니다. "
+            "이 데이터는 사용자 소유자를 알 수 없어 기본적으로 조회되지 않습니다. "
+            "필요한 경우 수동 백필 스크립트로 특정 테스트 계정에 이관하세요."
+        )
+
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -230,6 +253,10 @@ def init_db():
                 print(f"[migration] 건너뜀: {sql.strip()[:60]}... / {e}")
         except Exception as e:
             print(f"[migration] 실패: {sql.strip()[:60]}... / {e}")
+
+    # Auth 도입 전 생성된 기존 user_id=NULL 데이터 확인
+    # 보안상 자동 백필하지 않고 경고만 출력한다.
+    warn_legacy_conversations_without_user(cursor)
 
     conn.commit()
     conn.close()
