@@ -12,7 +12,8 @@ COPY backend/modules/stt/stt_requirements_v2.txt .
 
 # torch는 CUDA 12.1 전용 인덱스에서 설치 (CPU 버전 설치 방지)
 RUN python3.11 -m pip install --no-cache-dir \
-    torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+    "torch==2.5.1+cu121" "torchaudio==2.5.1+cu121" \
+    --index-url https://download.pytorch.org/whl/cu121
 
 RUN python3.11 -m pip install --no-cache-dir -r stt_requirements_v2.txt
 
