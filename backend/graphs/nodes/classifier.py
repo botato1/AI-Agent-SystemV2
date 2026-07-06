@@ -1,105 +1,99 @@
 from backend.schemas.agent_schema import AgentState
-from backend.services.ollama_service import ollama_service
+from backend.schemas.type_schema import QuestionTypeV2, DEFAULT_QUESTION_TYPE
 
 
-# 키워드 상수
-VALID_QUESTION_TYPES = {
-    "general",
-    "rag_search",
-    "legal_analysis",
-    "legal_task_generate",
-    "case_card_generate",
-}
+# TODO: 승주의 ollama_service.classify_for_graph()가 V1 question_type만
+# 반환하는 상태라 아직 사용하지 않음. V2 법률 의도 분류로 마이그레이션되면
+# 이 노드를 LLM 기반으로 교체할 것.
 
-LEGAL_ANALYSIS_KEYWORDS = [
-    "계약서", "계약", "조항", "검토", "분석", "위험", "리스크",
-    "법률", "법적", "쟁점", "위반",
+CONTRACT_KEYWORDS = [
+    "계약서", "계약 조항", "계약서 검토", "계약 검토",
+    "계약 위험", "계약 리스크", "조항 위험", "위험 조항",
 ]
-
-CASE_CARD_KEYWORDS = [
-  "사건 카드", "사건카드", "사건 등록", "사건 저장", "사건 생성",
-]
-
-TASK_KEYWORDS = [
-    "할 일", "할일", "업무", "작업", "후속", "조치", "처리",
-]
-
-RAG_KEYWORDS = [
-   "판례", "법령", "조문", "근거", "검색", "찾아줘", "알려줘",
-]
+STATUTE_KEYWORDS = ["법조문", "법령", "조문", "법률 근거"]
+PRECEDENT_KEYWORDS = ["판례", "판결"]
+LEGAL_SEARCH_KEYWORDS = ["법적 근거", "관련 법률", "법률 검토", "법률 자문"]
 
 
-# helper 함수
 def _contains_any(text: str, keywords: list[str]) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
-def _resolve_question_type(question_type: str, user_message:str,) -> str:
-    if question_typenote in VALID_QUESTION_TYPES:
-        question_type="general"
+def _resolve_question_type(state: AgentState) -> QuestionTypeV2:
+    # 사건 카드 생성/갱신은 모델 분류가 아니라 UI 버튼 요청으로 트리거된다.
+    if state.get("case_card_requested"):
+        return "consultation_summary"
 
-    if _contains_any(user_message,CASE_CARD_KEYWORDS):
-        return "case_card_generate"
-        
-    if _contains_any(user_message,TASK_KEYWORDS):
-        return "legal_task_generate"
-        
-    if _contains_any(user_message,LEGAL_ANALYSIS_KEYWORDS):
-        return "legal_analysis"
+    user_message = state.get("user_message", "")
 
-    if _contains_any(user_message,RAG_KEYWORDS):
-        return "rag_search"
+    if _contains_any(user_message, CONTRACT_KEYWORDS):
+        return "contract_risk_check"
 
-    return question_type
+    if _contains_any(user_message, PRECEDENT_KEYWORDS):
+        return "precedent_search"
 
-def _build_need_flags(question_type: str) -> dict:
+    if _contains_any(user_message, STATUTE_KEYWORDS):
+        return "statute_search"
+
+    if _contains_any(user_message, LEGAL_SEARCH_KEYWORDS):
+        return "legal_search"
+
+    return "general_answer"
+
+
+def _build_need_flags(question_type: QuestionTypeV2) -> dict:
     return {
-        "need_general_answer": question_type == "general",
+        "need_general_answer": question_type == "general_answer",
         "need_memory": False,
         "need_rag": question_type in {
-            "rag_search",
-            "legal_analysis",
-            "legal_task_generate",
+            "contract_risk_check",
+            "statute_search",
+            "precedent_search",
+            "legal_search",
         },
+        "need_task_extract": False,
         "need_legal_analysis": question_type in {
-            "legal_analysis",
-            "legal_task_generate",
-            "case_card_generate",
+            "contract_risk_check",
+            "consultation_summary",
         },
-        "need_task_generate": question_type == "legal_task_generate",
-        "need_case_card": question_type == "case_card_generate",
+        "need_task_generate": False,
+        "need_case_card": question_type == "consultation_summary",
+        "need_user_documents": question_type in {
+            "contract_risk_check",
+            "consultation_summary",
+        },
+        "need_legal_corpus": question_type in {
+            "statute_search",
+            "precedent_search",
+            "legal_search",
+        },
     }
 
 
-
-# classifier_node
 def classifier_node(state: AgentState) -> dict:
-    user_message = state.get("user_message", "")
-  
     try:
-        classified = ollama_service.classify_for_graph(user_message)
-
-        question_type = classified.get("question_type", "general")
-        question_type = _resolve_question_type(question_type, user_message)
+        question_type = _resolve_question_type(state)
         need_flags = _build_need_flags(question_type)
 
-         return {
+        return {
             "question_type": question_type,
             **need_flags,
-            "current_step": "classify_node",
+            "current_step": "classifier_node",
             "error": None,
         }
-       
+
     except Exception as e:
         return {
-            **state,
-            "question_type": "general",
+            "question_type": DEFAULT_QUESTION_TYPE,
             "need_general_answer": True,
             "need_memory": False,
             "need_rag": False,
+            "need_task_extract": False,
             "need_legal_analysis": False,
             "need_task_generate": False,
             "need_case_card": False,
-            "current_step": "classify_node",
+            "need_user_documents": False,
+            "need_legal_corpus": False,
+            "current_step": "classifier_node",
             "error": str(e),
         }
