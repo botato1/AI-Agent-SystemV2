@@ -821,6 +821,36 @@ def get_documents(conversation_id: str, user_id: str) -> list:
     return [dict(row) for row in rows]
 
 
+def get_documents_for_user(user_id: str) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            d.id              AS document_id,
+            d.title           AS filename,
+            d.conversation_id AS room_id,
+            d.conversation_id AS conversation_id,
+            d.type,
+            d.source,
+            d.json_path,
+            d.chroma_status,
+            d.metadata,
+            d.created_at
+        FROM documents d
+        JOIN conversations c ON c.id = d.conversation_id
+        WHERE c.user_id = ?
+          AND d.type != 'voice'
+        ORDER BY d.created_at DESC
+        """,
+        (str(user_id),),
+    )
+    rows = cursor.fetchall() or []
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
 def get_document_by_id(document_id: str) -> dict | None:
     conn = get_connection()
     cursor = conn.cursor()
@@ -852,6 +882,7 @@ def get_document_by_id(document_id: str) -> dict | None:
     conn.close()
 
     return dict(row) if row else None
+
 
 def get_document_by_id_for_user(document_id: str, user_id: str) -> dict | None:
     conn = get_connection()
@@ -1012,6 +1043,37 @@ def get_all_voice_documents() -> list[dict]:
     return _get_voice_documents()
 
 
+def get_voice_documents_for_user(user_id: str) -> list[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            d.id,
+            d.conversation_id,
+            d.title,
+            d.type,
+            d.source,
+            d.file_path,
+            d.json_path,
+            d.summary,
+            d.status,
+            d.chroma_status,
+            d.metadata,
+            d.created_at
+        FROM documents d
+        JOIN conversations c ON c.id = d.conversation_id
+        WHERE c.user_id = ?
+          AND d.type = 'voice'
+        ORDER BY d.created_at DESC
+        """,
+        (str(user_id),),
+    )
+    rows = cursor.fetchall() or []
+    conn.close()
+
+    return [dict(row) for row in rows]
+
 def get_voice_documents_by_conversation(conversation_id: str) -> list[dict]:
     return _get_voice_documents(conversation_id=conversation_id)
 
@@ -1032,6 +1094,59 @@ def delete_document(document_id: str) -> bool:
 
     return deleted > 0
 
+
+def delete_document_for_user(document_id: str, user_id: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT d.id
+        FROM documents d
+        JOIN conversations c ON c.id = d.conversation_id
+        WHERE d.id = ?
+          AND c.user_id = ?
+        LIMIT 1
+        """,
+        (document_id, str(user_id)),
+    )
+
+    if cursor.fetchone() is None:
+        conn.close()
+        return False
+
+    cursor.execute(
+        """
+        DELETE FROM room_document_links
+        WHERE document_id = ?
+          AND room_id IN (
+              SELECT id
+              FROM conversations
+              WHERE user_id = ?
+          )
+        """,
+        (document_id, str(user_id)),
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM documents
+        WHERE id = ?
+          AND conversation_id IN (
+              SELECT id
+              FROM conversations
+              WHERE user_id = ?
+          )
+        """,
+        (document_id, str(user_id)),
+    )
+
+    deleted = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return deleted > 0
 
 # ==========================================
 # 6. tasks CRUD
