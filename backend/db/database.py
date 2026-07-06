@@ -38,6 +38,7 @@ def init_db():
     """)
 
     # 1. conversations
+    # user_id에는 로그인 아이디가 아니라 users.id 값을 문자열로 저장
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS conversations (
         id         TEXT PRIMARY KEY,
@@ -144,6 +145,47 @@ def init_db():
         created_at  TEXT NOT NULL,
         UNIQUE(room_id, document_id)
     )
+    """)
+
+    # 9. indexes
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_conversations_user_id
+    ON conversations(user_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
+    ON messages(conversation_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_documents_conversation_id
+    ON documents(conversation_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id
+    ON tasks(conversation_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tasks_document_id
+    ON tasks(document_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id
+    ON document_chunks(document_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_room_document_links_room_id
+    ON room_document_links(room_id)
+    """)
+
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_room_document_links_document_id
+    ON room_document_links(document_id)
     """)
 
     # ── 마이그레이션: 기존 DB에 컬럼/테이블 없을 때 자동 추가 ──
