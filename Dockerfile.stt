@@ -6,6 +6,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
+RUN pip install --no-cache-dir "torchaudio>=2.8.0" \
+    --index-url https://download.pytorch.org/whl/cu124
+
 COPY backend/modules/stt/stt_requirements_v2.txt .
 RUN pip install --no-cache-dir -r stt_requirements_v2.txt
 
