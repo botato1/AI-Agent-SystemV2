@@ -2,8 +2,6 @@ import { useState, type FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-type AnimState = "idle" | "playing";
-
 function ScaleLogo({ size = 52 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 140 140" fill="none">
@@ -31,25 +29,16 @@ function ScaleLogo({ size = 52 }: { size?: number }) {
 export default function LoginPage() {
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
-  const [anim, setAnim] = useState<AnimState>("idle");
   const { login, loading, error } = useAuth();
   const navigate = useNavigate();
 
-const handleSubmit = async (e: FormEvent) => {
-  e.preventDefault();
-  try {
-    await login(userId, password);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setAnim("playing");
-        // 저울이 완전히 커진 다음에 이동
-        setTimeout(() => navigate("/"), 950);
-      });
-    });
-  } catch {}
-};
-
-  const isPlaying = anim === "playing";
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await login(userId, password);
+      navigate("/");
+    } catch {}
+  };
 
   return (
     <div
@@ -66,18 +55,7 @@ const handleSubmit = async (e: FormEvent) => {
           zIndex: 1,
         }}
       >
-        <div
-          aria-hidden="true"
-          style={{
-            marginBottom: "12px",
-            transformOrigin: "center center",
-            transform: isPlaying ? "scale(30)" : "scale(1)",
-            opacity: isPlaying ? 0 : 1,
-            transition: isPlaying
-              ? "transform 0.85s cubic-bezier(0.2,0,0.4,1), opacity 0.25s 0.65s ease"
-              : "none",
-          }}
-        >
+        <div aria-hidden="true" style={{ marginBottom: "12px" }}>
           <ScaleLogo size={52} />
         </div>
 
@@ -140,7 +118,7 @@ const handleSubmit = async (e: FormEvent) => {
 
         <button
           type="submit"
-          disabled={loading || isPlaying}
+          disabled={loading}
           className="rounded-md py-2.5 text-sm font-medium transition-opacity disabled:opacity-50 w-full"
           style={{ background: "var(--accent)", color: "#fff" }}
         >
