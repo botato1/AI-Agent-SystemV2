@@ -7,4 +7,3 @@ faster-whisper==1.2.1
 pyannote.audio==4.0.5
 soundfile==0.14.0
 huggingface_hub==1.21.0
-pytorch-lightning==2.6.5
