@@ -49,8 +49,10 @@ class DocumentResultSchema(BaseModel):
 # 문서 메타데이터 저장 요청 구조
 class DocumentMetadataSaveRequest(BaseModel):
     document_id: str = Field(..., min_length=1)   # 8003에서 받은 document_id
-    room_id: str = Field(..., min_length=1)        # 채팅방 ID
-    conversation_id: Optional[str] = None
+    # v2 기준 사건방 ID
+    conversation_id: Optional[str] = Field(None, min_length=1)
+    # v1 호환용 채팅방 ID
+    room_id: Optional[str] = Field(None, min_length=1)
 
     filename: str = Field(..., min_length=1)       # 원본 파일명
     type: DocumentType = DEFAULT_DOCUMENT_TYPE

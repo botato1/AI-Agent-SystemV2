@@ -25,8 +25,11 @@ class SourceSchema(BaseModel):
 
 
 class ChatResponseSchema(BaseModel):
-    room_id: str
-    conversation_id: Optional[str] = None   # v2
+    # v2 기준 사건방 ID
+    conversation_id: Optional[str] = None
+
+    # v1 호환용 채팅방 ID
+    room_id: Optional[str] = None
 
     answer: str
     summary: Optional[str] = None
