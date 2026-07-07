@@ -1044,35 +1044,45 @@ def get_all_voice_documents() -> list[dict]:
 
 
 def get_voice_documents_for_user(user_id: str) -> list[dict]:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT
-            d.id,
-            d.conversation_id,
-            d.title,
-            d.type,
-            d.source,
-            d.file_path,
-            d.json_path,
-            d.summary,
-            d.status,
-            d.chroma_status,
-            d.metadata,
-            d.created_at
-        FROM documents d
-        JOIN conversations c ON c.id = d.conversation_id
-        WHERE c.user_id = ?
-          AND d.type = 'voice'
-        ORDER BY d.created_at DESC
-        """,
-        (str(user_id),),
-    )
-    rows = cursor.fetchall() or []
-    conn.close()
+    conn = None
 
-    return [dict(row) for row in rows]
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                d.id,
+                d.conversation_id,
+                d.title,
+                d.type,
+                d.source,
+                d.file_path,
+                d.json_path,
+                d.summary,
+                d.status,
+                d.chroma_status,
+                d.error,
+                d.metadata,
+                d.created_at
+            FROM documents d
+            JOIN conversations c ON c.id = d.conversation_id
+            WHERE c.user_id = ?
+              AND d.type = 'voice'
+            ORDER BY d.created_at DESC
+            """,
+            (str(user_id),),
+        )
+        rows = cursor.fetchall() or []
+        return [dict(row) for row in rows]
+
+    except Exception as e:
+        print(f"[crud] get_voice_documents_for_user 실패: {repr(e)}")
+        return []
+
+    finally:
+        if conn:
+            conn.close()
 
 def get_voice_documents_by_conversation(conversation_id: str) -> list[dict]:
     return _get_voice_documents(conversation_id=conversation_id)
@@ -1096,57 +1106,67 @@ def delete_document(document_id: str) -> bool:
 
 
 def delete_document_for_user(document_id: str, user_id: str) -> bool:
-    conn = get_connection()
-    cursor = conn.cursor()
+    conn = None
 
-    cursor.execute(
-        """
-        SELECT d.id
-        FROM documents d
-        JOIN conversations c ON c.id = d.conversation_id
-        WHERE d.id = ?
-          AND c.user_id = ?
-        LIMIT 1
-        """,
-        (document_id, str(user_id)),
-    )
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    if cursor.fetchone() is None:
-        conn.close()
+        cursor.execute(
+            """
+            SELECT d.id
+            FROM documents d
+            JOIN conversations c ON c.id = d.conversation_id
+            WHERE d.id = ?
+              AND c.user_id = ?
+            LIMIT 1
+            """,
+            (document_id, str(user_id)),
+        )
+
+        if cursor.fetchone() is None:
+            return False
+
+        cursor.execute(
+            """
+            DELETE FROM room_document_links
+            WHERE document_id = ?
+              AND room_id IN (
+                  SELECT id
+                  FROM conversations
+                  WHERE user_id = ?
+              )
+            """,
+            (document_id, str(user_id)),
+        )
+
+        cursor.execute(
+            """
+            DELETE FROM documents
+            WHERE id = ?
+              AND conversation_id IN (
+                  SELECT id
+                  FROM conversations
+                  WHERE user_id = ?
+              )
+            """,
+            (document_id, str(user_id)),
+        )
+
+        deleted = cursor.rowcount > 0
+        conn.commit()
+
+        return deleted
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"[crud] delete_document_for_user 실패: {repr(e)}")
         return False
 
-    cursor.execute(
-        """
-        DELETE FROM room_document_links
-        WHERE document_id = ?
-          AND room_id IN (
-              SELECT id
-              FROM conversations
-              WHERE user_id = ?
-          )
-        """,
-        (document_id, str(user_id)),
-    )
-
-    cursor.execute(
-        """
-        DELETE FROM documents
-        WHERE id = ?
-          AND conversation_id IN (
-              SELECT id
-              FROM conversations
-              WHERE user_id = ?
-          )
-        """,
-        (document_id, str(user_id)),
-    )
-
-    deleted = cursor.rowcount
-
-    conn.commit()
-    conn.close()
-
-    return deleted > 0
+    finally:
+        if conn:
+            conn.close()
 
 # ==========================================
 # 6. tasks CRUD

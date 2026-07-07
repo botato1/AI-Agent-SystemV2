@@ -7,7 +7,6 @@ from backend.services.document_service import (
     upload_and_process_document,
     delete_processed_document,
     get_document_detail,
-    
 )
 from backend.db.crud import get_documents_for_user
 from backend.core.dependencies import get_current_user_id
@@ -17,6 +16,7 @@ router = APIRouter(
     prefix="/api/documents",
     tags=["Documents"]
 )
+
 
 # 업로드된 전체 문서 목록 조회 API
 # 실제 경로: GET /api/documents
@@ -51,16 +51,17 @@ def get_document_list(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[document_router] 문서 목록 조회 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"문서 목록 조회 중 오류가 발생했습니다: {str(e)}",
+            detail="문서 목록 조회 중 오류가 발생했습니다.",
         )
+
 
 # 문서 업로드 통합 API
 # 실제 경로: POST /api/documents/upload
 # 프론트는 이 API만 호출
-# 문서 파일은 8003 문서 처리 서버로 전달하고,
-# 음성 파일은 기존 STT 처리 흐름을 유지한다.
+# 문서 파일은 8003 문서 처리 서버로 전달한다.
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
@@ -85,9 +86,10 @@ async def upload_document(
     except HTTPException:
         raise
     except ValueError as e:
+        print(f"[document_router] 문서 업로드 요청 값 오류: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail="문서 업로드 요청 값이 올바르지 않습니다.",
         )
     except PermissionError:
         raise HTTPException(
@@ -95,9 +97,10 @@ async def upload_document(
             detail="채팅방 또는 문서를 찾을 수 없습니다.",
         )
     except Exception as e:
+        print(f"[document_router] 문서 업로드 처리 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"문서 업로드 처리 중 오류가 발생했습니다: {str(e)}",
+            detail="문서 업로드 처리 중 오류가 발생했습니다.",
         )
 
 
@@ -131,11 +134,11 @@ def get_document_detail_api(
             detail="문서를 찾을 수 없습니다.",
         )
     except Exception as e:
+        print(f"[document_router] 문서 상세 조회 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"문서 상세 조회 중 오류가 발생했습니다: {str(e)}",
+            detail="문서 상세 조회 중 오류가 발생했습니다.",
         )
-
 
 
 # 문서 삭제 API
@@ -167,7 +170,8 @@ def delete_document_api(
             detail="삭제할 문서를 찾을 수 없습니다.",
         )
     except Exception as e:
+        print(f"[document_router] 문서 삭제 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"문서 삭제 중 오류가 발생했습니다: {str(e)}",
+            detail="문서 삭제 중 오류가 발생했습니다.",
         )

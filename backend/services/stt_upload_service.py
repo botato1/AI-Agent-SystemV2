@@ -82,14 +82,27 @@ def _build_stt_content_markdown(data: dict) -> str:
     content = data.get("content") or ""
     transcription = data.get("transcription") or []
 
-    lines = [f"# {title}", "", "## 전체 전사 내용", "", content.strip() if content else "", "", "## 화자별 전사", ""]
+    lines = [
+        f"# {title}",
+        "",
+        "## 전체 전사 내용",
+        "",
+        content.strip() if content else "",
+        "",
+        "## 화자별 전사",
+        "",
+    ]
 
     if transcription:
         for item in transcription:
             text = item.get("text") or ""
             if not text.strip():
                 continue
-            lines.append(f"- [{_format_time(item.get('start'))} ~ {_format_time(item.get('end'))}] {item.get('speaker') or 'UNKNOWN'}: {text.strip()}")
+
+            lines.append(
+                f"- [{_format_time(item.get('start'))} ~ {_format_time(item.get('end'))}] "
+                f"{item.get('speaker') or 'UNKNOWN'}: {text.strip()}"
+            )
     else:
         lines.append("- 전사 상세 정보가 없습니다.")
 
@@ -100,9 +113,16 @@ def _build_stt_content_markdown(data: dict) -> str:
 def _get_duration_sec(metadata: dict) -> float | None:
     if not metadata:
         return None
-    duration = metadata.get("duration_sec") or metadata.get("duration") or metadata.get("total_duration_sec")
+
+    duration = (
+        metadata.get("duration_sec")
+        or metadata.get("duration")
+        or metadata.get("total_duration_sec")
+    )
+
     if duration is None:
         return None
+
     try:
         return float(duration)
     except Exception:
@@ -112,7 +132,12 @@ def _get_duration_sec(metadata: dict) -> float | None:
 # STT 응답에서 원본 파일명 추출
 def _get_stt_filename(data: dict, fallback_filename: str) -> str:
     metadata = data.get("metadata") or {}
-    return metadata.get("original_filename") or data.get("filename") or data.get("title") or fallback_filename
+    return (
+        metadata.get("original_filename")
+        or data.get("filename")
+        or data.get("title")
+        or fallback_filename
+    )
 
 
 # STT 응답에서 파일 경로 추출
@@ -125,6 +150,7 @@ def _get_stt_file_path(data: dict) -> str:
 def _extract_file_id_from_original_file_url(original_file_url: str | None) -> str | None:
     if not original_file_url:
         return None
+
     try:
         filename = Path(urlparse(original_file_url).path).name
         return Path(filename).stem if filename else None
@@ -135,6 +161,7 @@ def _extract_file_id_from_original_file_url(original_file_url: str | None) -> st
 # 8001 DELETE 호출용 file_id 결정 (original_file_url → metadata.file_id → document_id 순)
 def _resolve_stt_file_id(document_id: str, metadata: dict) -> str:
     metadata = metadata or {}
+
     return (
         _extract_file_id_from_original_file_url(metadata.get("original_file_url"))
         or metadata.get("file_id")
@@ -174,17 +201,22 @@ def _save_stt_result_to_local_json(
     local_json_path = local_json_dir / f"{document_id}.json"
 
     with open(local_json_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "id": document_id,
-            "title": title,
-            "type": "voice",
-            "source": "voice",
-            "content": content_markdown,
-            "content_markdown": content_markdown,
-            "transcription": transcription,
-            "metadata": metadata,
-            "summary": summary,
-        }, f, ensure_ascii=False, indent=2)
+        json.dump(
+            {
+                "id": document_id,
+                "title": title,
+                "type": "voice",
+                "source": "voice",
+                "content": content_markdown,
+                "content_markdown": content_markdown,
+                "transcription": transcription,
+                "metadata": metadata,
+                "summary": summary,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     return str(local_json_path)
 
@@ -193,12 +225,16 @@ def _save_stt_result_to_local_json(
 def _load_stt_json(json_path: str) -> dict:
     if not json_path:
         return {}
+
     try:
         path = Path(json_path)
+
         if not path.exists() or not path.is_file():
             return {}
+
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
+
     except Exception as e:
         print(f"[stt_upload_service] STT JSON 읽기 실패: {json_path} / {repr(e)}")
         return {}
@@ -207,6 +243,7 @@ def _load_stt_json(json_path: str) -> dict:
 # 로컬 JSON에서 전체 전사 텍스트 추출
 def _extract_plain_content_from_json(stt_json: dict) -> str:
     content_markdown = stt_json.get("content_markdown") or stt_json.get("content") or ""
+
     if not content_markdown:
         return ""
 
@@ -217,6 +254,7 @@ def _extract_plain_content_from_json(stt_json: dict) -> str:
         return content_markdown.strip()
 
     content_part = content_markdown.split(marker, 1)[1]
+
     if next_marker in content_part:
         content_part = content_part.split(next_marker, 1)[0]
 
@@ -224,6 +262,7 @@ def _extract_plain_content_from_json(stt_json: dict) -> str:
 
 
 # 응답 빌더
+
 def _build_success_response(
     room_id: str | None,
     document_id: str,
@@ -235,9 +274,11 @@ def _build_success_response(
     transcription: list,
     metadata: dict,
     chroma_status: str,
+    link_status: str = "success",
+    warning: str | None = None,
 ) -> dict:
     return {
-        "status": "success",
+        "status": "success" if link_status == "success" else "partial_success",
         "room_id": room_id,
         "conversation_id": room_id,
         "document_id": document_id,
@@ -250,6 +291,8 @@ def _build_success_response(
         "summary": summary,
         "chunk_count": saved_chunk_count,
         "chroma_status": chroma_status,
+        "link_status": link_status,
+        "warning": warning,
         "duration_sec": _get_duration_sec(metadata),
         "transcription": transcription,
         "metadata": metadata,
@@ -258,7 +301,12 @@ def _build_success_response(
     }
 
 
-def _build_error_response(room_id: str | None, filename: str, message: str, error: str) -> dict:
+def _build_error_response(
+    room_id: str | None,
+    filename: str,
+    message: str,
+    error: str,
+) -> dict:
     return {
         "status": "error",
         "room_id": room_id,
@@ -273,6 +321,8 @@ def _build_error_response(room_id: str | None, filename: str, message: str, erro
         "summary": None,
         "chunk_count": 0,
         "chroma_status": None,
+        "link_status": None,
+        "warning": None,
         "duration_sec": None,
         "transcription": [],
         "metadata": None,
@@ -284,7 +334,11 @@ def _build_error_response(room_id: str | None, filename: str, message: str, erro
 # STT 업로드 처리
 
 # STT 업로드 통합 처리 (파일 검증 → 8001 STT → 로컬 JSON 저장 → DB 저장 → ChromaDB 적재)
-async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, user_id: str | None = None) -> dict:
+async def upload_and_process_stt(
+    file: UploadFile,
+    room_id: str | None = None,
+    user_id: str | None = None,
+) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_audio"
 
     try:
@@ -312,7 +366,13 @@ async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, u
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
                 STT_PROCESS_URL,
-                files={"file": (filename, file_content, file.content_type or "application/octet-stream")},
+                files={
+                    "file": (
+                        filename,
+                        file_content,
+                        file.content_type or "application/octet-stream",
+                    )
+                },
                 data={"topic": ""},
             )
 
@@ -376,20 +436,22 @@ async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, u
             summary=summary,
         )
 
-        saved_document_id = save_document_metadata({
-            "id": document_id,
-            "conversation_id": db_room_id,
-            "title": result_filename or title,
-            "type": "voice",
-            "source": "voice",
-            "file_path": file_path,
-            "json_path": stt_json_path,
-            "summary": summary,
-            "status": status,
-            "notion_url": data.get("notion_url") or "",
-            "error": error,
-            "metadata": json.dumps(metadata, ensure_ascii=False),
-        })
+        saved_document_id = save_document_metadata(
+            {
+                "id": document_id,
+                "conversation_id": db_room_id,
+                "title": result_filename or title,
+                "type": "voice",
+                "source": "voice",
+                "file_path": file_path,
+                "json_path": stt_json_path,
+                "summary": summary,
+                "status": status,
+                "notion_url": "",
+                "error": error,
+                "metadata": json.dumps(metadata, ensure_ascii=False),
+            }
+        )
 
         delete_document_chunks(saved_document_id)
         saved_chunk_count = save_document_chunks(
@@ -420,7 +482,11 @@ async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, u
             base_meta["document_id"] = saved_document_id
 
             chroma_load_result = _load_voice(doc_for_chroma, base_meta, upload_context)
-            chroma_status = "success" if chroma_load_result.get("status") == "success" else "failed"
+            chroma_status = (
+                "success"
+                if chroma_load_result.get("status") == "success"
+                else "failed"
+            )
             update_chroma_status(saved_document_id, chroma_status)
             print(f"[stt_upload_service] ChromaDB 적재 결과: {chroma_load_result}")
 
@@ -428,6 +494,9 @@ async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, u
             chroma_status = "failed"
             update_chroma_status(saved_document_id, "failed")
             print(f"[stt_upload_service] ChromaDB 적재 실패: {repr(e)}")
+
+        link_status = "success"
+        link_warning = None
 
         # room_document_links에 연결 추가
         linked = link_document_to_room(
@@ -439,6 +508,8 @@ async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, u
         if linked:
             print(f"[stt_upload_service] room_document_links 연결 완료: {db_room_id} → {saved_document_id}")
         else:
+            link_status = "failed"
+            link_warning = "음성 문서는 저장되었지만 사건방-문서 연결에 실패했습니다."
             print(f"[stt_upload_service] room_document_links 연결 실패: {db_room_id} → {saved_document_id}")
 
         return _build_success_response(
@@ -452,6 +523,8 @@ async def upload_and_process_stt(file: UploadFile, room_id: str | None = None, u
             transcription=transcription,
             metadata=metadata,
             chroma_status=chroma_status,
+            link_status=link_status,
+            warning=link_warning,
         )
 
     except PermissionError:
@@ -490,30 +563,32 @@ def get_stt_list(user_id: str) -> dict:
         rows = get_voice_documents_for_user(user_id)
 
         data = []
+
         for row in rows:
             metadata = _safe_json_loads(row.get("metadata"))
             conversation_id = row.get("conversation_id")
 
-            data.append({
-                "id": row.get("id"),
-                "document_id": row.get("id"),
-                "file_id": _resolve_stt_file_id(row.get("id"), metadata),
-                "room_id": None if _is_voice_library_room_id(conversation_id) else conversation_id,
-                "conversation_id": None if _is_voice_library_room_id(conversation_id) else conversation_id,
-                "title": row.get("title"),
-                "filename": row.get("title"),
-                "type": row.get("type"),
-                "source": row.get("source"),
-                "summary": row.get("summary") or "",
-                "language": metadata.get("language") or "ko",
-                "created_at": row.get("created_at"),
-                "status": row.get("status"),
-                "chroma_status": row.get("chroma_status"),
-                "notion_url": row.get("notion_url"),
-                "error": row.get("error"),
-                "duration_sec": _get_duration_sec(metadata),
-                "metadata": metadata,
-            })
+            data.append(
+                {
+                    "id": row.get("id"),
+                    "document_id": row.get("id"),
+                    "file_id": _resolve_stt_file_id(row.get("id"), metadata),
+                    "room_id": None if _is_voice_library_room_id(conversation_id) else conversation_id,
+                    "conversation_id": None if _is_voice_library_room_id(conversation_id) else conversation_id,
+                    "title": row.get("title"),
+                    "filename": row.get("title"),
+                    "type": row.get("type"),
+                    "source": row.get("source"),
+                    "summary": row.get("summary") or "",
+                    "language": metadata.get("language") or "ko",
+                    "created_at": row.get("created_at"),
+                    "status": row.get("status"),
+                    "chroma_status": row.get("chroma_status"),
+                    "error": row.get("error"),
+                    "duration_sec": _get_duration_sec(metadata),
+                    "metadata": metadata,
+                }
+            )
 
         return {
             "status": "success",
@@ -524,12 +599,13 @@ def get_stt_list(user_id: str) -> dict:
         }
 
     except Exception as e:
+        print(f"[stt_upload_service] 음성 목록 조회 실패: {repr(e)}")
         return {
             "status": "error",
             "data": [],
             "count": 0,
             "message": "음성 목록 조회 중 오류가 발생했습니다.",
-            "error": str(e),
+            "error": "stt_list_failed",
         }
 
 
@@ -575,7 +651,6 @@ def get_stt_detail(document_id: str, user_id: str) -> dict:
                 "tags": metadata.get("tags") or ["voice_upload"],
                 "status": document.get("status"),
                 "chroma_status": document.get("chroma_status"),
-                "notion_url": document.get("notion_url"),
                 "chroma_id": metadata.get("chroma_id"),
                 "error": document.get("error"),
                 "user_edited": metadata.get("user_edited", False),
@@ -590,11 +665,12 @@ def get_stt_detail(document_id: str, user_id: str) -> dict:
         raise
 
     except Exception as e:
+        print(f"[stt_upload_service] 음성 상세 조회 실패: {repr(e)}")
         return {
             "status": "error",
             "data": None,
             "message": "음성 상세 조회 중 오류가 발생했습니다.",
-            "error": str(e),
+            "error": "stt_detail_failed",
         }
 
 
@@ -623,8 +699,10 @@ async def delete_stt_document(document_id: str, user_id: str) -> dict:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.delete(f"{STT_BASE_URL}/api/stt/{file_id}")
+
             if response.status_code >= 400:
                 stt_delete_error = response.text
+
         except Exception as e:
             stt_delete_error = str(e)
 
@@ -647,12 +725,13 @@ async def delete_stt_document(document_id: str, user_id: str) -> dict:
         db_deleted = delete_document_for_user(document_id, user_id)
 
         if stt_delete_error:
+            print(f"[stt_upload_service] 8001 원본 파일 삭제 실패: {stt_delete_error}")
             return {
                 "status": "partial_success",
                 "document_id": document_id,
                 "file_id": file_id,
                 "message": "8000 DB 데이터는 삭제되었지만, 8001 원본 파일 삭제에 실패했습니다.",
-                "error": stt_delete_error,
+                "error": "stt_original_delete_failed",
             }
 
         if not db_deleted:
@@ -676,10 +755,11 @@ async def delete_stt_document(document_id: str, user_id: str) -> dict:
         raise
 
     except Exception as e:
+        print(f"[stt_upload_service] 음성 삭제 실패: {repr(e)}")
         return {
             "status": "error",
             "document_id": document_id,
             "file_id": None,
             "message": "음성 삭제 중 오류가 발생했습니다.",
-            "error": str(e),
+            "error": "stt_delete_failed",
         }

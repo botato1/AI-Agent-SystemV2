@@ -74,6 +74,8 @@ def _build_error_response(room_id: str | None, filename: str, document_type: str
         "summary": None,
         "chroma_load_result": None,
         "chroma_status": None,
+        "link_status": None,
+        "warning": None,
         "message": message,
         "error": error,
     }
@@ -327,7 +329,7 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
     async with httpx.AsyncClient(timeout=300.0) as client:
         form_data = {
             "type": document_type,
-            "room_id": room_id or "",
+            "room_id": room_id,
         }
         response = await client.post(
             DOCUMENT_PROCESS_URL,
@@ -349,20 +351,38 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
 
     if not document_id:
         return {
-            "status": "error", "room_id": result_room_id, "document_id": None,
-            "filename": result_filename, "type": result_type, "file_path": file_path,
-            "json_path": processed_result.get("json_path") or "", "summary": summary,
-            "chroma_load_result": None, "chroma_status": None,
+            "status": "error",
+            "room_id": result_room_id,
+            "conversation_id": result_room_id,
+            "document_id": None,
+            "filename": result_filename,
+            "type": result_type,
+            "file_path": file_path,
+            "json_path": processed_result.get("json_path") or "",
+            "summary": summary,
+            "chroma_load_result": None,
+            "chroma_status": None,
+            "link_status": None,
+            "warning": None,
             "message": "8003 문서 처리 결과에 document_id가 없습니다.",
             "error": "document_id_missing",
         }
 
     if not content_markdown.strip() and not (isinstance(chunks, list) and chunks):
         return {
-            "status": "error", "room_id": result_room_id, "document_id": document_id,
-            "filename": result_filename, "type": result_type, "file_path": file_path,
-            "json_path": processed_result.get("json_path") or "", "summary": summary,
-            "chroma_load_result": None, "chroma_status": None,
+            "status": "error",
+            "room_id": result_room_id,
+            "conversation_id": result_room_id,
+            "document_id": document_id,
+            "filename": result_filename,
+            "type": result_type,
+            "file_path": file_path,
+            "json_path": processed_result.get("json_path") or "",
+            "summary": summary,
+            "chroma_load_result": None,
+            "chroma_status": None,
+            "link_status": None,
+            "warning": None,
             "message": "8003 문서 처리 결과에 content 또는 chunks가 없습니다.",
             "error": "document_content_missing",
         }
@@ -372,7 +392,7 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
 
     saved_document_id = save_document_metadata({
         "id": document_id,
-        "conversation_id": result_room_id or "",
+        "conversation_id": result_room_id,
         "title": result_filename,
         "type": result_type,
         "source": _get_source(result_filename),
@@ -383,9 +403,9 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
         "notion_url": "",
         "error": "",
     })
-    
+
     try:
-        chroma_load_result = load_document(document_id=saved_document_id, room_id=result_room_id or "")
+        chroma_load_result = load_document(document_id=saved_document_id, room_id=result_room_id)
         chroma_status = "success" if chroma_load_result.get("status") == "success" else "failed"
         update_chroma_status(saved_document_id, chroma_status)
         print(f"[document_service] ChromaDB 적재 결과: {chroma_load_result}")
@@ -395,21 +415,27 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
         update_chroma_status(saved_document_id, "failed")
         print(f"[document_service] ChromaDB 적재 실패: {repr(e)}")
 
-    # room_id가 있으면 room_document_links에 연결 추가 (ChromaDB 성공 여부와 무관)
-    if result_room_id:
-        linked = link_document_to_room(
-            room_id=result_room_id,
-            document_id=saved_document_id,
-            user_id=user_id,
-        )
+    link_status = "success"
+    link_warning = None
 
-        if linked:
-            print(f"[document_service] room_document_links 연결 완료: {result_room_id} → {saved_document_id}")
-        else:
-            print(f"[document_service] room_document_links 연결 실패: {result_room_id} → {saved_document_id}")
+    # room_id가 있으면 room_document_links에 연결 추가 (ChromaDB 성공 여부와 무관)
+    linked = link_document_to_room(
+        room_id=result_room_id,
+        document_id=saved_document_id,
+        user_id=user_id,
+    )
+
+    if linked:
+        print(f"[document_service] room_document_links 연결 완료: {result_room_id} → {saved_document_id}")
+    else:
+        link_status = "failed"
+        link_warning = "문서는 저장되었지만 사건방-문서 연결에 실패했습니다."
+        print(f"[document_service] room_document_links 연결 실패: {result_room_id} → {saved_document_id}")
+
+    final_status = "success" if link_status == "success" else "partial_success"
 
     return {
-        "status": "success",
+        "status": final_status,
         "room_id": result_room_id,
         "conversation_id": result_room_id,
         "document_id": saved_document_id,
@@ -420,12 +446,19 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
         "summary": summary,
         "chroma_load_result": chroma_load_result,
         "chroma_status": chroma_status,
+        "link_status": link_status,
+        "warning": link_warning,
         "message": "문서 처리, 메타데이터 저장 및 ChromaDB 적재 요청이 완료되었습니다.",
         "error": None,
     }
 
 
-async def upload_and_process_document(file: UploadFile, room_id: str | None, document_type: str = "document", user_id: str | None = None) -> dict:
+async def upload_and_process_document(
+    file: UploadFile,
+    room_id: str | None,
+    document_type: str = "document",
+    user_id: str | None = None,
+) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
     try:

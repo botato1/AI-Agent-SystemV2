@@ -40,9 +40,10 @@ async def upload_stt_file(
     except HTTPException:
         raise
     except ValueError as e:
+        print(f"[stt_router] 음성 업로드 요청 값 오류: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail="음성 업로드 요청 값이 올바르지 않습니다.",
         )
     except PermissionError:
         raise HTTPException(
@@ -50,9 +51,10 @@ async def upload_stt_file(
             detail="채팅방 또는 음성 문서를 찾을 수 없습니다.",
         )
     except Exception as e:
+        print(f"[stt_router] 음성 업로드 처리 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"음성 업로드 처리 중 오류가 발생했습니다: {str(e)}",
+            detail="음성 업로드 처리 중 오류가 발생했습니다.",
         )
 
 
@@ -69,9 +71,10 @@ def get_stt_file_list(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[stt_router] 음성 목록 조회 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"음성 목록 조회 중 오류가 발생했습니다: {str(e)}",
+            detail="음성 목록 조회 중 오류가 발생했습니다.",
         )
 
 
@@ -103,9 +106,10 @@ def get_stt_file_detail(
             detail="음성 문서를 찾을 수 없습니다.",
         )
     except Exception as e:
+        print(f"[stt_router] 음성 상세 조회 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"음성 상세 조회 중 오류가 발생했습니다: {str(e)}",
+            detail="음성 상세 조회 중 오류가 발생했습니다.",
         )
 
 
@@ -137,7 +141,8 @@ async def delete_stt_file(
             detail="삭제할 음성 문서를 찾을 수 없습니다.",
         )
     except Exception as e:
+        print(f"[stt_router] 음성 삭제 실패: {repr(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"음성 삭제 중 오류가 발생했습니다: {str(e)}",
+            detail="음성 삭제 중 오류가 발생했습니다.",
         )
