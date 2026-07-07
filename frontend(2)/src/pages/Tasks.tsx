@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Plus } from 'lucide-react'
-import type { ApiTask } from '../components/Tasks/types'
-import TaskFilters from '../components/Tasks/TaskFilters'
-import TaskBoard from '../components/Tasks/TaskBoard'
-import CreateTaskModal from '../components/Tasks/CreateTaskModal'
+import type { ApiTask } from '../components/tasks/types'
+import TaskFilters from '../components/tasks/TaskFilters'
+import TaskBoard from '../components/tasks/TaskBoard'
+import CreateTaskModal from '../components/tasks/CreateTaskModal'
 
 const BASE_URL = import.meta.env.VITE_API_URL
 

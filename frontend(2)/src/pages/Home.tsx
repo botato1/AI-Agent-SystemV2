@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import ChatArea from '../components/Home/ChatArea'
+import ChatArea from '../components/chat/ChatArea'
 
 interface Props {
   activeRoomId: string | null

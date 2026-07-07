@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { Clock, AlertTriangle } from 'lucide-react'
 import { useToast } from '../App'
-import TabSummary from '../components/VoiceAnalysis/TabSummary'
-import TabScript from '../components/VoiceAnalysis/TabScript'
-import TabKeyword from '../components/VoiceAnalysis/TabKeyword'
-import TabTasks from '../components/VoiceAnalysis/TabTasks'
-import TabSpeakers from '../components/VoiceAnalysis/TabSpeakers'
+import TabSummary from '../components/voiceanalysis/TabSummary'
+import TabScript from '../components/voiceanalysis/TabScript'
+import TabKeyword from '../components/voiceanalysis/TabKeyword'
+import TabTasks from '../components/voiceanalysis/TabTasks'
+import TabSpeakers from '../components/voiceanalysis/TabSpeakers'
 
 const BASE_URL = import.meta.env.VITE_API_URL
 const TABS = ['요약', '전체 스크립트', '키워드', '액션 아이템'] as const

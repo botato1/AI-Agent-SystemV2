@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import * as d3 from 'd3'
-import GraphCanvas from '../components/Graph/GraphCanvas'
-import SelectedDocument from '../components/Graph/SelectedDocument'
-import DocumentList from '../components/Graph/DocumentList'
+import GraphCanvas from '../components/graph/GraphCanvas'
+import SelectedDocument from '../components/graph/SelectedDocument'
+import DocumentList from '../components/graph/DocumentList'
 
 const BASE_URL = import.meta.env.VITE_API_URL
 

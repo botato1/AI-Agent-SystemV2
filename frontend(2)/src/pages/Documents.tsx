@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import DocumentTab from '../components/Documents/DocumentTab'
-import VoiceTab from '../components/Documents/VoiceTab'
-import DocumentOriginal from '../components/Documents/DocumentOriginal'
-import DocumentAnalysis from '../components/Documents/DocumentAnalysis'
-import VoiceAnalysis from './VoiceAnalysis'
+import DocumentTab from '../components/documents/DocumentTab'
+import VoiceTab from '../components/documents/VoiceTab'
+import DocumentOriginal from '../components/documents/DocumentOriginal'
+import DocumentAnalysis from '../components/documents/DocumentAnalysis'
+import VoiceAnalysis from './Voiceanalysis'
 
 interface SttResult {
   file_id: string
