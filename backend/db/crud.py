@@ -528,6 +528,9 @@ def delete_all_conversations_and_messages(user_id: str) -> dict:
 # ==========================================
 
 def insert_message(conversation_id: str, role: str, content: str, user_id: str) -> str:
+    if not conversation_id:
+        raise ValueError("conversation_id가 필요합니다.")
+
     msg_id = str(uuid.uuid4())
     now = get_utc_now()
 

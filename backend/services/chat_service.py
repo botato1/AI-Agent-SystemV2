@@ -11,6 +11,7 @@ from backend.db.crud import (
     get_messages,
     get_documents,
     get_conversation_by_id,
+    create_conversation,
 )
 from backend.graphs.agent_graph import agent_graph
 
@@ -364,12 +365,22 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
     conversation_id = resolve_conversation_id(request)
 
     # conversation_id가 있으면 현재 사용자의 채팅방인지 먼저 확인
-    # 없으면 insert_message에서 새 채팅방 생성 가능
     if conversation_id:
         conversation = get_conversation_by_id(conversation_id, user_id)
 
         if not conversation:
             raise PermissionError
+
+    # conversation_id가 없으면 신규 대화로 보고 서버에서 새 채팅방 생성
+    else:
+        conversation_id = create_conversation(
+            title=(request.content or "새 채팅")[:30],
+            user_id=user_id,
+        )
+
+        # 이후 create_initial_state()에서도 동일한 conversation_id를 사용하도록 보정
+        request.conversation_id = conversation_id
+        request.room_id = conversation_id
 
     try:
         insert_message(
@@ -389,6 +400,10 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
         messages=messages,
     )
 
+    # 혹시 request 보정이 누락되더라도 응답에는 생성된 conversation_id가 내려가도록 보장
+    state["conversation_id"] = conversation_id
+    state["room_id"] = conversation_id
+
     result_state = await asyncio.to_thread(run_agent_graph, state)
 
     answer = result_state.get("final_answer") or "응답을 생성하지 못했습니다."
@@ -399,5 +414,9 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
         content=answer,
         user_id=user_id,
     )
+
+    # LangGraph 실행 결과에도 생성된 conversation_id를 다시 보장
+    result_state["conversation_id"] = conversation_id
+    result_state["room_id"] = conversation_id
 
     return build_chat_response(result_state)
