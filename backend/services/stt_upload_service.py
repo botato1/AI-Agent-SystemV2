@@ -264,7 +264,7 @@ def _extract_plain_content_from_json(stt_json: dict) -> str:
 # 응답 빌더
 
 def _build_success_response(
-    room_id: str | None,
+    conversation_id: str | None,
     document_id: str,
     filename: str,
     title: str,
@@ -279,8 +279,8 @@ def _build_success_response(
 ) -> dict:
     return {
         "status": "success" if link_status == "success" else "partial_success",
-        "room_id": room_id,
-        "conversation_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "document_id": document_id,
         "file_id": _resolve_stt_file_id(document_id, metadata),
         "filename": filename,
@@ -302,15 +302,15 @@ def _build_success_response(
 
 
 def _build_error_response(
-    room_id: str | None,
+    conversation_id: str | None,
     filename: str,
     message: str,
     error: str,
 ) -> dict:
     return {
         "status": "error",
-        "room_id": room_id,
-        "conversation_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "document_id": None,
         "file_id": None,
         "filename": filename,
@@ -336,10 +336,12 @@ def _build_error_response(
 # STT 업로드 통합 처리 (파일 검증 → 8001 STT → 로컬 JSON 저장 → DB 저장 → ChromaDB 적재)
 async def upload_and_process_stt(
     file: UploadFile,
-    room_id: str | None = None,
+    conversation_id: str | None = None,
+    room_id: str | None = None,  # TODO: v1 호환용, 추후 제거 예정
     user_id: str | None = None,
 ) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_audio"
+    resolved_conversation_id = conversation_id or room_id
 
     try:
         if not user_id:
@@ -347,18 +349,18 @@ async def upload_and_process_stt(
 
         if not is_allowed_stt_file(file):
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 filename,
                 "지원하지 않는 음성 파일 형식입니다.",
                 "unsupported_stt_file_type",
             )
 
-        # room_id가 있으면 현재 사용자 소유 채팅방인지 먼저 확인
-        # 권한 없는 room_id면 8001 STT 서버 호출 전에 차단한다.
-        if room_id:
-            room = get_conversation_by_id(room_id, user_id)
+        # conversation_id가 있으면 현재 사용자 소유 채팅방인지 먼저 확인
+        # 권한 없는 conversation_id면 8001 STT 서버 호출 전에 차단한다.
+        if resolved_conversation_id:
+            conversation = get_conversation_by_id(resolved_conversation_id, user_id)
 
-            if not room:
+            if not conversation:
                 raise PermissionError("채팅방을 찾을 수 없습니다.")
 
         file_content = await file.read()
@@ -381,7 +383,7 @@ async def upload_and_process_stt(
 
         if stt_result.get("status") != "success":
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 filename,
                 stt_result.get("message") or "STT 처리에 실패했습니다.",
                 str(stt_result.get("error") or "stt_process_failed"),
@@ -391,7 +393,7 @@ async def upload_and_process_stt(
 
         if not data:
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 filename,
                 "STT 서버 응답에 data가 없습니다.",
                 "stt_data_missing",
@@ -414,15 +416,15 @@ async def upload_and_process_stt(
 
         if not document_id:
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 result_filename,
                 "STT 결과에 document_id로 사용할 id가 없습니다.",
                 "stt_document_id_missing",
             )
 
-        # room_id가 없으면 현재 사용자 기준 새 채팅방 생성
+        # conversation_id가 없으면 현재 사용자 기준 새 채팅방 생성
         # 기존 VOICE_LIBRARY_ROOM_ID는 사용자 소유권 검증이 어려우므로 신규 업로드에는 사용하지 않는다.
-        db_room_id = room_id or create_conversation(
+        db_conversation_id = resolved_conversation_id or create_conversation(
             title=result_filename or title,
             user_id=user_id,
         )
@@ -436,22 +438,20 @@ async def upload_and_process_stt(
             summary=summary,
         )
 
-        saved_document_id = save_document_metadata(
-            {
-                "id": document_id,
-                "conversation_id": db_room_id,
-                "title": result_filename or title,
-                "type": "voice",
-                "source": "voice",
-                "file_path": file_path,
-                "json_path": stt_json_path,
-                "summary": summary,
-                "status": status,
-                "notion_url": "",
-                "error": error,
-                "metadata": json.dumps(metadata, ensure_ascii=False),
-            }
-        )
+        saved_document_id = save_document_metadata({
+            "id": document_id,
+            "conversation_id": db_conversation_id,
+            "title": result_filename or title,
+            "type": "voice",
+            "source": "voice",
+            "file_path": file_path,
+            "json_path": stt_json_path,
+            "summary": summary,
+            "status": status,
+            "notion_url": "",
+            "error": error,
+            "metadata": json.dumps(metadata, ensure_ascii=False),
+        })
 
         delete_document_chunks(saved_document_id)
         saved_chunk_count = save_document_chunks(
@@ -478,7 +478,7 @@ async def upload_and_process_stt(
             }
 
             upload_context = _get_upload_context("voice")
-            base_meta = _build_base_meta(doc_for_chroma, db_room_id)
+            base_meta = _build_base_meta(doc_for_chroma, db_conversation_id)
             base_meta["document_id"] = saved_document_id
 
             chroma_load_result = _load_voice(doc_for_chroma, base_meta, upload_context)
@@ -499,21 +499,22 @@ async def upload_and_process_stt(
         link_warning = None
 
         # room_document_links에 연결 추가
+        # TODO: CRUD 함수명은 아직 room 기준이므로 추후 conversation 기준 이름으로 변경 예정
         linked = link_document_to_room(
-            room_id=db_room_id,
+            room_id=db_conversation_id,
             document_id=saved_document_id,
             user_id=user_id,
         )
 
         if linked:
-            print(f"[stt_upload_service] room_document_links 연결 완료: {db_room_id} → {saved_document_id}")
+            print(f"[stt_upload_service] room_document_links 연결 완료: {db_conversation_id} → {saved_document_id}")
         else:
             link_status = "failed"
             link_warning = "음성 문서는 저장되었지만 사건방-문서 연결에 실패했습니다."
-            print(f"[stt_upload_service] room_document_links 연결 실패: {db_room_id} → {saved_document_id}")
+            print(f"[stt_upload_service] room_document_links 연결 실패: {db_conversation_id} → {saved_document_id}")
 
         return _build_success_response(
-            room_id=db_room_id,
+            conversation_id=db_conversation_id,
             document_id=saved_document_id,
             filename=result_filename,
             title=title,
@@ -532,7 +533,7 @@ async def upload_and_process_stt(
 
     except httpx.HTTPStatusError as e:
         return _build_error_response(
-            room_id,
+            resolved_conversation_id,
             filename,
             "STT 서버 응답 오류가 발생했습니다.",
             str(e),
@@ -540,7 +541,7 @@ async def upload_and_process_stt(
 
     except httpx.RequestError as e:
         return _build_error_response(
-            room_id,
+            resolved_conversation_id,
             filename,
             "STT 서버에 연결할 수 없습니다.",
             str(e),
@@ -548,7 +549,7 @@ async def upload_and_process_stt(
 
     except Exception as e:
         return _build_error_response(
-            room_id,
+            resolved_conversation_id,
             filename,
             "STT 업로드 또는 처리 중 오류가 발생했습니다.",
             str(e),
