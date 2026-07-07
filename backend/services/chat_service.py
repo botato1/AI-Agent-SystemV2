@@ -36,6 +36,7 @@ PRIORITY_MAP = {
     "low": "low", "낮음": "low", "하": "low", "여유": "low",
 }
 
+
 # numpy 타입을 Python 기본 타입으로 변환
 def to_json_safe(value):
     try:
@@ -59,6 +60,7 @@ def to_json_safe(value):
         return [to_json_safe(item) for item in value]
 
     return value
+
 
 # DB에서 가져온 메시지를 AgentState용 dict 리스트로 변환
 def normalize_messages_for_state(messages: list | None) -> list[dict]:
@@ -86,6 +88,7 @@ def normalize_messages_for_state(messages: list | None) -> list[dict]:
 
     return normalized
 
+
 # 한글 상태값을 ChatResponseSchema 허용값으로 변환
 def normalize_task_status(status: str | None) -> str:
     if not status:
@@ -93,12 +96,14 @@ def normalize_task_status(status: str | None) -> str:
 
     return STATUS_MAP.get(str(status).strip(), "todo")
 
+
 # 한글 우선순위값을 ChatResponseSchema 허용값으로 변환
 def normalize_task_priority(priority: str | None) -> str:
     if not priority:
         return "medium"
 
     return PRIORITY_MAP.get(str(priority).strip(), "medium")
+
 
 # LLM이 한국어 조사까지 담당자 이름으로 추출한 경우 보정
 def normalize_assignee_name(assignee: str | None) -> str | None:
@@ -117,6 +122,7 @@ def normalize_assignee_name(assignee: str | None) -> str | None:
         assignee = assignee[:-1]
 
     return assignee
+
 
 # sources를 ChatResponseSchema의 SourceSchema 형식으로 변환
 def normalize_sources(sources: list | None) -> list[dict]:
@@ -143,6 +149,7 @@ def normalize_sources(sources: list | None) -> list[dict]:
 
     return normalized
 
+
 # tasks를 ChatResponseSchema 형식으로 변환하고 한글 status/priority를 영어로 변환
 def normalize_tasks(tasks: list | None) -> list[dict]:
     if not tasks:
@@ -154,6 +161,8 @@ def normalize_tasks(tasks: list | None) -> list[dict]:
         if not isinstance(task, dict):
             continue
 
+        conversation_id = task.get("conversation_id") or task.get("room_id")
+
         normalized.append({
             "task_id": task.get("task_id") or task.get("id") or f"task_{idx + 1}",
             "task": task.get("task") or task.get("title") or task.get("content") or "",
@@ -161,20 +170,33 @@ def normalize_tasks(tasks: list | None) -> list[dict]:
             "deadline": task.get("deadline") or task.get("due_date") or task.get("due"),
             "status": normalize_task_status(task.get("status")),
             "priority": normalize_task_priority(task.get("priority")),
-            "room_id": task.get("room_id") or task.get("conversation_id"),
+
+            # TODO: v1 호환용, 추후 room_id 제거 예정
+            "room_id": conversation_id,
+
+            "conversation_id": conversation_id,
             "document_id": task.get("document_id"),
             "created_at": task.get("created_at"),
         })
 
     return normalized
 
+
+# 요청에서 conversation_id를 결정
+# v2 conversation_id를 우선 사용하고, 없으면 v1 room_id를 사용한다.
+def resolve_conversation_id(request: ChatRequest) -> str | None:
+    return request.conversation_id or request.room_id
+
+
 # 프론트 요청에서 target_document_id와 target_filename을 결정
 def _resolve_target_document(request: ChatRequest) -> tuple[str | None, str | None]:
     return request.target_document_id, request.target_filename
 
+
 # AgentState를 프론트 응답 형식으로 변환
 def build_chat_response(state: AgentState) -> ChatResponseSchema:
     retrieved_docs = state.get("retrieved_docs") or []
+    conversation_id = state.get("conversation_id") or state.get("room_id") or ""
 
     graph_data = {
         "current_step": state.get("current_step"),
@@ -197,7 +219,10 @@ def build_chat_response(state: AgentState) -> ChatResponseSchema:
     }
 
     return ChatResponseSchema(
-        room_id=state.get("room_id", ""),
+        # TODO: v1 호환용, 추후 room_id 제거 예정
+        room_id=conversation_id,
+
+        conversation_id=conversation_id,
         answer=state.get("final_answer") or "",
         summary=state.get("summary"),
         tasks=to_json_safe(normalize_tasks(state.get("tasks", []))),
@@ -213,37 +238,46 @@ def run_agent_graph(state: AgentState) -> AgentState:
 
 
 # AgentState 초기화
-def create_initial_state(request: ChatRequest, user_id: str, messages: list | None = None) -> AgentState:    
+def create_initial_state(
+    request: ChatRequest,
+    user_id: str,
+    messages: list | None = None,
+) -> AgentState:
+    conversation_id = resolve_conversation_id(request)
+
     target_document_id, target_filename = _resolve_target_document(request)
     target_document_ids = request.target_document_ids or []
 
-    documents = get_documents(request.room_id, user_id)
+    documents = get_documents(conversation_id, user_id) if conversation_id else []
 
     base_filter = {
-        "user_id": str(user_id)
+        "user_id": str(user_id),
     }
 
     if target_document_id:
         rag_filter = {
             **base_filter,
             "document_id": target_document_id,
-            }
+        }
     elif target_filename:
         rag_filter = {
             **base_filter,
             "filename": target_filename,
-            }
+        }
     elif target_document_ids:
         rag_filter = {
             **base_filter,
             "document_ids": target_document_ids,
-            }
-    elif documents:
+        }
+    elif documents and conversation_id:
         rag_filter = {
             **base_filter,
-            "room_id": request.room_id,
-            "conversation_id": request.room_id,
-            }
+
+            # TODO: v1 호환용, 추후 room_id 제거 예정
+            "room_id": conversation_id,
+
+            "conversation_id": conversation_id,
+        }
     else:
         rag_filter = base_filter
 
@@ -256,8 +290,11 @@ def create_initial_state(request: ChatRequest, user_id: str, messages: list | No
     return {
         # 1. 기본 요청 정보
         "user_id": str(user_id),
-        "room_id": request.room_id,
-        "conversation_id": request.room_id,
+
+        # TODO: v1 호환용, 추후 room_id 제거 예정
+        "room_id": conversation_id,
+
+        "conversation_id": conversation_id,
         "user_message": request.content,
         "source": request.source,
         "created_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
@@ -324,15 +361,19 @@ def create_initial_state(request: ChatRequest, user_id: str, messages: list | No
 # 채팅 처리
 # 채팅 요청을 처리하고 최종 응답을 반환
 async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
-    # room_id가 있으면 현재 사용자의 채팅방인지 먼저 확인
-    # 없으면 insert_message에서 새 채팅방 생성 가능
-    room = get_conversation_by_id(request.room_id, user_id)
+    conversation_id = resolve_conversation_id(request)
 
-    # 현재 사용자 소유가 아닌 room_id로 접근한 경우
-    # 단, 완전히 새 room_id인지 / 타 사용자 room_id인지는 crud에서 한 번 더 막아야 안전함
+    # conversation_id가 있으면 현재 사용자의 채팅방인지 먼저 확인
+    # 없으면 insert_message에서 새 채팅방 생성 가능
+    if conversation_id:
+        conversation = get_conversation_by_id(conversation_id, user_id)
+
+        if not conversation:
+            raise PermissionError
+
     try:
         insert_message(
-            conversation_id=request.room_id,
+            conversation_id=conversation_id,
             role="user",
             content=request.content,
             user_id=user_id,
@@ -340,7 +381,7 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
     except PermissionError:
         raise
 
-    messages = get_messages(request.room_id, user_id)
+    messages = get_messages(conversation_id, user_id)
 
     state = create_initial_state(
         request=request,
@@ -353,7 +394,7 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
     answer = result_state.get("final_answer") or "응답을 생성하지 못했습니다."
 
     insert_message(
-        conversation_id=request.room_id,
+        conversation_id=conversation_id,
         role="assistant",
         content=answer,
         user_id=user_id,
