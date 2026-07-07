@@ -260,6 +260,18 @@ def get_conversation_documents(
     }
 
 
+# 기존 room_id 경로 호환용 문서 목록 조회 API
+@router.get("/rooms/{room_id}/documents")
+def get_room_documents_legacy(
+    room_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return get_conversation_documents(
+        conversation_id=room_id,
+        current_user_id=current_user_id,
+    )
+
+
 # 채팅방에 문서 연결 API
 @router.post("/conversations/{conversation_id}/documents")
 def add_document_to_conversation(
@@ -289,6 +301,19 @@ def add_document_to_conversation(
     }
 
 
+# 기존 room_id 경로 호환용 문서 연결 API
+@router.post("/rooms/{room_id}/documents")
+def add_document_to_room_legacy(
+    room_id: str,
+    request: ConversationDocumentRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return add_document_to_conversation(
+        conversation_id=room_id,
+        request=request,
+        current_user_id=current_user_id,
+    )
+
 # 채팅방에서 문서 연결 해제 API
 @router.delete("/conversations/{conversation_id}/documents/{document_id}")
 def remove_document_from_conversation(
@@ -316,3 +341,16 @@ def remove_document_from_conversation(
         "message": "문서 연결이 해제되었습니다.",
         "error": None,
     }
+
+# 기존 room_id 경로 호환용 문서 연결 해제 API
+@router.delete("/rooms/{room_id}/documents/{document_id}")
+def remove_document_from_room_legacy(
+    room_id: str,
+    document_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return remove_document_from_conversation(
+        conversation_id=room_id,
+        document_id=document_id,
+        current_user_id=current_user_id,
+    )
