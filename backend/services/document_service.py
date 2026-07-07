@@ -6,11 +6,12 @@ from fastapi import UploadFile
 import httpx
 
 from backend.db.crud import (
-    ensure_conversation,
+    create_conversation,
+    get_conversation_by_id,
     save_document_metadata,
-    get_document_by_id,
+    get_document_by_id_for_user,
     get_tasks_by_document,
-    delete_document,
+    delete_document_for_user,
     delete_document_chunks,
     update_chroma_status,
     link_document_to_room,
@@ -60,16 +61,11 @@ def _get_source(filename: str) -> str:
 
 # 응답 빌더
 
-def _build_error_response(
-    room_id: str | None,
-    filename: str,
-    document_type: str,
-    message: str,
-    error: str,
-) -> dict:
+def _build_error_response(room_id: str | None, filename: str, document_type: str, message: str, error: str) -> dict:
     return {
         "status": "error",
         "room_id": room_id,
+        "conversation_id": room_id,
         "document_id": None,
         "filename": filename,
         "type": document_type,
@@ -78,6 +74,8 @@ def _build_error_response(
         "summary": None,
         "chroma_load_result": None,
         "chroma_status": None,
+        "link_status": None,
+        "warning": None,
         "message": message,
         "error": error,
     }
@@ -324,14 +322,14 @@ def _make_fallback_summary(original_text: str, max_length: int = 500) -> str:
 
 # 문서 업로드 처리
 
-async def _process_document_file(file: UploadFile, room_id: str | None, document_type: str) -> dict:
+async def _process_document_file(file: UploadFile, room_id: str, document_type: str, user_id: str) -> dict:
     filename = Path(file.filename).name if file.filename else "uploaded_file"
     file_content = await file.read()
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         form_data = {
             "type": document_type,
-            "room_id": room_id or "",
+            "room_id": room_id,
         }
         response = await client.post(
             DOCUMENT_PROCESS_URL,
@@ -343,7 +341,7 @@ async def _process_document_file(file: UploadFile, room_id: str | None, document
     processed_result = response.json()
 
     document_id = processed_result.get("document_id") or processed_result.get("id")
-    result_room_id = processed_result.get("room_id") or room_id
+    result_room_id = room_id
     result_filename = processed_result.get("filename") or processed_result.get("title") or filename
     result_type = processed_result.get("type") or document_type
     file_path = processed_result.get("file_path") or ""
@@ -353,20 +351,38 @@ async def _process_document_file(file: UploadFile, room_id: str | None, document
 
     if not document_id:
         return {
-            "status": "error", "room_id": result_room_id, "document_id": None,
-            "filename": result_filename, "type": result_type, "file_path": file_path,
-            "json_path": processed_result.get("json_path") or "", "summary": summary,
-            "chroma_load_result": None, "chroma_status": None,
+            "status": "error",
+            "room_id": result_room_id,
+            "conversation_id": result_room_id,
+            "document_id": None,
+            "filename": result_filename,
+            "type": result_type,
+            "file_path": file_path,
+            "json_path": processed_result.get("json_path") or "",
+            "summary": summary,
+            "chroma_load_result": None,
+            "chroma_status": None,
+            "link_status": None,
+            "warning": None,
             "message": "8003 문서 처리 결과에 document_id가 없습니다.",
             "error": "document_id_missing",
         }
 
     if not content_markdown.strip() and not (isinstance(chunks, list) and chunks):
         return {
-            "status": "error", "room_id": result_room_id, "document_id": document_id,
-            "filename": result_filename, "type": result_type, "file_path": file_path,
-            "json_path": processed_result.get("json_path") or "", "summary": summary,
-            "chroma_load_result": None, "chroma_status": None,
+            "status": "error",
+            "room_id": result_room_id,
+            "conversation_id": result_room_id,
+            "document_id": document_id,
+            "filename": result_filename,
+            "type": result_type,
+            "file_path": file_path,
+            "json_path": processed_result.get("json_path") or "",
+            "summary": summary,
+            "chroma_load_result": None,
+            "chroma_status": None,
+            "link_status": None,
+            "warning": None,
             "message": "8003 문서 처리 결과에 content 또는 chunks가 없습니다.",
             "error": "document_content_missing",
         }
@@ -374,13 +390,9 @@ async def _process_document_file(file: UploadFile, room_id: str | None, document
     processed_result["content_markdown"] = content_markdown
     json_path = _save_processed_result_to_local_json(processed_result, document_id)
 
-    # room_id가 있을 때만 conversation 생성
-    if result_room_id:
-        ensure_conversation(conversation_id=result_room_id, title=result_filename)
-
     saved_document_id = save_document_metadata({
         "id": document_id,
-        "conversation_id": result_room_id or "",
+        "conversation_id": result_room_id,
         "title": result_filename,
         "type": result_type,
         "source": _get_source(result_filename),
@@ -391,9 +403,9 @@ async def _process_document_file(file: UploadFile, room_id: str | None, document
         "notion_url": "",
         "error": "",
     })
-    
+
     try:
-        chroma_load_result = load_document(document_id=saved_document_id, room_id=result_room_id or "")
+        chroma_load_result = load_document(document_id=saved_document_id, room_id=result_room_id)
         chroma_status = "success" if chroma_load_result.get("status") == "success" else "failed"
         update_chroma_status(saved_document_id, chroma_status)
         print(f"[document_service] ChromaDB 적재 결과: {chroma_load_result}")
@@ -403,14 +415,29 @@ async def _process_document_file(file: UploadFile, room_id: str | None, document
         update_chroma_status(saved_document_id, "failed")
         print(f"[document_service] ChromaDB 적재 실패: {repr(e)}")
 
+    link_status = "success"
+    link_warning = None
+
     # room_id가 있으면 room_document_links에 연결 추가 (ChromaDB 성공 여부와 무관)
-    if result_room_id:
-        link_document_to_room(result_room_id, saved_document_id)
+    linked = link_document_to_room(
+        room_id=result_room_id,
+        document_id=saved_document_id,
+        user_id=user_id,
+    )
+
+    if linked:
         print(f"[document_service] room_document_links 연결 완료: {result_room_id} → {saved_document_id}")
+    else:
+        link_status = "failed"
+        link_warning = "문서는 저장되었지만 사건방-문서 연결에 실패했습니다."
+        print(f"[document_service] room_document_links 연결 실패: {result_room_id} → {saved_document_id}")
+
+    final_status = "success" if link_status == "success" else "partial_success"
 
     return {
-        "status": "success",
+        "status": final_status,
         "room_id": result_room_id,
+        "conversation_id": result_room_id,
         "document_id": saved_document_id,
         "filename": result_filename,
         "type": result_type,
@@ -419,44 +446,112 @@ async def _process_document_file(file: UploadFile, room_id: str | None, document
         "summary": summary,
         "chroma_load_result": chroma_load_result,
         "chroma_status": chroma_status,
+        "link_status": link_status,
+        "warning": link_warning,
         "message": "문서 처리, 메타데이터 저장 및 ChromaDB 적재 요청이 완료되었습니다.",
         "error": None,
     }
 
 
-async def upload_and_process_document(file: UploadFile, room_id: str | None, document_type: str = "document") -> dict:
+async def upload_and_process_document(
+    file: UploadFile,
+    room_id: str | None,
+    document_type: str = "document",
+    user_id: str | None = None,
+) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
     try:
+        if not user_id:
+            raise PermissionError("인증 정보가 없습니다.")
+
         if _is_audio_file(file):
-            return _build_error_response(room_id, filename, "voice", "음성 파일은 /api/stt/upload API를 사용해 주세요.", "use_stt_upload_api")
+            return _build_error_response(
+                room_id,
+                filename,
+                "voice",
+                "음성 파일은 /api/stt/upload API를 사용해 주세요.",
+                "use_stt_upload_api",
+            )
 
         if not _is_valid_document_type(document_type):
-            return _build_error_response(room_id, filename, document_type, "지원하지 않는 문서 유형입니다.", "unsupported_document_type")
+            return _build_error_response(
+                room_id,
+                filename,
+                document_type,
+                "지원하지 않는 문서 유형입니다.",
+                "unsupported_document_type",
+            )
 
         if not is_document_file(file):
-            return _build_error_response(room_id, filename, document_type, "지원하지 않는 파일 형식입니다.", "unsupported_file_type")
+            return _build_error_response(
+                room_id,
+                filename,
+                document_type,
+                "지원하지 않는 파일 형식입니다.",
+                "unsupported_file_type",
+            )
 
-        return await _process_document_file(file=file, room_id=room_id, document_type=document_type)
+        # room_id가 있으면 현재 사용자 소유 채팅방인지 확인
+        if room_id:
+            room = get_conversation_by_id(room_id, user_id)
+
+            if not room:
+                raise PermissionError("채팅방을 찾을 수 없습니다.")
+
+        # room_id가 없으면 현재 사용자 기준 새 채팅방 생성
+        else:
+            room_id = create_conversation(
+                title=filename,
+                user_id=user_id,
+            )
+
+        return await _process_document_file(
+            file=file,
+            room_id=room_id,
+            document_type=document_type,
+            user_id=user_id,
+        )
+
+    except PermissionError:
+        raise
 
     except httpx.HTTPStatusError as e:
-        return _build_error_response(room_id, filename, document_type, "외부 처리 서버 응답 오류가 발생했습니다.", repr(e))
+        return _build_error_response(
+            room_id,
+            filename,
+            document_type,
+            "외부 처리 서버 응답 오류가 발생했습니다.",
+            repr(e),
+        )
 
     except httpx.RequestError as e:
-        return _build_error_response(room_id, filename, document_type, "외부 처리 서버에 연결할 수 없습니다.", repr(e))
+        return _build_error_response(
+            room_id,
+            filename,
+            document_type,
+            "외부 처리 서버에 연결할 수 없습니다.",
+            repr(e),
+        )
 
     except Exception as e:
-        return _build_error_response(room_id, filename, document_type, "문서 업로드 또는 처리 중 오류가 발생했습니다.", repr(e))
+        return _build_error_response(
+            room_id,
+            filename,
+            document_type,
+            "문서 업로드 또는 처리 중 오류가 발생했습니다.",
+            repr(e),
+        )
 
 
 # 문서 상세 조회
 
-def get_document_detail(document_id: str) -> dict:
+def get_document_detail(document_id: str, user_id: str) -> dict:
     try:
-        document = get_document_by_id(document_id)
+        document = get_document_by_id_for_user(document_id, user_id)
 
         if not document:
-            return {"status": "error", "document_id": document_id, "document": None, "message": "문서를 찾을 수 없습니다.", "error": "document_not_found"}
+            raise PermissionError("문서를 찾을 수 없습니다.")
 
         document_json = _load_document_json(document.get("json_path") or "")
         original_text = _extract_original_text(document, document_json)
@@ -465,7 +560,11 @@ def get_document_detail(document_id: str) -> dict:
         keywords = _extract_keywords(document_json)
         analysis_metadata = _extract_analysis_metadata(document_json)
         content_types = _extract_content_types(chunks)
-        summary = document.get("summary") or document_json.get("summary") or _make_fallback_summary(original_text)
+        summary = (
+            document.get("summary")
+            or document_json.get("summary")
+            or _make_fallback_summary(original_text)
+        )
         tasks = get_tasks_by_document(document_id)
         organized_items = _extract_organized_items(document_json)
 
@@ -475,6 +574,7 @@ def get_document_detail(document_id: str) -> dict:
             "document": {
                 "document_id": document.get("id"),
                 "room_id": document.get("conversation_id"),
+                "conversation_id": document.get("conversation_id"),
                 "filename": document.get("title"),
                 "type": document.get("type"),
                 "source": document.get("source"),
@@ -505,6 +605,7 @@ def get_document_detail(document_id: str) -> dict:
                             "task_id": task.get("id"),
                             "document_id": task.get("document_id"),
                             "room_id": task.get("conversation_id"),
+                            "conversation_id": task.get("conversation_id"),
                             "task": task.get("task"),
                             "assignee": task.get("assignee"),
                             "deadline": task.get("deadline"),
@@ -522,23 +623,27 @@ def get_document_detail(document_id: str) -> dict:
             "error": None,
         }
 
+    except PermissionError:
+        raise
+
     except Exception as e:
-        return {"status": "error", "document_id": document_id, "document": None, "message": "문서 상세 조회 중 오류가 발생했습니다.", "error": repr(e)}
+        return {
+            "status": "error",
+            "document_id": document_id,
+            "document": None,
+            "message": "문서 상세 조회 중 오류가 발생했습니다.",
+            "error": repr(e),
+        }
 
 
 # 문서 삭제
 
-def delete_processed_document(document_id: str) -> dict:
+def delete_processed_document(document_id: str, user_id: str) -> dict:
     try:
-        document = get_document_by_id(document_id)
+        document = get_document_by_id_for_user(document_id, user_id)
 
         if not document:
-            return {
-                "status": "error", "document_id": document_id,
-                "message": "삭제할 문서를 찾을 수 없습니다.",
-                "deleted": {"document_chunks": 0, "document": False, "local_json_file": False, "local_source_file": False, "external_file": False, "external_json": False, "chroma": False},
-                "document_server_result": None, "error": "document_not_found",
-            }
+            raise PermissionError("삭제할 문서를 찾을 수 없습니다.")
 
         json_path = document.get("json_path") or ""
         file_path = document.get("file_path") or ""
@@ -558,11 +663,14 @@ def delete_processed_document(document_id: str) -> dict:
             chroma_deleted = False
             print(f"[document_service] ChromaDB 벡터 삭제 실패: {repr(e)}")
 
-        deleted_document = delete_document(document_id)
+        deleted_document = delete_document_for_user(document_id, user_id)
 
         server_status = document_server_result.get("status")
+
         if server_status == "success":
-            final_status, message, error = "success", "문서 삭제가 완료되었습니다.", None
+            final_status = "success"
+            message = "문서 삭제가 완료되었습니다."
+            error = None
         elif server_status == "partial_success":
             final_status = "partial_success"
             message = "8000 문서는 삭제되었지만, 8003 서버에서 일부 파일만 삭제되었습니다."
@@ -589,5 +697,15 @@ def delete_processed_document(document_id: str) -> dict:
             "error": error,
         }
 
+    except PermissionError:
+        raise
+
     except Exception as e:
-        return {"status": "error", "document_id": document_id, "message": "문서 삭제 중 오류가 발생했습니다.", "deleted": None, "document_server_result": None, "error": repr(e)}
+        return {
+            "status": "error",
+            "document_id": document_id,
+            "message": "문서 삭제 중 오류가 발생했습니다.",
+            "deleted": None,
+            "document_server_result": None,
+            "error": repr(e),
+        }
