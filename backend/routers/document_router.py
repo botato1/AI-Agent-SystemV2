@@ -31,8 +31,8 @@ def get_document_list(
             {
                 "document_id": row["document_id"],
                 "filename": row["filename"],
-                "room_id": row["room_id"],
-                "conversation_id": row["conversation_id"],
+                "room_id": row.get("room_id"),  # TODO: v1 호환용, 추후 제거 예정
+                "conversation_id": row.get("conversation_id") or row.get("room_id"),
                 "type": row.get("type"),
                 "source": row.get("source"),
                 "json_path": row.get("json_path"),
@@ -65,7 +65,8 @@ def get_document_list(
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    room_id: str | None = Form(None),
+    conversation_id: str | None = Form(None),
+    room_id: str | None = Form(None),  # TODO: v1 호환용, 추후 제거 예정
     document_type: Literal["document", "meeting"] = Form("document", alias="type"),
     current_user_id: str = Depends(get_current_user_id),
 ):
@@ -78,6 +79,7 @@ async def upload_document(
     try:
         return await upload_and_process_document(
             file=file,
+            conversation_id=conversation_id,
             room_id=room_id,
             document_type=document_type,
             user_id=current_user_id,
