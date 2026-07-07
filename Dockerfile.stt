@@ -13,6 +13,10 @@ RUN pip install --no-cache-dir --break-system-packages --upgrade \
     torch torchaudio \
     --index-url https://download.pytorch.org/whl/cu128
 
+# pyannote.audio 4.x의 오디오 디코딩(AudioDecoder)에 필요, torch 버전과 정확히 맞아야 해서 torch 업그레이드 이후에 설치
+RUN pip install --no-cache-dir --break-system-packages torchcodec \
+    --index-url https://download.pytorch.org/whl/cu128
+
 # 상대 import 유지를 위해 stt/ 서브디렉토리로 복사
 COPY backend/modules/stt/ ./stt/
 
