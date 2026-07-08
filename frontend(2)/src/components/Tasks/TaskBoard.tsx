@@ -19,9 +19,7 @@ import type { ApiTask, UpdateStatusResponse, UpdatePriorityResponse } from './ty
 
 interface Props {
   taskList: ApiTask[]
-  doneIds: Set<string>
   activeFilter: string
-  onToggleDone: (taskId: string) => void
   onOpenModal: () => void
   onStatusChange: (taskId: string, newStatus: ApiTask['status']) => void
   onPriorityChange: (taskId: string, newPriority: ApiTask['priority']) => void
@@ -240,10 +238,8 @@ function TaskDropdown({ task, onStatusChange, onPriorityChange, onDelete, onClos
 }
 
 
-function DraggableCard({ task, isDone, onToggleDone, onStatusChange, onPriorityChange, onDelete }: {
+function DraggableCard({ task, onStatusChange, onPriorityChange, onDelete }: {
   task: ApiTask
-  isDone: boolean
-  onToggleDone: (task: ApiTask) => void
   onStatusChange: (taskId: string, newStatus: ApiTask['status']) => void
   onPriorityChange: (taskId: string, newPriority: ApiTask['priority']) => void
   onDelete: (taskId: string) => void
@@ -252,10 +248,30 @@ function DraggableCard({ task, isDone, onToggleDone, onStatusChange, onPriorityC
   const [openDropdown, setOpenDropdown] = useState(false)
   const dot = priorityDot[task.priority] ?? priorityDot['medium']
 
+  // isDone은 오직 task.status만 보고 판단 (별도 Set으로 이중 관리하지 않음 → 드래그 시 취소선 안 사라지는 버그 방지)
+  const isDone = task.status === 'done'
+
   const style = transform ? {
     transform: `translate(${transform.x}px, ${transform.y}px)`,
     zIndex: 50,
   } : undefined
+
+  // 동그라미 클릭 — done ↔ todo 토글, 실제 상태를 서버에 반영
+  const handleToggleDone = () => {
+    const newStatus: ApiTask['status'] = task.status === 'done' ? 'todo' : 'done'
+
+    // UI 즉시 반영
+    onStatusChange(task.task_id, newStatus)
+
+    fetch(`${BASE_URL}/api/tasks/${task.task_id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    }).catch(() => {
+      // 실패 시 롤백
+      onStatusChange(task.task_id, task.status)
+    })
+  }
 
   return (
     <div
@@ -278,7 +294,7 @@ function DraggableCard({ task, isDone, onToggleDone, onStatusChange, onPriorityC
         <div
           className="flex items-center gap-1.5 cursor-pointer"
           onPointerDown={e => e.stopPropagation()}
-          onClick={() => onToggleDone(task)}
+          onClick={handleToggleDone}
         >
           <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 transition-all ${isDone ? dot.done : dot.active}`} />
           <span className={`text-xs transition-colors ${isDone ? 'text-gray-300 dark:text-[#333]' : 'text-gray-400 dark:text-gray-500'}`}>
@@ -343,7 +359,7 @@ function DroppableColumn({ col, children }: { col: typeof columns[0]; children: 
 }
 
 
-export default function TaskBoard({ taskList, doneIds, activeFilter, onToggleDone, onOpenModal, onStatusChange, onPriorityChange, onDelete }: Props) {
+export default function TaskBoard({ taskList, activeFilter, onOpenModal, onStatusChange, onPriorityChange, onDelete }: Props) {
   const [activeTask, setActiveTask] = useState<ApiTask | null>(null) // 드래그 중인 카드
 
   // 8px 이상 움직여야 드래그 시작 (클릭과 구분)
@@ -391,24 +407,6 @@ export default function TaskBoard({ taskList, doneIds, activeFilter, onToggleDon
     })
   }
 
-  // 동그라미 클릭 — done이면 todo로, 아니면 done으로 실제 상태를 서버에 반영
-const handleToggleDone = (task: ApiTask) => {
-  const newStatus: ApiTask['status'] = task.status === 'done' ? 'todo' : 'done'
-
-  // UI 즉시 반영
-  onStatusChange(task.task_id, newStatus)
-  onToggleDone(task.task_id) // 기존 doneIds 로컬 표시도 같이 유지 (있어도 무방)
-
-  fetch(`${BASE_URL}/api/tasks/${task.task_id}/status`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: newStatus }),
-  }).catch(() => {
-    // 실패 시 롤백
-    onStatusChange(task.task_id, task.status)
-  })
-}
-
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className={`grid gap-4 ${
@@ -436,9 +434,6 @@ const handleToggleDone = (task: ApiTask) => {
                 <DraggableCard
                   key={task.task_id}
                   task={task}
-                  // status가 done이거나 로컬 토글이면 취소선 적용
-                  isDone={doneIds.has(task.task_id) || task.status === 'done'}
-                  onToggleDone={handleToggleDone}
                   onStatusChange={onStatusChange}
                   onPriorityChange={onPriorityChange}
                   onDelete={onDelete}

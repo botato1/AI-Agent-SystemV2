@@ -9,7 +9,6 @@ const BASE_URL = import.meta.env.VITE_API_URL
 
 export default function Tasks() {
   const [taskList, setTaskList] = useState<ApiTask[]>([])
-  const [doneIds, setDoneIds] = useState<Set<string>>(new Set())
   const [activeFilter, setActiveFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -31,7 +30,6 @@ export default function Tasks() {
           setTaskList([])
         } else {
           setTaskList(data.tasks)
-          setDoneIds(new Set(data.tasks.filter((t: ApiTask) => t.status === 'done').map((t: ApiTask) => t.task_id)))
         }
       } catch {
         setError('업무 목록을 불러오지 못했습니다.')
@@ -46,47 +44,37 @@ export default function Tasks() {
 
   const handleTaskCreated = (newTask: ApiTask) => {
     setTaskList(prev => [newTask, ...prev])
-    if (newTask.status === 'done') {
-      setDoneIds(prev => new Set(prev).add(newTask.task_id))
-    }
   }
 
-  const toggleDone = (taskId: string) => {
-    setDoneIds(prev => {
-      const next = new Set(prev)
-      next.has(taskId) ? next.delete(taskId) : next.add(taskId)
-      return next
-    })
-  }
-
+  // status는 taskList의 각 태스크가 유일한 진실의 원천(source of truth).
+  // 드래그앤드롭이든 클릭이든 전부 이 함수 하나로 상태를 갱신함
   const handleStatusChange = (taskId: string, newStatus: ApiTask['status']) => {
-  setTaskList(prev =>
-    prev.map(t => t.task_id === taskId ? { ...t, status: newStatus } : t)
-  )
-}
-
-const handlePriorityChange = (taskId: string, newPriority: ApiTask['priority']) => {
-  setTaskList(prev =>
-    prev.map(t => t.task_id === taskId ? { ...t, priority: newPriority } : t)
-  )
-}
-
-const handleTaskDelete = async (taskId: string) => {
-  try {
-    const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`, { method: 'DELETE' })
-    if (!res.ok) throw new Error()
-    const data = await res.json()
-    if (!data.error && data.task?.deleted) {
-      setTaskList(prev => prev.filter(t => t.task_id !== taskId))
-    }
-  } catch {
-    // 추후 toast 연결
+    setTaskList(prev =>
+      prev.map(t => t.task_id === taskId ? { ...t, status: newStatus } : t)
+    )
   }
-}
 
+  const handlePriorityChange = (taskId: string, newPriority: ApiTask['priority']) => {
+    setTaskList(prev =>
+      prev.map(t => t.task_id === taskId ? { ...t, priority: newPriority } : t)
+    )
+  }
+
+  const handleTaskDelete = async (taskId: string) => {
+    try {
+      const res = await fetch(`${BASE_URL}/api/tasks/${taskId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      if (!data.error && data.task?.deleted) {
+        setTaskList(prev => prev.filter(t => t.task_id !== taskId))
+      }
+    } catch {
+      // 추후 toast 연결
+    }
+  }
 
   return (
-      <div className="p-6">
+    <div className="p-6">
       {showModal && (
         <CreateTaskModal
           onClose={() => setShowModal(false)}
@@ -136,15 +124,13 @@ const handleTaskDelete = async (taskId: string) => {
       {/* 칸반 보드 */}
       {!loading && !error && taskList.length > 0 && (
         <TaskBoard
-  taskList={taskList}
-  doneIds={doneIds}
-  activeFilter={activeFilter}
-  onToggleDone={toggleDone}
-  onOpenModal={() => setShowModal(true)}
-  onStatusChange={handleStatusChange}
-  onPriorityChange={handlePriorityChange}
-  onDelete={handleTaskDelete}
-/>
+          taskList={taskList}
+          activeFilter={activeFilter}
+          onOpenModal={() => setShowModal(true)}
+          onStatusChange={handleStatusChange}
+          onPriorityChange={handlePriorityChange}
+          onDelete={handleTaskDelete}
+        />
       )}
     </div>
   )
