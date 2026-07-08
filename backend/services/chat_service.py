@@ -242,14 +242,15 @@ def run_agent_graph(state: AgentState) -> AgentState:
 def create_initial_state(
     request: ChatRequest,
     user_id: str,
+    conversation_id: str | None = None,
     messages: list | None = None,
 ) -> AgentState:
-    conversation_id = resolve_conversation_id(request)
+    resolved_conversation_id = conversation_id or resolve_conversation_id(request)
 
     target_document_id, target_filename = _resolve_target_document(request)
     target_document_ids = request.target_document_ids or []
 
-    documents = get_documents(conversation_id, user_id) if conversation_id else []
+    documents = get_documents(resolved_conversation_id, user_id) if resolved_conversation_id else []
 
     base_filter = {
         "user_id": str(user_id),
@@ -270,14 +271,14 @@ def create_initial_state(
             **base_filter,
             "document_ids": target_document_ids,
         }
-    elif documents and conversation_id:
+    elif documents and resolved_conversation_id:
         rag_filter = {
             **base_filter,
 
             # TODO: v1 호환용, 추후 room_id 제거 예정
-            "room_id": conversation_id,
+            "room_id": resolved_conversation_id,
 
-            "conversation_id": conversation_id,
+            "conversation_id": resolved_conversation_id,
         }
     else:
         rag_filter = base_filter
@@ -293,9 +294,9 @@ def create_initial_state(
         "user_id": str(user_id),
 
         # TODO: v1 호환용, 추후 room_id 제거 예정
-        "room_id": conversation_id,
+        "room_id": resolved_conversation_id,
 
-        "conversation_id": conversation_id,
+        "conversation_id": resolved_conversation_id,
         "user_message": request.content,
         "source": request.source,
         "created_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
@@ -378,10 +379,6 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
             user_id=user_id,
         )
 
-        # 이후 create_initial_state()에서도 동일한 conversation_id를 사용하도록 보정
-        request.conversation_id = conversation_id
-        request.room_id = conversation_id
-
     try:
         insert_message(
             conversation_id=conversation_id,
@@ -397,12 +394,9 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
     state = create_initial_state(
         request=request,
         user_id=user_id,
+        conversation_id=conversation_id,
         messages=messages,
     )
-
-    # 혹시 request 보정이 누락되더라도 응답에는 생성된 conversation_id가 내려가도록 보장
-    state["conversation_id"] = conversation_id
-    state["room_id"] = conversation_id
 
     result_state = await asyncio.to_thread(run_agent_graph, state)
 
@@ -415,7 +409,7 @@ async def handle_chat(request: ChatRequest, user_id: str) -> ChatResponseSchema:
         user_id=user_id,
     )
 
-    # LangGraph 실행 결과에도 생성된 conversation_id를 다시 보장
+    # 그래프 결과에서 식별자가 누락되더라도 응답에는 현재 conversation_id를 보장
     result_state["conversation_id"] = conversation_id
     result_state["room_id"] = conversation_id
 
