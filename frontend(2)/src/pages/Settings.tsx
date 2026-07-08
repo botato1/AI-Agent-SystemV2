@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useToast } from '../App'
-import { useAuth } from '../context/AuthContext'
+import { useAuth, authFetch } from '../context/AuthContext'
 
 const BASE_URL = import.meta.env.VITE_API_URL
 
@@ -27,11 +27,14 @@ const Row = ({ label, desc, children }: { label: string; desc?: string; children
   </div>
 )
 
+// 파란색을 다른 페이지(Tasks 등)와 동일한 Tailwind bg-blue-600으로 통일
 const Toggle = ({ value, onChange }: { value: boolean; onChange: () => void }) => (
   <button
     onClick={onChange}
-    className="w-10 h-5 rounded-full relative transition-colors flex-shrink-0"
-    style={{ background: value ? 'var(--accent)' : 'var(--bg-elevated)' }}
+    className={`w-10 h-5 rounded-full relative transition-colors flex-shrink-0 ${
+      value ? 'bg-blue-600' : ''
+    }`}
+    style={{ background: value ? undefined : 'var(--bg-elevated)' }}
   >
     <div
       className="w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-all"
@@ -63,10 +66,13 @@ export default function Settings() {
     setNotifications(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
+  // DELETE /api/conversations 문서 기준: 인증 필요, 응답 status 확인 후 토스트 분기
   const handleDeleteAllChats = async () => {
     if (!confirm('채팅 기록을 전체 삭제할까요? 복구할 수 없어요.')) return
     try {
-      await fetch(`${BASE_URL}/api/conversations`, { method: 'DELETE' })
+      const res = await authFetch(`${BASE_URL}/api/conversations`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok || data.status === 'error') throw new Error()
       showToast('채팅 기록이 삭제되었습니다.', 'success')
     } catch {
       showToast('삭제 중 오류가 발생했어요.', 'error')
@@ -86,7 +92,7 @@ export default function Settings() {
     }
     setPwLoading(true)
     try {
-      // TODO: await fetch(`${BASE_URL}/api/auth/change-password`, { method: 'POST', ... })
+      // TODO: await authFetch(`${BASE_URL}/api/auth/change-password`, { method: 'POST', ... })
       await new Promise(r => setTimeout(r, 500))
       showToast('비밀번호가 변경되었습니다.', 'success')
       setPwForm({ current: '', next: '', confirm: '' })
@@ -148,8 +154,7 @@ export default function Settings() {
               <button
                 onClick={handleChangePassword}
                 disabled={pwLoading}
-                className="text-sm px-4 py-2 rounded-lg mt-1 transition disabled:opacity-50"
-                style={{ background: 'var(--accent)', color: '#fff' }}
+                className="text-sm px-4 py-2 rounded-lg mt-1 transition disabled:opacity-50 bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {pwLoading ? '변경 중...' : '비밀번호 변경'}
               </button>
