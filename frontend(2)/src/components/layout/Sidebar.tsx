@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   IconHome,
   IconLayoutDashboard,
-  IconGavel,
+  IconAffiliate,
   IconFolder,
   IconListCheck,
   IconSettings,
@@ -11,16 +11,18 @@ import {
   IconSun,
   IconMoon,
   IconMessage,
+  IconX,
 } from "@tabler/icons-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useTheme } from "../../context/ThemeContext";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth, authFetch } from "../../context/AuthContext";
 
 const BASE_URL = import.meta.env.VITE_API_URL
 
 interface Conversation {
-  room_id: string
+  conversation_id: string
   title: string
+  created_at: string
   updated_at: string
 }
 
@@ -33,7 +35,7 @@ interface NavItem {
 const primaryNavItems: NavItem[] = [
   { label: "홈", icon: IconHome, path: "/" },
   { label: "대시보드", icon: IconLayoutDashboard, path: "/dashboard" },
-  { label: "판례 검색", icon: IconGavel, path: "/graph" },
+  { label: "그래프", icon: IconAffiliate, path: "/graph" },
   { label: "문서 보관함", icon: IconFolder, path: "/documents" },
   { label: "할일", icon: IconListCheck, path: "/tasks" },
 ];
@@ -49,17 +51,21 @@ interface SidebarProps {
   refreshTrigger?: number
 }
 
-export default function Sidebar({ activeRoomId, onSelectRoom, refreshTrigger }: SidebarProps) {
+export default function Sidebar({ activeRoomId, onSelectRoom, onNewChat, refreshTrigger }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
   const { user } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([])
+  // 삭제 중인 대화 ID (중복 클릭 방지 + 로딩 표시용)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
+  // 인증 필요한 API라서 authFetch 사용, 서버가 이미 user_id 기준으로 필터링해서 줌
   const fetchConversations = async () => {
     try {
-      const res = await fetch(`${BASE_URL}/api/conversations`)
+      const res = await authFetch(`${BASE_URL}/api/conversations`)
+      if (!res.ok) throw new Error()
       const data = await res.json()
       setConversations(data.conversations ?? [])
     } catch (err) {
@@ -70,6 +76,33 @@ export default function Sidebar({ activeRoomId, onSelectRoom, refreshTrigger }: 
   useEffect(() => {
     fetchConversations()
   }, [refreshTrigger])
+
+  // DELETE /api/conversations/{conversation_id} 문서 기준
+  const handleDeleteConversation = async (e: React.MouseEvent, conversationId: string) => {
+    e.stopPropagation() // 방 열리는 클릭 이벤트로 전파되는 것 방지
+    if (!confirm('이 대화를 삭제할까요? 복구할 수 없어요.')) return
+
+    setDeletingId(conversationId)
+    try {
+      const res = await authFetch(`${BASE_URL}/api/conversations/${conversationId}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json()
+      if (!res.ok || data.status === 'error') {
+        throw new Error(data.message ?? data.detail ?? '삭제에 실패했어요')
+      }
+      // 목록에서 제거
+      setConversations(prev => prev.filter(c => c.conversation_id !== conversationId))
+      // 지금 열려있던 방을 지운 경우 새 채팅 상태로 전환
+      if (activeRoomId === conversationId) {
+        onNewChat()
+      }
+    } catch (err) {
+      console.error('대화 삭제 실패:', err)
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -153,18 +186,35 @@ export default function Sidebar({ activeRoomId, onSelectRoom, refreshTrigger }: 
               </p>
             ) : (
               conversations.slice(0, 20).map((conv) => (
-                <button
-                  key={conv.room_id}
-                  onClick={() => { onSelectRoom(conv.room_id); navigate("/"); }}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-left w-full transition-colors"
+                <div
+                  key={conv.conversation_id}
+                  className="group flex items-center justify-between gap-1 px-2 py-1.5 rounded-lg transition-colors"
                   style={{
-                    background: activeRoomId === conv.room_id ? "var(--bg-elevated)" : "transparent",
-                    color: activeRoomId === conv.room_id ? "var(--text-primary)" : "var(--text-secondary)",
+                    background: activeRoomId === conv.conversation_id ? "var(--bg-elevated)" : "transparent",
                   }}
                 >
-                  <IconMessage size={13} stroke={1.5} className="flex-shrink-0" />
-                  <span className="text-xs truncate">{conv.title}</span>
-                </button>
+                  <button
+                    onClick={() => { onSelectRoom(conv.conversation_id); navigate("/"); }}
+                    className="flex items-center gap-2 min-w-0 flex-1 text-left"
+                    style={{
+                      color: activeRoomId === conv.conversation_id ? "var(--text-primary)" : "var(--text-secondary)",
+                    }}
+                  >
+                    <IconMessage size={13} stroke={1.5} className="flex-shrink-0" />
+                    <span className="text-xs truncate">{conv.title}</span>
+                  </button>
+
+                  {/* 삭제 버튼 - 평소엔 숨김, hover 시 노출 */}
+                  <button
+                    onClick={(e) => handleDeleteConversation(e, conv.conversation_id)}
+                    disabled={deletingId === conv.conversation_id}
+                    aria-label="대화 삭제"
+                    className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    <IconX size={13} stroke={1.8} />
+                  </button>
+                </div>
               ))
             )}
           </div>

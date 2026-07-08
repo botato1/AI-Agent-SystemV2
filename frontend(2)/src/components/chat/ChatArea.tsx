@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Send, X, FileText, Mic } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { useToast } from '../../App'
+import { authFetch, getAccessToken } from '../../context/AuthContext'
 
 const BASE_URL = import.meta.env.VITE_API_URL
 
@@ -23,7 +24,7 @@ interface ChatTask {
 
 interface Message {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   text: string
   tasks?: ChatTask[]
 }
@@ -117,9 +118,11 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
     setAddedTaskIds(loadAddedIds(activeRoomId))
   }, [activeRoomId])
 
+  // GET /api/conversations/{conversation_id}/documents 문서 기준
+  // 기존 /api/rooms/... 경로에서 /api/conversations/...로 수정
   const fetchRoomDocuments = async (roomId: string): Promise<LinkedDoc[]> => {
     try {
-      const res = await fetch(`${BASE_URL}/api/rooms/${roomId}/documents`)
+      const res = await authFetch(`${BASE_URL}/api/conversations/${roomId}/documents`)
       const data = await res.json()
       if (data.status === 'success') {
         return (data.documents ?? []).map((d: any) => ({
@@ -132,22 +135,36 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
     } catch { return [] }
   }
 
+  // POST /api/conversations/{conversation_id}/documents 문서 기준
+  // 409(document_already_linked)는 실질적 문제가 아니므로 무시, 그 외 실패만 콘솔 로그
   const linkDocumentToRoom = async (roomId: string, documentId: string) => {
     try {
-      await fetch(`${BASE_URL}/api/rooms/${roomId}/documents`, {
+      const res = await authFetch(`${BASE_URL}/api/conversations/${roomId}/documents`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ document_id: documentId }),
       })
-    } catch {}
+      const data = await res.json()
+      if (!res.ok && data.error !== 'document_already_linked') {
+        console.error('문서 연결 실패:', data.message ?? data.detail)
+      }
+    } catch (err) {
+      console.error('문서 연결 요청 실패:', err)
+    }
   }
 
+  // DELETE /api/conversations/{conversation_id}/documents/{document_id} 문서 기준
   const unlinkDocumentFromRoom = async (roomId: string, documentId: string) => {
     try {
-      await fetch(`${BASE_URL}/api/rooms/${roomId}/documents/${documentId}`, {
+      const res = await authFetch(`${BASE_URL}/api/conversations/${roomId}/documents/${documentId}`, {
         method: 'DELETE',
       })
-    } catch {}
+      if (!res.ok) {
+        const data = await res.json()
+        console.error('문서 연결 해제 실패:', data.message ?? data.detail)
+      }
+    } catch (err) {
+      console.error('문서 연결 해제 요청 실패:', err)
+    }
   }
 
   useEffect(() => {
@@ -173,15 +190,17 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
     })
   }, [activeRoomId, targetDocumentId, targetFilename])
 
+  // GET /api/conversations/{conversation_id}/messages 문서 기준:
+  // message_id는 integer로 오므로 문자열로 변환해서 저장 (Message.id는 string 타입)
   useEffect(() => {
     if (!activeRoomId) { setMessages([]); return }
     if (loadingRef.current) return
-    fetch(`${BASE_URL}/api/conversations/${activeRoomId}/messages`)
+    authFetch(`${BASE_URL}/api/conversations/${activeRoomId}/messages`)
       .then(r => r.json())
       .then(data => {
         const msgs: Message[] = (data.messages ?? []).map((m: any) => ({
-          id: m.message_id,
-          role: m.role as 'user' | 'assistant',
+          id: String(m.message_id),
+          role: m.role as 'user' | 'assistant' | 'system',
           text: m.content,
         }))
         const roomTasks = loadRoomTasks(activeRoomId)
@@ -197,18 +216,20 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
       .catch(err => console.error('기록 불러오기 실패:', err))
   }, [activeRoomId])
 
+  // POST /api/conversations 문서 기준: 응답 필드가 conversation_id로 옴
   const createRoom = async (title: string): Promise<string> => {
-    const res = await fetch(`${BASE_URL}/api/conversations`, {
+    const res = await authFetch(`${BASE_URL}/api/conversations`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     })
     if (!res.ok) throw new Error('채팅방 생성 실패')
     const data = await res.json()
-    return data.room_id
+    return data.conversation_id
   }
 
   // ── 문서 업로드 ──────────────────────────────────────────────
+  // FormData 업로드는 authFetch를 쓰면 Content-Type이 강제로 application/json이 되어 깨지므로
+  // 토큰만 직접 꺼내서 Authorization 헤더로 수동 첨부
   const handleDocUpload = async (file: File) => {
     setUploading(true)
     setShowMenu(false)
@@ -217,8 +238,10 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
       formData.append('file', file)
       formData.append('type', 'document')
       formData.append('room_id', '')
+      const token = getAccessToken()
       const res = await fetch(`${BASE_URL}/api/documents/upload`, {
         method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: formData,
       })
       if (!res.ok) throw new Error('업로드 실패')
@@ -247,8 +270,10 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
     try {
       const formData = new FormData()
       formData.append('file', file)
+      const token = getAccessToken()
       const res = await fetch(`${BASE_URL}/api/stt/upload`, {
         method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: formData,
       })
       if (!res.ok) throw new Error('업로드 실패')
@@ -277,7 +302,7 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
     setShowMenu(false)
     if (allDocs.length === 0) {
       setPickerLoading(true)
-      fetch(`${BASE_URL}/api/documents`)
+      authFetch(`${BASE_URL}/api/documents`)
         .then(r => r.json())
         .catch(() => ({ documents: [] }))
         .then((docRes: any) => {
@@ -325,9 +350,8 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
 
   const handleAddTask = async (task: ChatTask) => {
     try {
-      const res = await fetch(`${BASE_URL}/api/tasks`, {
+      const res = await authFetch(`${BASE_URL}/api/tasks`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           task: task.task,
           assignee: task.assignee ?? null,
@@ -348,6 +372,20 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
         })
       }
     } catch {}
+  }
+
+  // DELETE /api/messages/{message_id} 문서 기준:
+  // 서버 응답 성공 여부를 확인한 뒤에만 화면에서 제거
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!confirm('이 메시지를 삭제할까요?')) return
+    try {
+      const res = await authFetch(`${BASE_URL}/api/messages/${messageId}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok || data.status === 'error') throw new Error()
+      setMessages(prev => prev.filter(m => m.id !== messageId))
+    } catch {
+      showToast('메시지 삭제에 실패했어요.', 'error')
+    }
   }
 
   const handleSend = async (overrideText?: string) => {
@@ -384,13 +422,13 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
 
     try {
       abortControllerRef.current = new AbortController()
-      const res = await fetch(`${BASE_URL}/api/chat`, {
+      // POST /api/chat 문서 기준: conversation_id, request_type 필드 사용
+      const res = await authFetch(`${BASE_URL}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          room_id: roomId,
+          conversation_id: roomId,
           content: userText,
-          source: linkedDocs.length > 0 ? 'pdf' : 'text',
+          request_type: 'chat',
           target_document_ids: linkedDocs.map(d => d.document_id),
         }),
         signal: abortControllerRef.current.signal,
@@ -434,7 +472,8 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
               key={doc.document_id}
               className="group flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/30 pl-2.5 pr-1.5 py-1.5 rounded-full"
             >
-              {doc.type === 'voice' ? <Mic size={12} /> : <FileText size={12} />}
+              {/* voice, consultation_audio 둘 다 음성으로 취급 */}
+              {doc.type === 'voice' || doc.type === 'consultation_audio' ? <Mic size={12} /> : <FileText size={12} />}
               <button
                 onClick={() => doc.type !== 'voice' && onGoToAnalysis?.(doc.document_id)}
                 className={`truncate max-w-[160px] ${doc.type !== 'voice' ? 'hover:underline' : ''}`}
@@ -542,11 +581,7 @@ export default function ChatArea({ activeRoomId, setActiveRoomId, onRoomCreated,
                 )}
               </div>
               <button
-                onClick={async () => {
-                  if (!confirm('이 메시지를 삭제할까요?')) return
-                  await fetch(`${BASE_URL}/api/messages/${msg.id}`, { method: 'DELETE' })
-                  setMessages(prev => prev.filter(m => m.id !== msg.id))
-                }}
+                onClick={() => handleDeleteMessage(msg.id)}
                 className={`transition self-center flex-shrink-0 text-gray-400 hover:text-red-400 ${
                   msg.role === 'user' ? 'mr-1' : 'ml-1'
                 }`}
