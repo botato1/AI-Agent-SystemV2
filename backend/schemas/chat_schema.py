@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # 프론트 -> 백엔드로 보내는 요청 타입
@@ -98,3 +98,18 @@ class ConversationSchema(BaseModel):
 # 채팅방 목록 응답 구조
 class ConversationListResponse(BaseModel):
     conversations: List[ConversationSchema] = Field(default_factory=list)
+
+
+# 채팅방 제목 수정 요청 구조
+class ConversationTitleUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        title = value.strip()
+
+        if not title:
+            raise ValueError("제목은 공백일 수 없습니다.")
+
+        return title

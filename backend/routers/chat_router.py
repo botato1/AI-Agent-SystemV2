@@ -1,8 +1,14 @@
+# backend/routers/chat_router.py
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from backend.core.dependencies import get_current_user_id
-from backend.schemas.chat_schema import ChatRequest, ChatHistoryResponse
+from backend.schemas.chat_schema import (
+    ChatRequest,
+    ChatHistoryResponse,
+    ConversationTitleUpdateRequest,
+)
 from backend.schemas.response_schema import ChatResponseSchema
 from backend.services.chat_service import handle_chat
 from backend.db.crud import (
@@ -17,6 +23,7 @@ from backend.db.crud import (
     link_document_to_room,
     unlink_document_from_room,
     get_documents_by_room_id,
+    update_conversation_title,
 )
 
 
@@ -186,6 +193,50 @@ def get_conversation_detail(
     }
 
 
+# 채팅방 제목 수정 API
+@router.patch("/conversations/{conversation_id}/title")
+def update_chat_room_title(
+    conversation_id: str,
+    request: ConversationTitleUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    updated = update_conversation_title(
+        conversation_id=conversation_id,
+        title=request.title,
+        user_id=current_user_id,
+    )
+
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="채팅방을 찾을 수 없습니다.",
+        )
+
+    return {
+        "status": "success",
+        "room_id": updated["room_id"],  # TODO: v1 호환용, 추후 room_id 제거 예정
+        "conversation_id": updated["conversation_id"],
+        "title": updated["title"],
+        "updated_at": updated["updated_at"],
+        "message": "채팅방 제목이 수정되었습니다.",
+        "error": None,
+    }
+
+
+# 기존 room_id 경로 호환용 제목 수정 API
+@router.patch("/rooms/{room_id}/title")
+def update_chat_room_title_legacy(
+    room_id: str,
+    request: ConversationTitleUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return update_chat_room_title(
+        conversation_id=room_id,
+        request=request,
+        current_user_id=current_user_id,
+    )
+
+
 # 채팅방 삭제 API
 @router.delete("/conversations/{conversation_id}")
 def remove_chat_room(
@@ -313,6 +364,7 @@ def add_document_to_room_legacy(
         request=request,
         current_user_id=current_user_id,
     )
+
 
 # 채팅방에서 문서 연결 해제 API
 @router.delete("/conversations/{conversation_id}/documents/{document_id}")

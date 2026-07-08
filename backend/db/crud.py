@@ -283,6 +283,36 @@ def update_conversation_timestamp(conversation_id: str, user_id: str) -> bool:
 
     return updated > 0
 
+def update_conversation_title(conversation_id: str, title: str, user_id: str) -> dict | None:
+    now = get_utc_now()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE conversations
+        SET title = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND user_id = ?
+        """,
+        (title, now, conversation_id, str(user_id)),
+    )
+
+    updated = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    if updated == 0:
+        return None
+
+    return {
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
+        "title": title,
+        "updated_at": now,
+    }
 
 def get_conversations(user_id: str) -> list:
     conn = get_connection()
