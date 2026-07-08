@@ -5,8 +5,8 @@ from backend.schemas.type_schema import QuestionType, DocumentType
 class AgentState(TypedDict):
     # 1. 기본 요청 정보
     user_id: Optional[str]
-    room_id: str            # v1 호환용 -> v2 기능 안정화 되면 삭제
-    conversation_id: str    # 사건방 ID
+    conversation_id: Optional[str]    # 사건방 ID
+    room_id: Optional[str]            # v1 호환용 -> v2 기능 안정화 되면 삭제
     user_message: str       # 현재 사용자 입력
     source: str             # 입력 출처: text/file/audio/button 등
     created_at: str

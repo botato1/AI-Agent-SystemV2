@@ -61,11 +61,17 @@ def _get_source(filename: str) -> str:
 
 # 응답 빌더
 
-def _build_error_response(room_id: str | None, filename: str, document_type: str, message: str, error: str) -> dict:
+def _build_error_response(
+    conversation_id: str | None,
+    filename: str,
+    document_type: str,
+    message: str,
+    error: str,
+) -> dict:
     return {
         "status": "error",
-        "room_id": room_id,
-        "conversation_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "document_id": None,
         "filename": filename,
         "type": document_type,
@@ -322,14 +328,20 @@ def _make_fallback_summary(original_text: str, max_length: int = 500) -> str:
 
 # 문서 업로드 처리
 
-async def _process_document_file(file: UploadFile, room_id: str, document_type: str, user_id: str) -> dict:
+async def _process_document_file(
+    file: UploadFile,
+    conversation_id: str,
+    document_type: str,
+    user_id: str,
+) -> dict:
     filename = Path(file.filename).name if file.filename else "uploaded_file"
     file_content = await file.read()
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         form_data = {
             "type": document_type,
-            "room_id": room_id,
+            "room_id": conversation_id or "",  # TODO: 8003 v1 호환용, 추후 제거 예정
+            "conversation_id": conversation_id or "",
         }
         response = await client.post(
             DOCUMENT_PROCESS_URL,
@@ -341,7 +353,7 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
     processed_result = response.json()
 
     document_id = processed_result.get("document_id") or processed_result.get("id")
-    result_room_id = room_id
+    result_conversation_id = conversation_id
     result_filename = processed_result.get("filename") or processed_result.get("title") or filename
     result_type = processed_result.get("type") or document_type
     file_path = processed_result.get("file_path") or ""
@@ -352,8 +364,8 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
     if not document_id:
         return {
             "status": "error",
-            "room_id": result_room_id,
-            "conversation_id": result_room_id,
+            "room_id": result_conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+            "conversation_id": result_conversation_id,
             "document_id": None,
             "filename": result_filename,
             "type": result_type,
@@ -371,8 +383,8 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
     if not content_markdown.strip() and not (isinstance(chunks, list) and chunks):
         return {
             "status": "error",
-            "room_id": result_room_id,
-            "conversation_id": result_room_id,
+            "room_id": result_conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+            "conversation_id": result_conversation_id,
             "document_id": document_id,
             "filename": result_filename,
             "type": result_type,
@@ -392,7 +404,7 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
 
     saved_document_id = save_document_metadata({
         "id": document_id,
-        "conversation_id": result_room_id,
+        "conversation_id": result_conversation_id or "",
         "title": result_filename,
         "type": result_type,
         "source": _get_source(result_filename),
@@ -405,39 +417,48 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
     })
 
     try:
-        chroma_load_result = load_document(document_id=saved_document_id, room_id=result_room_id)
+        chroma_load_result = load_document(
+            document_id=saved_document_id,
+            room_id=result_conversation_id or "",  # TODO: RAG loader v1 호환용
+        )
         chroma_status = "success" if chroma_load_result.get("status") == "success" else "failed"
         update_chroma_status(saved_document_id, chroma_status)
         print(f"[document_service] ChromaDB 적재 결과: {chroma_load_result}")
     except Exception as e:
         chroma_status = "failed"
-        chroma_load_result = {"status": "error", "chunk_count": 0, "document_id": saved_document_id, "error": repr(e)}
+        chroma_load_result = {
+            "status": "error",
+            "chunk_count": 0,
+            "document_id": saved_document_id,
+            "error": repr(e),
+        }
         update_chroma_status(saved_document_id, "failed")
         print(f"[document_service] ChromaDB 적재 실패: {repr(e)}")
 
     link_status = "success"
     link_warning = None
 
-    # room_id가 있으면 room_document_links에 연결 추가 (ChromaDB 성공 여부와 무관)
+    # conversation_id가 있으면 room_document_links에 연결 추가 (ChromaDB 성공 여부와 무관)
+    # TODO: CRUD 함수명은 아직 room 기준이므로 추후 conversation 기준 이름으로 변경 예정
     linked = link_document_to_room(
-        room_id=result_room_id,
+        room_id=result_conversation_id,
         document_id=saved_document_id,
         user_id=user_id,
     )
 
     if linked:
-        print(f"[document_service] room_document_links 연결 완료: {result_room_id} → {saved_document_id}")
+        print(f"[document_service] room_document_links 연결 완료: {result_conversation_id} → {saved_document_id}")
     else:
         link_status = "failed"
         link_warning = "문서는 저장되었지만 사건방-문서 연결에 실패했습니다."
-        print(f"[document_service] room_document_links 연결 실패: {result_room_id} → {saved_document_id}")
+        print(f"[document_service] room_document_links 연결 실패: {result_conversation_id} → {saved_document_id}")
 
     final_status = "success" if link_status == "success" else "partial_success"
 
     return {
         "status": final_status,
-        "room_id": result_room_id,
-        "conversation_id": result_room_id,
+        "room_id": result_conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": result_conversation_id,
         "document_id": saved_document_id,
         "filename": result_filename,
         "type": result_type,
@@ -455,11 +476,13 @@ async def _process_document_file(file: UploadFile, room_id: str, document_type: 
 
 async def upload_and_process_document(
     file: UploadFile,
-    room_id: str | None,
+    conversation_id: str | None = None,
+    room_id: str | None = None,  # TODO: v1 호환용, 추후 제거 예정
     document_type: str = "document",
     user_id: str | None = None,
 ) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
+    resolved_conversation_id = conversation_id or room_id
 
     try:
         if not user_id:
@@ -467,7 +490,7 @@ async def upload_and_process_document(
 
         if _is_audio_file(file):
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 filename,
                 "voice",
                 "음성 파일은 /api/stt/upload API를 사용해 주세요.",
@@ -476,7 +499,7 @@ async def upload_and_process_document(
 
         if not _is_valid_document_type(document_type):
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 filename,
                 document_type,
                 "지원하지 않는 문서 유형입니다.",
@@ -485,30 +508,30 @@ async def upload_and_process_document(
 
         if not is_document_file(file):
             return _build_error_response(
-                room_id,
+                resolved_conversation_id,
                 filename,
                 document_type,
                 "지원하지 않는 파일 형식입니다.",
                 "unsupported_file_type",
             )
 
-        # room_id가 있으면 현재 사용자 소유 채팅방인지 확인
-        if room_id:
-            room = get_conversation_by_id(room_id, user_id)
+        # conversation_id가 있으면 현재 사용자 소유 채팅방인지 확인
+        if resolved_conversation_id:
+            conversation = get_conversation_by_id(resolved_conversation_id, user_id)
 
-            if not room:
+            if not conversation:
                 raise PermissionError("채팅방을 찾을 수 없습니다.")
 
-        # room_id가 없으면 현재 사용자 기준 새 채팅방 생성
+        # conversation_id가 없으면 현재 사용자 기준 새 채팅방 생성
         else:
-            room_id = create_conversation(
+            resolved_conversation_id = create_conversation(
                 title=filename,
                 user_id=user_id,
             )
 
         return await _process_document_file(
             file=file,
-            room_id=room_id,
+            conversation_id=resolved_conversation_id,
             document_type=document_type,
             user_id=user_id,
         )
@@ -518,7 +541,7 @@ async def upload_and_process_document(
 
     except httpx.HTTPStatusError as e:
         return _build_error_response(
-            room_id,
+            resolved_conversation_id,
             filename,
             document_type,
             "외부 처리 서버 응답 오류가 발생했습니다.",
@@ -527,7 +550,7 @@ async def upload_and_process_document(
 
     except httpx.RequestError as e:
         return _build_error_response(
-            room_id,
+            resolved_conversation_id,
             filename,
             document_type,
             "외부 처리 서버에 연결할 수 없습니다.",
@@ -536,7 +559,7 @@ async def upload_and_process_document(
 
     except Exception as e:
         return _build_error_response(
-            room_id,
+            resolved_conversation_id,
             filename,
             document_type,
             "문서 업로드 또는 처리 중 오류가 발생했습니다.",
@@ -573,7 +596,7 @@ def get_document_detail(document_id: str, user_id: str) -> dict:
             "document_id": document_id,
             "document": {
                 "document_id": document.get("id"),
-                "room_id": document.get("conversation_id"),
+                "room_id": document.get("conversation_id"),  # TODO: v1 호환용, 추후 제거 예정
                 "conversation_id": document.get("conversation_id"),
                 "filename": document.get("title"),
                 "type": document.get("type"),
@@ -604,7 +627,7 @@ def get_document_detail(document_id: str, user_id: str) -> dict:
                         {
                             "task_id": task.get("id"),
                             "document_id": task.get("document_id"),
-                            "room_id": task.get("conversation_id"),
+                            "room_id": task.get("conversation_id"),  # TODO: v1 호환용, 추후 제거 예정
                             "conversation_id": task.get("conversation_id"),
                             "task": task.get("task"),
                             "assignee": task.get("assignee"),

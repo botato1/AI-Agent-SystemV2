@@ -21,7 +21,8 @@ router = APIRouter(
 @router.post("/upload")
 async def upload_stt_file(
     file: UploadFile = File(...),
-    room_id: str | None = Form(None),
+    conversation_id: str | None = Form(None),
+    room_id: str | None = Form(None),  # TODO: v1 호환용, 추후 제거 예정
     current_user_id: str = Depends(get_current_user_id),
 ):
     if not file.filename:
@@ -33,6 +34,7 @@ async def upload_stt_file(
     try:
         return await upload_and_process_stt(
             file=file,
+            conversation_id=conversation_id,
             room_id=room_id,
             user_id=current_user_id,
         )

@@ -24,7 +24,7 @@ class ConversationCreateRequest(BaseModel):
     title: str = "새 대화"
 
 
-class RoomDocumentRequest(BaseModel):
+class ConversationDocumentRequest(BaseModel):
     document_id: str
 
 
@@ -33,19 +33,25 @@ router = APIRouter(
     tags=["Chat"],
 )
 
-def get_room_or_404(room_id: str, user_id: str):
-    room = get_conversation_by_id(room_id, user_id)
 
-    if not room:
+def get_conversation_or_404(conversation_id: str, user_id: str):
+    conversation = get_conversation_by_id(conversation_id, user_id)
+
+    if not conversation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="채팅방을 찾을 수 없습니다."
+            detail="채팅방을 찾을 수 없습니다.",
         )
+
+    return conversation
 
 
 # 사용자 채팅 메시지 전송 API
 @router.post("/chat", response_model=ChatResponseSchema)
-async def send_chat_message(request: ChatRequest, current_user_id: str = Depends(get_current_user_id)):
+async def send_chat_message(
+    request: ChatRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     try:
         return await handle_chat(request, current_user_id)
     except PermissionError:
@@ -54,12 +60,16 @@ async def send_chat_message(request: ChatRequest, current_user_id: str = Depends
             detail="채팅방을 찾을 수 없습니다.",
         )
 
-# 특정 채팅방의 이전 대화 기록 조회 API
-@router.get("/conversations/{room_id}/messages", response_model=ChatHistoryResponse)
-def get_chat_history(room_id: str, current_user_id: str = Depends(get_current_user_id)):
-    get_room_or_404(room_id, current_user_id)
 
-    rows = get_messages(room_id, current_user_id)
+# 특정 채팅방의 이전 대화 기록 조회 API
+@router.get("/conversations/{conversation_id}/messages", response_model=ChatHistoryResponse)
+def get_chat_history(
+    conversation_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    get_conversation_or_404(conversation_id, current_user_id)
+
+    rows = get_messages(conversation_id, current_user_id)
 
     messages = [
         {
@@ -72,8 +82,8 @@ def get_chat_history(room_id: str, current_user_id: str = Depends(get_current_us
     ]
 
     return {
-        "room_id": room_id,
-        "conversation_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "messages": messages,
     }
 
@@ -84,13 +94,14 @@ def create_chat_room(
     request: ConversationCreateRequest,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    room_id = create_conversation(
+    conversation_id = create_conversation(
         title=request.title,
         user_id=current_user_id,
     )
 
     return {
-        "room_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "title": request.title,
     }
 
@@ -104,7 +115,8 @@ def get_chat_rooms(
 
     conversations = [
         {
-            "room_id": row["id"],
+            "room_id": row["id"],  # TODO: v1 호환용, 추후 제거 예정
+            "conversation_id": row["id"],
             "title": row["title"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -115,7 +127,7 @@ def get_chat_rooms(
     ]
 
     return {
-        "conversations": conversations
+        "conversations": conversations,
     }
 
 
@@ -134,20 +146,14 @@ def remove_all_chat_rooms(
 
 
 # 채팅방 단건 조회 API
-@router.get("/conversations/{room_id}")
+@router.get("/conversations/{conversation_id}")
 def get_conversation_detail(
-    room_id: str,
+    conversation_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    row = get_conversation_by_id(room_id, current_user_id)
+    row = get_conversation_or_404(conversation_id, current_user_id)
 
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="채팅방을 찾을 수 없습니다.",
-        )
-
-    document_rows = get_documents(room_id, current_user_id)
+    document_rows = get_documents(conversation_id, current_user_id)
 
     documents = [
         {
@@ -168,7 +174,8 @@ def get_conversation_detail(
 
     return {
         "status": "success",
-        "room_id": row["id"],
+        "room_id": row["id"],  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": row["id"],
         "title": row["title"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -180,12 +187,12 @@ def get_conversation_detail(
 
 
 # 채팅방 삭제 API
-@router.delete("/conversations/{room_id}")
+@router.delete("/conversations/{conversation_id}")
 def remove_chat_room(
-    room_id: str,
+    conversation_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    deleted = delete_conversation(room_id, current_user_id)
+    deleted = delete_conversation(conversation_id, current_user_id)
 
     if not deleted:
         raise HTTPException(
@@ -195,7 +202,8 @@ def remove_chat_room(
 
     return {
         "status": "success",
-        "room_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "message": "채팅방이 삭제되었습니다.",
         "error": None,
     }
@@ -224,21 +232,19 @@ def remove_message(
 
 
 # 채팅방에 연결된 문서 목록 조회 API
-@router.get("/rooms/{room_id}/documents")
-def get_room_documents(room_id: str, current_user_id: str = Depends(get_current_user_id)):
-    room = get_conversation_by_id(room_id, current_user_id)
+@router.get("/conversations/{conversation_id}/documents")
+def get_conversation_documents(
+    conversation_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    get_conversation_or_404(conversation_id, current_user_id)
 
-    if not room:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="채팅방을 찾을 수 없습니다.",
-        )
-
-    docs = get_documents_by_room_id(room_id, current_user_id)
+    docs = get_documents_by_room_id(conversation_id, current_user_id)
 
     return {
         "status": "success",
-        "room_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "documents": [
             {
                 "document_id": doc["id"],
@@ -254,11 +260,27 @@ def get_room_documents(room_id: str, current_user_id: str = Depends(get_current_
     }
 
 
+# 기존 room_id 경로 호환용 문서 목록 조회 API
+@router.get("/rooms/{room_id}/documents")
+def get_room_documents_legacy(
+    room_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return get_conversation_documents(
+        conversation_id=room_id,
+        current_user_id=current_user_id,
+    )
+
+
 # 채팅방에 문서 연결 API
-@router.post("/rooms/{room_id}/documents")
-def add_document_to_room(room_id: str, request: RoomDocumentRequest, current_user_id: str = Depends(get_current_user_id)):
+@router.post("/conversations/{conversation_id}/documents")
+def add_document_to_conversation(
+    conversation_id: str,
+    request: ConversationDocumentRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     linked = link_document_to_room(
-        room_id=room_id,
+        room_id=conversation_id,
         document_id=request.document_id,
         user_id=current_user_id,
     )
@@ -271,22 +293,36 @@ def add_document_to_room(room_id: str, request: RoomDocumentRequest, current_use
 
     return {
         "status": "success",
-        "room_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "document_id": request.document_id,
         "message": "문서가 채팅방에 연결되었습니다.",
         "error": None,
     }
 
 
-# 채팅방에서 문서 연결 해제 API
-@router.delete("/rooms/{room_id}/documents/{document_id}")
-def remove_document_from_room(
+# 기존 room_id 경로 호환용 문서 연결 API
+@router.post("/rooms/{room_id}/documents")
+def add_document_to_room_legacy(
     room_id: str,
+    request: ConversationDocumentRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return add_document_to_conversation(
+        conversation_id=room_id,
+        request=request,
+        current_user_id=current_user_id,
+    )
+
+# 채팅방에서 문서 연결 해제 API
+@router.delete("/conversations/{conversation_id}/documents/{document_id}")
+def remove_document_from_conversation(
+    conversation_id: str,
     document_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
     unlinked = unlink_document_from_room(
-        room_id=room_id,
+        room_id=conversation_id,
         document_id=document_id,
         user_id=current_user_id,
     )
@@ -299,8 +335,22 @@ def remove_document_from_room(
 
     return {
         "status": "success",
-        "room_id": room_id,
+        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
+        "conversation_id": conversation_id,
         "document_id": document_id,
         "message": "문서 연결이 해제되었습니다.",
         "error": None,
     }
+
+# 기존 room_id 경로 호환용 문서 연결 해제 API
+@router.delete("/rooms/{room_id}/documents/{document_id}")
+def remove_document_from_room_legacy(
+    room_id: str,
+    document_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    return remove_document_from_conversation(
+        conversation_id=room_id,
+        document_id=document_id,
+        current_user_id=current_user_id,
+    )
