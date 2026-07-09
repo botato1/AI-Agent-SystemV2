@@ -1,3 +1,5 @@
+# backend/services/auth_service.py
+
 from fastapi import HTTPException, status
 from jose import JWTError
 
@@ -14,6 +16,7 @@ from backend.schemas.auth_schema import (
     ProfileResponse,
     TokenResponse,
     UserResponse,
+    CheckUserIdResponse,
 )
 
 from backend.db.crud import (
@@ -23,6 +26,7 @@ from backend.db.crud import (
     update_user_profile,
     update_user_password,
     update_user_last_login,
+    is_user_id_exists,
 )
 
 from backend.core.security import (
@@ -96,9 +100,31 @@ def _validate_password_format(password: str) -> None:
             detail="비밀번호는 영문 대문자, 영문 소문자, 숫자, 특수문자 중 2종류 이상을 조합해야 합니다.",
         )
 
+
 # 프로필 수정 요청에 실제 수정할 값이 있는지 확인
 def _has_profile_update_fields(request: ProfileUpdateRequest) -> bool:
     return request.name is not None or request.new_password is not None
+
+
+# 아이디 중복 확인
+def check_user_id_available(user_id: str) -> CheckUserIdResponse:
+    normalized_user_id = user_id.strip()
+
+    if not normalized_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="아이디는 공백일 수 없습니다.",
+        )
+
+    exists = is_user_id_exists(normalized_user_id)
+
+    return CheckUserIdResponse(
+        status="success",
+        user_id=normalized_user_id,
+        available=not exists,
+        message="이미 사용 중인 아이디입니다." if exists else "사용 가능한 아이디입니다.",
+        error=None,
+    )
 
 
 # 회원가입 처리

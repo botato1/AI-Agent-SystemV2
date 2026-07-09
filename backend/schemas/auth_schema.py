@@ -84,3 +84,11 @@ class ProfileResponse(BaseModel):
     user: Optional[UserResponse] = None
     message: str
     error: Optional[str] = None
+
+
+class CheckUserIdResponse(BaseModel):
+    status: str
+    user_id: str
+    available: bool
+    message: str
+    error: Optional[str] = None
