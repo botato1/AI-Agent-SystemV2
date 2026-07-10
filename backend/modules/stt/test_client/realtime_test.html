@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>실시간 STT 테스트</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 18px; }
+  #status { font-weight: bold; margin-bottom: 12px; }
+  #status.connected { color: #16a34a; }
+  #status.disconnected { color: #dc2626; }
+  button { padding: 8px 16px; font-size: 14px; margin-right: 8px; cursor: pointer; }
+  #transcript { border: 1px solid #ccc; border-radius: 8px; padding: 16px; min-height: 200px; line-height: 1.8; white-space: pre-wrap; }
+  .final { color: #111; }
+  .final.low-conf { color: #b45309; text-decoration: underline wavy; }
+  .tentative { color: #999; font-style: italic; }
+  .speaker-tag { font-size: 11px; color: #2563eb; font-weight: bold; margin-right: 4px; }
+  #log { margin-top: 16px; font-size: 12px; color: #666; max-height: 150px; overflow-y: auto; }
+  input { padding: 6px; font-size: 13px; width: 260px; }
+</style>
+</head>
+<body>
+  <h1>🎙️ 실시간 STT 파이프라인 테스트</h1>
+
+  <div>
+    <label>WebSocket 주소: </label>
+    <input id="wsUrl" value="ws://localhost:8002/api/ws/stt/test-session-1" />
+  </div>
+  <br />
+  <div id="status" class="disconnected">연결 안 됨</div>
+  <button id="startBtn">🔴 시작 (마이크 켜기)</button>
+  <button id="stopBtn" disabled>⏹️ 종료</button>
+
+  <h3>실시간 전사 결과</h3>
+  <div id="transcript"></div>
+
+  <h3>이벤트 로그</h3>
+  <div id="log"></div>
+
+<script>
+const REALTIME_SAMPLE_RATE = 16000; // 백엔드 config.REALTIME_SAMPLE_RATE 와 반드시 일치해야 함
+
+let audioContext, mediaStream, sourceNode, processorNode, ws;
+let tentativeSpan = null;
+
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const logEl = document.getElementById("log");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const wsUrlInput = document.getElementById("wsUrl");
+
+function log(msg) {
+  const line = document.createElement("div");
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.prepend(line);
+}
+
+function setStatus(connected) {
+  statusEl.textContent = connected ? "연결됨" : "연결 안 됨";
+  statusEl.className = connected ? "connected" : "disconnected";
+}
+
+// 브라우저 오디오(보통 44.1k/48kHz Float32) → 서버가 기대하는 16kHz PCM16LE로 변환
+function downsampleTo16k(float32Array, inputSampleRate) {
+  if (inputSampleRate === REALTIME_SAMPLE_RATE) return float32Array;
+  const ratio = inputSampleRate / REALTIME_SAMPLE_RATE;
+  const outLength = Math.floor(float32Array.length / ratio);
+  const result = new Float32Array(outLength);
+  for (let i = 0; i < outLength; i++) {
+    result[i] = float32Array[Math.floor(i * ratio)];
+  }
+  return result;
+}
+
+function float32ToPCM16LE(float32Array) {
+  const buffer = new ArrayBuffer(float32Array.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); // little-endian
+  }
+  return buffer;
+}
+
+function renderPartial(data) {
+  // 잠정 텍스트는 매번 새로 갱신 (Local Agreement의 tentative 부분)
+  if (!tentativeSpan) {
+    tentativeSpan = document.createElement("span");
+    tentativeSpan.className = "tentative";
+    transcriptEl.appendChild(tentativeSpan);
+  }
+  tentativeSpan.textContent = " " + data.confirmed_text + " " + data.tentative_text + "...";
+}
+
+function renderFinal(data) {
+  // 확정본 도착 → 잠정 표시 지우고 확정 텍스트로 교체
+  if (tentativeSpan) {
+    tentativeSpan.remove();
+    tentativeSpan = null;
+  }
+  const segments = data.final.segments;
+  segments.forEach((seg) => {
+    if (data.speaker) {
+      const tag = document.createElement("span");
+      tag.className = "speaker-tag";
+      tag.textContent = data.speaker;
+      transcriptEl.appendChild(tag);
+    }
+    const span = document.createElement("span");
+    span.className = "final" + (seg.confident ? "" : " low-conf");
+    span.textContent = seg.text + " ";
+    span.title = `avg_logprob=${seg.avg_logprob.toFixed(2)}, no_speech_prob=${seg.no_speech_prob.toFixed(2)}`;
+    transcriptEl.appendChild(span);
+  });
+  transcriptEl.appendChild(document.createElement("br"));
+  log(`✅ final 청크 수신 (offset=${data.chunk_offset_sec}s, fast_latency=${data.draft.latency_sec}s, speaker=${data.speaker})`);
+}
+
+async function start() {
+  ws = new WebSocket(wsUrlInput.value);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => { setStatus(true); log("WebSocket 연결됨"); };
+  ws.onclose = () => { setStatus(false); log("WebSocket 연결 종료"); };
+  ws.onerror = (e) => { log("WebSocket 에러: " + JSON.stringify(e)); };
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === "partial") renderPartial(data);
+    else if (data.type === "final") renderFinal(data);
+  };
+
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioContext = new AudioContext();
+  sourceNode = audioContext.createMediaStreamSource(mediaStream);
+
+  // ScriptProcessorNode는 deprecated지만, 별도 빌드 과정 없이 빠르게 검증하기엔 충분함
+  processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+  processorNode.onaudioprocess = (e) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const input = e.inputBuffer.getChannelData(0);
+    const downsampled = downsampleTo16k(input, audioContext.sampleRate);
+    const pcm16 = float32ToPCM16LE(downsampled);
+    ws.send(pcm16);
+  };
+
+  sourceNode.connect(processorNode);
+  processorNode.connect(audioContext.destination);
+
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  log(`녹음 시작 (브라우저 샘플레이트: ${audioContext.sampleRate}Hz → 16kHz로 다운샘플링)`);
+}
+
+function stop() {
+  if (processorNode) processorNode.disconnect();
+  if (sourceNode) sourceNode.disconnect();
+  if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+  if (audioContext) audioContext.close();
+  if (ws) ws.close();
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  log("녹음 종료");
+}
+
+startBtn.onclick = () => start().catch((e) => log("시작 실패: " + e.message));
+stopBtn.onclick = stop;
+</script>
+</body>
+</html>

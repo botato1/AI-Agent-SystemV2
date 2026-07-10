@@ -1,3 +1,4 @@
+import os
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -9,9 +10,10 @@ from pyannote.audio import Pipeline
 
 from .core.config import (
     logger, UPLOAD_DIR, DEVICE, COMPUTE_TYPE, WHISPER_MODEL_SIZE,
-    DIARIZATION_MODEL, HF_TOKEN
+    WHISPER_MODEL_FAST, DIARIZATION_MODEL, HF_TOKEN
 )
-from .routers import stt
+from .routers import stt, realtime
+from .services.speaker_id_service import load_speaker_embedding_inference
 
 
 @asynccontextmanager
@@ -26,7 +28,16 @@ async def lifespan(app: FastAPI):
         device=DEVICE,
         compute_type=COMPUTE_TYPE,
     )
-    logger.info("✅ faster-whisper 모델 로딩 완료")
+    logger.info("✅ faster-whisper (정밀/확정용) 모델 로딩 완료")
+
+    # 실시간 회의 STT용 Fast Pass 모델 (2-pass 구조, 저지연 초안 전사 담당)
+    logger.info(f"🧠 faster-whisper 모델 로딩 중... ({WHISPER_MODEL_FAST} / {DEVICE} / {COMPUTE_TYPE})")
+    app.state.stt_model_fast = WhisperModel(
+        WHISPER_MODEL_FAST,
+        device=DEVICE,
+        compute_type=COMPUTE_TYPE,
+    )
+    logger.info("✅ faster-whisper (실시간/초안용) 모델 로딩 완료")
 
     logger.info("🧠 pyannote 화자 분리 파이프라인 로딩 중...")
     app.state.diarize_pipeline = Pipeline.from_pretrained(
@@ -36,6 +47,10 @@ async def lifespan(app: FastAPI):
         import torch
         app.state.diarize_pipeline.to(torch.device("cuda"))
     logger.info("✅ pyannote 파이프라인 로딩 완료")
+
+    logger.info("🧠 화자 임베딩 모델 로딩 중... (실시간 화자 식별용)")
+    app.state.speaker_embedding_inference = load_speaker_embedding_inference()
+    logger.info("✅ 화자 임베딩 모델 로딩 완료")
 
     yield  # 서버 동작
 
@@ -59,6 +74,11 @@ app.add_middleware(
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(stt.router, prefix="/api", tags=["Audio Processing"])
+app.include_router(realtime.router, prefix="/api", tags=["Realtime STT"])
+
+# 실시간 STT WebSocket 파이프라인 수동 검증용 테스트 페이지 (정식 프론트엔드 아님)
+_TEST_CLIENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_client")
+app.mount("/test", StaticFiles(directory=_TEST_CLIENT_DIR, html=True), name="test_client")
 
 
 @app.get("/")
