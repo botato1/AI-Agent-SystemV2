@@ -1,4 +1,5 @@
 import os
+import platform
 import logging
 import torch
 from dotenv import load_dotenv
@@ -24,20 +25,41 @@ else:
     COMPUTE_TYPE = "int8"
 
 # ──────────────────────────────────────────
-# faster-whisper 모델 설정
+# STT 엔진 선택 (faster-whisper[ctranslate2] vs transformers)
+# ctranslate2는 PyPI가 aarch64용 CUDA wheel을 배포하지 않아서, ARM 기반 GPU
+# 서버(예: NVIDIA Grace-Blackwell 계열)에서는 GPU를 아예 못 씀. 이 경우
+# 순수 PyTorch 기반인 transformers 엔진으로 자동 전환.
+# 환경변수 STT_ENGINE=faster_whisper|transformers 로 수동 지정도 가능.
 # ──────────────────────────────────────────
-WHISPER_MODEL_SIZE = "large-v3" if DEVICE == "cuda" else "large-v3-turbo"
-WHISPER_BEAM_SIZE = 10 if DEVICE == "cuda" else 5
+ARCH = platform.machine()
+_env_engine = os.getenv("STT_ENGINE", "").strip().lower()
+if _env_engine in ("faster_whisper", "transformers"):
+    STT_ENGINE = _env_engine
+elif ARCH == "aarch64" and DEVICE == "cuda":
+    STT_ENGINE = "transformers"
+else:
+    STT_ENGINE = "faster_whisper"
+
+# ──────────────────────────────────────────
+# Whisper 모델 설정
+# ──────────────────────────────────────────
 WHISPER_LANGUAGE = "ko"
+WHISPER_BEAM_SIZE = 10 if DEVICE == "cuda" else 5
+
+if STT_ENGINE == "transformers":
+    WHISPER_MODEL_SIZE = "openai/whisper-large-v3"
+    WHISPER_MODEL_FAST = "openai/whisper-large-v3-turbo"
+    WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE if DEVICE == "cuda" else WHISPER_MODEL_FAST
+else:
+    WHISPER_MODEL_SIZE = "large-v3" if DEVICE == "cuda" else "large-v3-turbo"
+    WHISPER_MODEL_FAST = "large-v3-turbo"
+    WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE  # cuda면 large-v3, 아니면 turbo로 통일
 
 # ──────────────────────────────────────────
 # 실시간 회의 STT (2-pass) 설정
 # Fast Pass: 청크 도착 즉시 저정밀 초안 → 지연 최소화
 # Precise Pass: 곧이어 고정밀 확정본 → 오탐(false alarm) 방지
 # ──────────────────────────────────────────
-WHISPER_MODEL_FAST = "large-v3-turbo"
-WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE  # cuda면 large-v3, 아니면 turbo로 통일
-
 FAST_BEAM_SIZE = 1        # greedy에 가깝게 → 최저 지연
 PRECISE_BEAM_SIZE = WHISPER_BEAM_SIZE
 
@@ -77,4 +99,7 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logger.addHandler(handler)
 
-logger.info(f"⚙️  실행 디바이스: {DEVICE} / compute_type: {COMPUTE_TYPE} / 모델: {WHISPER_MODEL_SIZE}")
+logger.info(
+    f"⚙️  실행 디바이스: {DEVICE} ({ARCH}) / compute_type: {COMPUTE_TYPE} / "
+    f"엔진: {STT_ENGINE} / 모델: {WHISPER_MODEL_SIZE}"
+)
