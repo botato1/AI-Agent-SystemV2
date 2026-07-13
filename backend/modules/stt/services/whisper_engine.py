@@ -95,10 +95,13 @@ class TransformersWhisperEngine:
             language=language,
             task="transcribe",
             num_beams=max(beam_size, 1),
-            return_timestamps=True,
             return_dict_in_generate=True,
             output_scores=True,
         )
+        # 주의: return_timestamps=True를 return_dict_in_generate=True와 같이 쓰면
+        # transformers가 장문(long-form) 모드로 전환되면서 반환 구조가 dict로 바뀌어
+        # outputs.sequences 접근이 깨짐. 우리는 세그먼트 내부 타임스탬프를 안 쓰므로
+        # (청크 전체를 Segment 하나로 취급) 아예 빼서 표준 GenerateOutput을 유지함.
         if initial_prompt:
             prompt_ids = self.processor.get_prompt_ids(initial_prompt, return_tensors="pt")
             generate_kwargs["prompt_ids"] = prompt_ids.to(self.device)
