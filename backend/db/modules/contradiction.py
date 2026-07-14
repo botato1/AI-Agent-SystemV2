@@ -17,6 +17,7 @@ class Contradiction(Base):
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
     source_type = Column(String(30), nullable=False)
     meeting_segment_id = Column(UUID(as_uuid=True), ForeignKey("meeting_segments.id"), nullable=True)
     room_message_id = Column(UUID(as_uuid=True), ForeignKey("room_messages.id"), nullable=True)
@@ -64,6 +65,7 @@ class Contradiction(Base):
             name="chk_contradictions_reference_exclusive",
         ),
         Index("idx_contradictions_workspace", "workspace_id", "status", "detected_at"),
+        Index("idx_contradictions_category", "category_id", "status", "detected_at"),
         Index("idx_contradictions_reference_file", "reference_file_id", "detected_at"),
     )
 

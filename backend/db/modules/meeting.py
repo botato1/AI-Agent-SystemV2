@@ -15,6 +15,7 @@ class Meeting(Base):
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
     related_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     source_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     title = Column(String(200), nullable=False)
@@ -36,6 +37,10 @@ class Meeting(Base):
         ),
         Index(
             "idx_meetings_workspace", "workspace_id", "started_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_meetings_category", "category_id", "started_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )
@@ -125,6 +130,7 @@ class ActionItem(Base):
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
     meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=True)
     source_segment_id = Column(UUID(as_uuid=True), ForeignKey("meeting_segments.id"), nullable=True)
     assignee_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -150,6 +156,10 @@ class ActionItem(Base):
         ),
         Index(
             "idx_action_items_workspace", "workspace_id", "status", "due_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_action_items_category", "category_id", "status", "due_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )

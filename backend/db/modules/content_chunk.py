@@ -16,6 +16,7 @@ class ContentChunk(Base):
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
     file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=False)
     symbol_id = Column(UUID(as_uuid=True), ForeignKey("code_symbols.id"), nullable=True)
     chunk_type = Column(String(30), nullable=False)
@@ -40,4 +41,5 @@ class ContentChunk(Base):
         UniqueConstraint("file_id", "chunk_type", "chunk_index", name="uq_content_chunks_file_chunk"),
         Index("idx_content_chunks_file", "file_id", "chunk_type", "chunk_index"),
         Index("idx_content_chunks_workspace", "workspace_id", "file_id"),
+        Index("idx_content_chunks_category", "category_id", "chunk_type"),
     )

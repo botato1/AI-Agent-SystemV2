@@ -44,6 +44,7 @@ class WorkspaceFile(Base):
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
     worktree_id = Column(UUID(as_uuid=True), ForeignKey("worktrees.id"), nullable=True)
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
@@ -92,6 +93,10 @@ class WorkspaceFile(Base):
         ),
         Index(
             "idx_workspace_files_workspace_kind", "workspace_id", "file_kind", "analysis_status",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_workspace_files_category", "category_id", "analysis_status",
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
