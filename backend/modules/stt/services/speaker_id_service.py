@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from pyannote.audio import Model, Inference
 
 from ..core.config import (
@@ -57,7 +58,9 @@ class LiveSpeakerIdentifier:
         return float(np.dot(a, b) / denom)
 
     def _extract_embedding(self, audio: np.ndarray) -> np.ndarray:
-        waveform = {"waveform": audio.reshape(1, -1).astype(np.float32), "sample_rate": REALTIME_SAMPLE_RATE}
+        # pyannote Inference는 numpy 배열이 아니라 torch 텐서를 기대함 (내부에서 .to(device) 호출)
+        waveform_tensor = torch.from_numpy(audio.reshape(1, -1).astype(np.float32))
+        waveform = {"waveform": waveform_tensor, "sample_rate": REALTIME_SAMPLE_RATE}
         embedding = self._inference(waveform)
         return np.asarray(embedding).reshape(-1)
 
