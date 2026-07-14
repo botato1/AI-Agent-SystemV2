@@ -2,6 +2,7 @@ import numpy as np
 import soundfile as sf
 import torch
 from transformers import AutoProcessor, WhisperForConditionalGeneration
+from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from ..core.config import logger, REALTIME_SAMPLE_RATE
 
@@ -74,17 +75,35 @@ class TransformersWhisperEngine:
             )
         return data
 
+    def _trim_silence(self, audio: np.ndarray) -> np.ndarray:
+        """
+        무음/노이즈 구간을 모델에 그대로 넣으면 Whisper가 그럴듯한 문장을 지어내는
+        환각(hallucination) 현상이 잦아짐. faster-whisper는 vad_filter=True로 이걸
+        자동 처리해주지만, transformers 엔진은 직접 안 해주므로 여기서 수동으로 구현.
+        발화 시작~끝 구간만 잘라서 모델에 전달.
+        """
+        timestamps = get_speech_timestamps(
+            audio, VadOptions(min_silence_duration_ms=300), sampling_rate=REALTIME_SAMPLE_RATE
+        )
+        if not timestamps:
+            return audio  # 발화 자체가 감지 안 되면 원본 그대로 (빈 결과 처리는 상위에서)
+        start = timestamps[0]["start"]
+        end = timestamps[-1]["end"]
+        return audio[start:end]
+
     @torch.inference_mode()
     def transcribe(
         self,
         audio_or_path,
         language: str = "ko",
         beam_size: int = 5,
-        vad_filter: bool = True,   # 호환용 파라미터. VAD는 realtime_service 쪽에서 이미 처리.
+        vad_filter: bool = True,   # True면 발화 앞뒤 무음/노이즈를 잘라내고 모델에 전달 (환각 방지)
         initial_prompt: str = None,
         condition_on_previous_text: bool = False,  # 호환용. 청크 단위 독립 디코딩만 지원.
     ):
         audio = self._load_audio(audio_or_path)
+        if vad_filter:
+            audio = self._trim_silence(audio)
 
         inputs = self.processor(
             audio, sampling_rate=REALTIME_SAMPLE_RATE, return_tensors="pt"
