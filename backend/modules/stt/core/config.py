@@ -89,7 +89,10 @@ MAX_SPEAKERS = 5
 # 실시간 화자 식별(임베딩 캐싱 방식) 설정
 # 매 청크마다 전체 화자분리를 다시 도는 대신, 임베딩 유사도로 즉시 매칭
 SPEAKER_EMBEDDING_MODEL = "pyannote/embedding"
-SPEAKER_SIMILARITY_THRESHOLD = 0.75   # 이 이상 유사하면 같은 화자로 판단
+# 실측 테스트 결과 같은 화자인데도 유사도 0.41~0.57로 나옴 (청크가 짧고 마이크 노이즈가 섞여
+# 임베딩이 불안정한 것으로 추정) → 0.75는 너무 높아서 매 청크마다 새 화자로 등록되는 문제 발생.
+# 0.5로 낮춰서 재실험. 실측 데이터가 더 쌓이면 다시 튜닝할 것.
+SPEAKER_SIMILARITY_THRESHOLD = 0.5   # 이 이상 유사하면 같은 화자로 판단
 
 # 로거 설정
 logger = logging.getLogger("vigo_project")
