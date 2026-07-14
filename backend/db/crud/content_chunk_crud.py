@@ -17,6 +17,7 @@ def create_chunk(
     db: Session,
     *,
     workspace_id: uuid.UUID,
+    category_id: uuid.UUID,
     file_id: uuid.UUID,
     chunk_type: str,
     chunk_index: int,
@@ -26,6 +27,7 @@ def create_chunk(
 ) -> ContentChunk:
     row = ContentChunk(
         workspace_id=workspace_id,
+        category_id=category_id,
         file_id=file_id,
         chunk_type=chunk_type,
         chunk_index=chunk_index,

@@ -8,8 +8,15 @@ from sqlalchemy.orm import Session
 from backend.db.modules import ActionItem, Decision, Meeting, MeetingSegment, MeetingSummary
 
 
-def create_meeting(db: Session, workspace_id: uuid.UUID, title: str, input_type: str, started_by: uuid.UUID, **fields) -> Meeting:
-    row = Meeting(workspace_id=workspace_id, title=title, input_type=input_type, started_by=started_by, **fields)
+def create_meeting(
+    db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str,
+    input_type: str, started_by: uuid.UUID, **fields,
+) -> Meeting:
+    """category_id: 회의가 저장될 카테고리. MVP에서는 room_crud.get_default_category() 결과를 그대로 넣으면 됨."""
+    row = Meeting(
+        workspace_id=workspace_id, category_id=category_id, title=title,
+        input_type=input_type, started_by=started_by, **fields,
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -61,8 +68,8 @@ def create_decision(db: Session, workspace_id: uuid.UUID, meeting_id: uuid.UUID,
     return row
 
 
-def create_action_item(db: Session, workspace_id: uuid.UUID, title: str, **fields) -> ActionItem:
-    row = ActionItem(workspace_id=workspace_id, title=title, **fields)
+def create_action_item(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, **fields) -> ActionItem:
+    row = ActionItem(workspace_id=workspace_id, category_id=category_id, title=title, **fields)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -74,6 +81,19 @@ def list_open_action_items(db: Session, workspace_id: uuid.UUID) -> list[ActionI
         db.query(ActionItem)
         .filter(
             ActionItem.workspace_id == workspace_id,
+            ActionItem.status.in_(["open", "in_progress"]),
+            ActionItem.deleted_at.is_(None),
+        )
+        .all()
+    )
+
+
+def list_open_action_items_by_category(db: Session, category_id: uuid.UUID) -> list[ActionItem]:
+    """대시보드(카테고리 단위) 담당자별 할 일 요약용."""
+    return (
+        db.query(ActionItem)
+        .filter(
+            ActionItem.category_id == category_id,
             ActionItem.status.in_(["open", "in_progress"]),
             ActionItem.deleted_at.is_(None),
         )

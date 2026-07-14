@@ -47,6 +47,7 @@ def create_contradiction(
     db: Session,
     *,
     workspace_id: uuid.UUID,
+    category_id: uuid.UUID,
     source_type: str,
     reference_type: str,
     reference_file_id: uuid.UUID,
@@ -65,6 +66,7 @@ def create_contradiction(
     """
     row = Contradiction(
         workspace_id=workspace_id,
+        category_id=category_id,
         source_type=source_type,
         reference_type=reference_type,
         reference_file_id=reference_file_id,
@@ -87,6 +89,19 @@ def list_unresolved(db: Session, workspace_id: uuid.UUID) -> list[Contradiction]
         db.query(Contradiction)
         .filter(
             Contradiction.workspace_id == workspace_id,
+            Contradiction.status == "unresolved",
+        )
+        .order_by(Contradiction.detected_at.desc())
+        .all()
+    )
+
+
+def list_unresolved_by_category(db: Session, category_id: uuid.UUID) -> list[Contradiction]:
+    """대시보드(카테고리 단위) 모순 감지 로그용."""
+    return (
+        db.query(Contradiction)
+        .filter(
+            Contradiction.category_id == category_id,
             Contradiction.status == "unresolved",
         )
         .order_by(Contradiction.detected_at.desc())
