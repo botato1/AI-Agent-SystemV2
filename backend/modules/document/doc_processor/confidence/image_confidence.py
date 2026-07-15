@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 
 from doc_processor.core.models import ImageBlock
 
 # ── 가중치 ────────────────────────────────────────────────────────────────────
-_W_LENGTH      = 0.20   # OCR 텍스트 길이
-_W_KOREAN      = 0.20   # 한글 비율
-_W_NOISE       = 0.30   # OCR 노이즈 비율
-_W_SPECIAL     = 0.15   # 과도한 특수문자 비율
-_W_REPEAT      = 0.15   # 반복 단어 비율 (Tanzania Tanzania... 패턴)
+_W_VOTING      = 0.30   # Paddle ↔ Surya Voting 일치도
+_W_LENGTH      = 0.15   # OCR 텍스트 길이
+_W_KOREAN      = 0.15   # 한글 비율
+_W_NOISE       = 0.20   # OCR 노이즈 비율
+_W_SPECIAL     = 0.10   # 과도한 특수문자 비율
+_W_REPEAT      = 0.10   # 반복 단어 비율 (Tanzania Tanzania... 패턴)
 
 # OCR 노이즈 패턴 (단독으로 등장하는 의미없는 문자열)
 _NOISE_PATTERNS = [
@@ -55,6 +57,19 @@ def _length_score(text: str) -> float:
     return min(len(text.strip()) / 100.0, 1.0)
 
 
+def _voting_similarity(paddle_lines: list[str], surya_lines: list[str]) -> float:
+    """Paddle과 Surya 결과 전체 텍스트의 유사도."""
+    paddle_text = " ".join(paddle_lines).strip()
+    surya_text  = " ".join(surya_lines).strip()
+
+    if not paddle_text and not surya_text:
+        return 0.0
+    if not paddle_text or not surya_text:
+        return 0.4  # 한쪽만 있으면 낮은 점수
+
+    return SequenceMatcher(None, paddle_text, surya_text).ratio()
+
+
 def _repeat_word_score(text: str) -> float:
     """반복 단어가 많을수록 낮은 점수 (Tanzania Tanzania... 패턴)."""
     words = re.findall(r"\w+", text.lower())
@@ -71,6 +86,7 @@ def _image_score(img: ImageBlock) -> float:
     if not text:
         return 0.0
 
+    voting  = _voting_similarity(img.paddle_lines, img.surya_lines)
     length  = _length_score(text)
     korean  = _korean_ratio(text)
     noise   = 1.0 - _noise_ratio(text)
@@ -78,6 +94,7 @@ def _image_score(img: ImageBlock) -> float:
     repeat  = _repeat_word_score(text)
 
     return (
+        voting  * _W_VOTING +
         length  * _W_LENGTH +
         korean  * _W_KOREAN +
         noise   * _W_NOISE +
