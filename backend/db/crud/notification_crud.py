@@ -2,6 +2,7 @@
 
 import uuid
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.db.modules import Notification
@@ -25,7 +26,6 @@ def list_unread(db: Session, user_id: uuid.UUID) -> list[Notification]:
 
 
 def mark_read(db: Session, notification_id: uuid.UUID) -> None:
-    from sqlalchemy import func
     row = db.query(Notification).filter(Notification.id == notification_id).first()
     if row:
         row.is_read = True
