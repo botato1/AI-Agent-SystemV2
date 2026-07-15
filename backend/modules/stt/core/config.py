@@ -11,6 +11,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# 실시간 회의 기록 저장소 — 회의별로 오디오 원본(C-4 정밀 재분석용)과 전사 JSON을 보관
+MEETINGS_DIR = os.path.join(BASE_DIR, "meetings")
+os.makedirs(MEETINGS_DIR, exist_ok=True)
+
 # ──────────────────────────────────────────
 # 디바이스 자동 감지 (RTX 5090 서버 / 맥북 / CPU 폴백)
 # ──────────────────────────────────────────

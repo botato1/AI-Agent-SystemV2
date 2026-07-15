@@ -8,10 +8,10 @@ from fastapi.staticfiles import StaticFiles
 from pyannote.audio import Pipeline
 
 from .core.config import (
-    logger, UPLOAD_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE, WHISPER_MODEL_SIZE,
+    logger, UPLOAD_DIR, MEETINGS_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE, WHISPER_MODEL_SIZE,
     WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN
 )
-from .routers import stt, realtime, enroll
+from .routers import stt, realtime, enroll, meetings
 from .services.speaker_id_service import load_speaker_embedding_inference
 
 
@@ -88,6 +88,10 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(stt.router, prefix="/api", tags=["Audio Processing"])
 app.include_router(realtime.router, prefix="/api", tags=["Realtime STT"])
 app.include_router(enroll.router, prefix="/api", tags=["Speaker Enrollment"])
+app.include_router(meetings.router, prefix="/api", tags=["Meeting Records"])
+
+# 저장된 회의 오디오 원본을 재생/다운로드할 수 있게 정적 서빙 (C-4 및 향후 "다시 듣기" UI용)
+app.mount("/meetings-files", StaticFiles(directory=MEETINGS_DIR), name="meetings_files")
 
 # 실시간 STT WebSocket 파이프라인 수동 검증용 테스트 페이지 (정식 프론트엔드 아님)
 _TEST_CLIENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_client")

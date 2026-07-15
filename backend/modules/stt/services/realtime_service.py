@@ -48,11 +48,13 @@ class RealtimeSTTSession:
         fast_model: WhisperModel,
         precise_model: WhisperModel,
         speaker_identifier=None,
+        recorder=None,
     ):
         self.session_id = session_id
         self.fast_model = fast_model
         self.precise_model = precise_model
         self.speaker_identifier = speaker_identifier  # LiveSpeakerIdentifier | None
+        self.recorder = recorder  # MeetingRecord | None — 확정 청크를 디스크에 누적 저장
 
         # 오디오 버퍼: 매 프레임 np.concatenate 하면 버퍼가 길어질수록 복사 비용이
         # O(n²)로 커지므로, 조각 리스트로 쌓아두고 필요할 때만 합침
@@ -179,6 +181,9 @@ class RealtimeSTTSession:
         if speaker_label is not None:
             for seg in precise_segments:
                 seg["speaker"] = speaker_label
+
+        if self.recorder is not None:
+            self.recorder.add_chunk(audio, precise_segments)
 
         logger.info(
             f"🎙️ [{self.session_id}] 청크 처리 완료 "
