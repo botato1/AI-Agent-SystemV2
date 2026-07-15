@@ -47,3 +47,15 @@ def add_member(
     db.commit()
     db.refresh(row)
     return row
+
+# workspace_id + user_id 조합으로 이 사용자가 이 워크스페이스의 멤버인지를 조회하는 함수
+def get_membership(db: Session, workspace_id: uuid.UUID, user_id: uuid.UUID) -> Optional[WorkspaceMember]:
+    return (
+        db.query(WorkspaceMember)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user_id,
+            WorkspaceMember.removed_at.is_(None),
+        )
+        .first()
+    )
