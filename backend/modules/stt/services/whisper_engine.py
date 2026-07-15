@@ -80,21 +80,23 @@ class TransformersWhisperEngine:
             )
         return data
 
-    def _trim_silence(self, audio: np.ndarray) -> np.ndarray:
+    def _trim_silence(self, audio: np.ndarray) -> tuple[np.ndarray, bool]:
         """
         무음/노이즈 구간을 모델에 그대로 넣으면 Whisper가 그럴듯한 문장을 지어내는
         환각(hallucination) 현상이 잦아짐. faster-whisper는 vad_filter=True로 이걸
         자동 처리해주지만, transformers 엔진은 직접 안 해주므로 여기서 수동으로 구현.
-        발화 시작~끝 구간만 잘라서 모델에 전달.
+        (트리밍된 오디오, 발화가 실제로 감지됐는지) 튜플을 반환 — 발화가 아예 없으면
+        호출부가 모델 자체를 안 돌리게 해서, 순수 침묵에 프롬프트 힌트가 강하게 작용해
+        엉뚱한 단어를 반복 생성하는 환각을 원천 차단.
         """
         timestamps = get_speech_timestamps(
             audio, VadOptions(min_silence_duration_ms=300), sampling_rate=REALTIME_SAMPLE_RATE
         )
         if not timestamps:
-            return audio  # 발화 자체가 감지 안 되면 원본 그대로 (빈 결과 처리는 상위에서)
+            return audio, False
         start = timestamps[0]["start"]
         end = timestamps[-1]["end"]
-        return audio[start:end]
+        return audio[start:end], True
 
     @torch.inference_mode()
     def transcribe(
@@ -107,10 +109,15 @@ class TransformersWhisperEngine:
         condition_on_previous_text: bool = False,  # 호환용. 청크/창 단위 독립 디코딩만 지원.
     ):
         audio = self._load_audio(audio_or_path)
-        if vad_filter:
-            audio = self._trim_silence(audio)
-
         info = TranscribeInfo(language=language)
+
+        if vad_filter:
+            audio, has_speech = self._trim_silence(audio)
+            if not has_speech:
+                # 회의 종료 시 남는 잔여 버퍼(마이크는 켜져 있지만 아무도 말 안 하는 구간) 등에서
+                # 순수 침묵을 모델에 넣으면 프롬프트 힌트를 그대로 반복 생성하는 환각이 잘 생김
+                return [], info
+
         if len(audio) < REALTIME_SAMPLE_RATE // 20:  # 0.05초 미만이면 전사 무의미
             return [], info
 
@@ -151,6 +158,10 @@ class TransformersWhisperEngine:
             num_beams=max(beam_size, 1),
             return_dict_in_generate=True,
             output_scores=True,
+            # 애매한 오디오(노이즈 섞인 짧은 구간 등)에서 같은 구절을 계속 반복 생성하는
+            # 환각 루프에 빠지는 걸 막는 안전장치. VAD로 순수 침묵은 이미 걸러내지만,
+            # "약한 발화음+노이즈" 같은 경계 상황에 대한 2차 방어선.
+            no_repeat_ngram_size=3,
         )
         # 주의: return_timestamps=True를 return_dict_in_generate=True와 같이 쓰면
         # transformers가 장문(long-form) 모드로 전환되면서 반환 구조가 dict로 바뀌어
