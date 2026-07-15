@@ -1,6 +1,8 @@
+# backend/main.py
+
 from fastapi import FastAPI
 
-from backend.db.database import init_db
+from backend.db.base import init_db
 from backend.routers.chat_router import router as chat_router
 from backend.routers.rag_router import router as rag_router
 from backend.routers.document_router import router as document_router
@@ -25,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 서버 실행 시 SQLite DB 테이블 자동 생성
+# 서버 실행 시 PostgreSQL 테이블 자동 생성 (개발용, 운영은 Alembic 권장)
 init_db()
 
 # 서버 시작 시 리랭커 모델 미리 로딩
