@@ -25,44 +25,54 @@ def make_conversation_title(content: str, max_length: int = 30) -> str:
 # user_password에는 해시된 비밀번호를 저장
 def create_user(user_id: str, user_password: str, name: str, role: str = "member") -> dict:
     now = get_utc_now()
+    conn = None
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO users (
-            user_id,
-            user_password,
-            name,
-            role,
-            created_at,
-            last_login_at
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO users (
+                user_id,
+                user_password,
+                name,
+                role,
+                created_at,
+                last_login_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                user_password,
+                name,
+                role,
+                now,
+                None,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            user_id,
-            user_password,
-            name,
-            role,
-            now,
-            None,
-        ),
-    )
 
-    created_id = cursor.lastrowid
+        created_id = cursor.lastrowid
+        conn.commit()
 
-    conn.commit()
-    conn.close()
+        return {
+            "id": created_id,
+            "user_id": user_id,
+            "name": name,
+            "role": role,
+            "created_at": now,
+            "last_login_at": None,
+        }
 
-    return {
-        "id": created_id,
-        "user_id": user_id,
-        "name": name,
-        "role": role,
-        "created_at": now,
-        "last_login_at": None,
-    }
+    except Exception:
+        if conn:
+            conn.rollback()
+        raise
+
+    finally:
+        if conn:
+            conn.close()
 
 # 로그인 ID로 사용자를 조회
 # 로그인 시 아이디 중복 확인 / 비밀번호 검증에 사용

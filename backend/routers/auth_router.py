@@ -1,6 +1,6 @@
 # backend/routers/auth_router.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from backend.schemas.auth_schema import (
@@ -14,6 +14,7 @@ from backend.schemas.auth_schema import (
     RefreshTokenResponse,
     LogoutResponse,
     ProfileResponse,
+    CheckUserIdResponse,
 )
 from backend.services.auth_service import (
     signup,
@@ -22,6 +23,7 @@ from backend.services.auth_service import (
     logout,
     get_profile,
     update_profile,
+    check_user_id_available,
 )
 
 
@@ -32,15 +34,25 @@ router = APIRouter(
 
 security = HTTPBearer()
 
+
 def get_access_token(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str:
     return credentials.credentials
 
+
 # 회원가입
 @router.post("/signup", response_model=SignupResponse)
 def signup_api(request: SignupRequest):
     return signup(request)
+
+
+# 아이디 중복 확인
+@router.get("/check-user-id", response_model=CheckUserIdResponse)
+def check_user_id_api(
+    user_id: str = Query(..., min_length=1, max_length=50),
+):
+    return check_user_id_available(user_id)
 
 # 로그인
 @router.post("/login", response_model=LoginResponse)

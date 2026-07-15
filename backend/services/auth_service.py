@@ -1,3 +1,7 @@
+# backend/services/auth_service.py
+
+import sqlite3
+
 from fastapi import HTTPException, status
 from jose import JWTError
 
@@ -14,6 +18,7 @@ from backend.schemas.auth_schema import (
     ProfileResponse,
     TokenResponse,
     UserResponse,
+    CheckUserIdResponse,
 )
 
 from backend.db.crud import (
@@ -23,6 +28,7 @@ from backend.db.crud import (
     update_user_profile,
     update_user_password,
     update_user_last_login,
+    is_user_id_exists,
 )
 
 from backend.core.security import (
@@ -61,8 +67,29 @@ def _create_token_response(user_id: str, role: str = "member") -> TokenResponse:
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
+
+# 아이디 정규화 및 형식 검증
+def _normalize_and_validate_user_id(user_id: str) -> str:
+    normalized_user_id = user_id.strip()
+
+    if not normalized_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="아이디는 공백일 수 없습니다.",
+        )
+
+    if len(normalized_user_id) > 50:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="아이디는 50자 이하만 사용할 수 있습니다.",
+        )
+
+    return normalized_user_id
+
+
 # 비밀번호 형식을 검증
-# 조건 : 8자 이상, 72 bytes 이하, 영문 대문자 / 소문자 / 숫자 / 특수문자 중 2종류 이상 조합
+# 조건: 8자 이상, 72 bytes 이하,
+# 영문 대문자 / 소문자 / 숫자 / 특수문자 중 2종류 이상 조합
 def _validate_password_format(password: str) -> None:
     if len(password) < 8:
         raise HTTPException(
@@ -93,17 +120,42 @@ def _validate_password_format(password: str) -> None:
     if categories < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="비밀번호는 영문 대문자, 영문 소문자, 숫자, 특수문자 중 2종류 이상을 조합해야 합니다.",
+            detail=(
+                "비밀번호는 영문 대문자, 영문 소문자, 숫자, "
+                "특수문자 중 2종류 이상을 조합해야 합니다."
+            ),
         )
+
 
 # 프로필 수정 요청에 실제 수정할 값이 있는지 확인
 def _has_profile_update_fields(request: ProfileUpdateRequest) -> bool:
     return request.name is not None or request.new_password is not None
 
 
+# 아이디 중복 확인
+def check_user_id_available(user_id: str) -> CheckUserIdResponse:
+    normalized_user_id = _normalize_and_validate_user_id(user_id)
+
+    exists = is_user_id_exists(normalized_user_id)
+
+    return CheckUserIdResponse(
+        status="success",
+        user_id=normalized_user_id,
+        available=not exists,
+        message=(
+            "이미 사용 중인 아이디입니다."
+            if exists
+            else "사용 가능한 아이디입니다."
+        ),
+        error=None,
+    )
+
+
 # 회원가입 처리
 def signup(request: SignupRequest) -> SignupResponse:
-    existing_user = get_user_by_user_id(request.user_id)
+    normalized_user_id = _normalize_and_validate_user_id(request.user_id)
+
+    existing_user = get_user_by_user_id(normalized_user_id)
 
     if existing_user:
         raise HTTPException(
@@ -115,12 +167,18 @@ def signup(request: SignupRequest) -> SignupResponse:
 
     password_hash = hash_password(request.user_password)
 
-    user = create_user(
-        user_id=request.user_id,
-        user_password=password_hash,
-        name=request.name,
-        role=request.role,
-    )
+    try:
+        user = create_user(
+            user_id=normalized_user_id,
+            user_password=password_hash,
+            name=request.name,
+            role=request.role,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 사용 중인 아이디입니다.",
+        ) from exc
 
     return SignupResponse(
         status="success",
@@ -132,7 +190,9 @@ def signup(request: SignupRequest) -> SignupResponse:
 
 # 로그인 처리
 def login(request: LoginRequest) -> LoginResponse:
-    user = get_user_by_user_id(request.user_id)
+    normalized_user_id = _normalize_and_validate_user_id(request.user_id)
+
+    user = get_user_by_user_id(normalized_user_id)
 
     if not user:
         raise HTTPException(
@@ -142,7 +202,10 @@ def login(request: LoginRequest) -> LoginResponse:
 
     password_hash = user.get("user_password")
 
-    if not password_hash or not verify_password(request.user_password, password_hash):
+    if not password_hash or not verify_password(
+        request.user_password,
+        password_hash,
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="아이디 또는 비밀번호가 올바르지 않습니다.",
@@ -166,7 +229,9 @@ def login(request: LoginRequest) -> LoginResponse:
 
 
 # Refresh Token으로 Access Token 재발급
-def refresh_access_token(request: RefreshTokenRequest) -> RefreshTokenResponse:
+def refresh_access_token(
+    request: RefreshTokenRequest,
+) -> RefreshTokenResponse:
     try:
         user_pk = get_user_id_from_refresh_token(request.refresh_token)
     except JWTError:
@@ -204,7 +269,8 @@ def refresh_access_token(request: RefreshTokenRequest) -> RefreshTokenResponse:
 def logout(request: LogoutRequest) -> LogoutResponse:
     """
     현재 구조에서는 JWT를 서버에 저장하지 않으므로,
-    로그아웃은 클라이언트가 Access Token / Refresh Token을 삭제하는 방식으로 처리한다.
+    로그아웃은 클라이언트가 Access Token / Refresh Token을
+    삭제하는 방식으로 처리한다.
     """
     return LogoutResponse(
         status="success",
@@ -238,7 +304,10 @@ def get_profile(access_token: str) -> ProfileResponse:
     )
 
 
-def update_profile(access_token: str, request: ProfileUpdateRequest) -> ProfileResponse:
+def update_profile(
+    access_token: str,
+    request: ProfileUpdateRequest,
+) -> ProfileResponse:
     try:
         user_pk = get_user_id_from_access_token(access_token)
     except JWTError:
@@ -288,7 +357,10 @@ def update_profile(access_token: str, request: ProfileUpdateRequest) -> ProfileR
 
         password_hash = user.get("user_password")
 
-        if not password_hash or not verify_password(request.current_password, password_hash):
+        if not password_hash or not verify_password(
+            request.current_password,
+            password_hash,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="현재 비밀번호가 올바르지 않습니다.",
