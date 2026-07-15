@@ -132,3 +132,29 @@ async def clear_enrolled_speakers(session_id: str, request: Request):
     """등록 초기화 (다시 등록하고 싶을 때)."""
     request.app.state.enrolled_profiles.pop(session_id, None)
     return {"status": "success", "session_id": session_id}
+
+
+@router.patch("/enroll/{session_id}/rename")
+async def rename_enrolled_speaker(session_id: str, request: Request, old_name: str, new_name: str):
+    """
+    이름은 인식됐지만 틀리게 인식된 경우(예: "이준오"→"이준호")를 위한 수정 엔드포인트.
+    발음이 비슷한 이름은 STT가 원천적으로 헷갈릴 수 있어서, 등록 성공 여부와
+    무관하게 언제든 이름만 바꿀 수 있게 함 — 재녹음 없이 이미 추출된 목소리
+    지문(임베딩)은 그대로 두고 키(이름)만 교체.
+    """
+    profiles = request.app.state.enrolled_profiles.get(session_id, {})
+    if old_name not in profiles:
+        return {"status": "error", "session_id": session_id,
+                "message": f"'{old_name}'은(는) 등록되어 있지 않음"}
+
+    embedding = profiles.pop(old_name)
+    new_name = _dedupe_name(new_name, profiles)
+    profiles[new_name] = embedding
+
+    logger.info(f"✏️ 화자 이름 수정: session={session_id}, {old_name} → {new_name}")
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "speaker_name": new_name,
+        "registered_names": list(profiles.keys()),
+    }

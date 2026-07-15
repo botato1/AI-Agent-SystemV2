@@ -26,6 +26,9 @@
   .enroll-status.done { color: #16a34a; }
   .enroll-fallback { display: none; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: #b45309; }
   .enroll-fallback input[type="text"] { width: 120px; }
+  .rename-toggle-btn { font-size: 11px; padding: 4px 8px; }
+  .rename-box { align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; }
+  .rename-box input[type="text"] { width: 120px; }
   fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
   legend { font-weight: bold; font-size: 13px; padding: 0 4px; }
 </style>
@@ -138,25 +141,58 @@ document.getElementById("buildEnrollRowsBtn").onclick = () => {
     row.style.alignItems = "flex-start";
     row.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;">
-        <button type="button">🎙️ ${i}번째 분 — "안녕하세요 OOO입니다" 녹음</button>
+        <button type="button" class="record-btn">🎙️ ${i}번째 분 — "안녕하세요 OOO입니다" 녹음</button>
         <span class="enroll-status">미등록</span>
+        <button type="button" class="rename-toggle-btn" style="display:none;">✏️ 이름 수정</button>
       </div>
       <div class="enroll-fallback">
         이름 인식 실패 (인식된 말: <span class="detected-text"></span>)
         <input type="text" placeholder="이름 직접 입력" />
         <button type="button" class="manual-confirm-btn">이 이름으로 등록</button>
       </div>
+      <div class="rename-box" style="display:none;">
+        <input type="text" placeholder="올바른 이름 입력" />
+        <button type="button" class="rename-confirm-btn">수정 완료</button>
+      </div>
     `;
-    const recordBtn = row.querySelector("button");
+    const recordBtn = row.querySelector(".record-btn");
     const statusSpan = row.querySelector(".enroll-status");
     const fallbackDiv = row.querySelector(".enroll-fallback");
     const detectedTextSpan = row.querySelector(".detected-text");
-    const manualInput = row.querySelector('input[type="text"]');
+    const manualInput = row.querySelector('.enroll-fallback input[type="text"]');
     const manualConfirmBtn = row.querySelector(".manual-confirm-btn");
+    const renameToggleBtn = row.querySelector(".rename-toggle-btn");
+    const renameBox = row.querySelector(".rename-box");
+    const renameInput = row.querySelector('.rename-box input[type="text"]');
+    const renameConfirmBtn = row.querySelector(".rename-confirm-btn");
     const lastPcm16 = { value: null };  // 이름 인식 실패 시, 수동 재시도에서 같은 오디오 재사용
+    const currentName = { value: null };  // rename 시 old_name으로 필요 (발음이 비슷해 오인식됐어도 성공으로 등록될 수 있음)
 
-    recordBtn.onclick = () => recordAndEnroll(null, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16);
-    manualConfirmBtn.onclick = () => recordAndEnroll(manualInput.value, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, /*isManualRetry=*/ true);
+    recordBtn.onclick = () => recordAndEnroll(null, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, false, currentName, renameToggleBtn);
+    manualConfirmBtn.onclick = () => recordAndEnroll(manualInput.value, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, true, currentName, renameToggleBtn);
+
+    renameToggleBtn.onclick = () => {
+      renameInput.value = currentName.value || "";
+      renameBox.style.display = renameBox.style.display === "none" ? "flex" : "none";
+    };
+    renameConfirmBtn.onclick = async () => {
+      const newName = renameInput.value.trim();
+      if (!newName || !currentName.value) return;
+      const sessionId = encodeURIComponent(sessionIdInput.value);
+      const url = `${httpBase()}/api/enroll/${sessionId}/rename?old_name=${encodeURIComponent(currentName.value)}&new_name=${encodeURIComponent(newName)}`;
+      const res = await fetch(url, { method: "PATCH" });
+      const data = await res.json();
+      if (data.status === "success") {
+        currentName.value = data.speaker_name;
+        statusSpan.textContent = `✅ "${data.speaker_name}" 등록됨 (수정됨)`;
+        statusSpan.className = "enroll-status done";
+        renameBox.style.display = "none";
+        log(`✏️ 이름 수정 완료: ${data.speaker_name}`);
+      } else {
+        log(`❌ 이름 수정 실패: ${data.message}`);
+      }
+    };
+
     enrollRowsEl.appendChild(row);
   }
 };
@@ -168,6 +204,8 @@ document.getElementById("clearEnrollBtn").onclick = async () => {
     el.className = "enroll-status";
   });
   document.querySelectorAll(".enroll-fallback").forEach((el) => (el.style.display = "none"));
+  document.querySelectorAll(".rename-toggle-btn").forEach((el) => (el.style.display = "none"));
+  document.querySelectorAll(".rename-box").forEach((el) => (el.style.display = "none"));
   log("화자 등록 초기화됨");
 };
 
@@ -229,7 +267,7 @@ function recordUntilSilence() {
   });
 }
 
-async function recordAndEnroll(manualName, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, isManualRetry = false) {
+async function recordAndEnroll(manualName, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, isManualRetry = false, currentName = { value: null }, renameToggleBtn = null) {
   recordBtn.disabled = true;
   fallbackDiv.style.display = "none";
   statusSpan.textContent = isManualRetry ? "업로드 중..." : "🔴 듣는 중... (말하면 자동으로 인식돼요)";
@@ -256,6 +294,10 @@ async function recordAndEnroll(manualName, statusSpan, recordBtn, fallbackDiv, d
   if (data.status === "success") {
     statusSpan.textContent = `✅ "${data.speaker_name}" 등록됨 (인식된 말: "${data.detected_text}", 총 ${data.registered_count}명)`;
     statusSpan.className = "enroll-status done";
+    currentName.value = data.speaker_name;
+    // 이름은 뽑혔지만 발음이 비슷해 틀리게 인식됐을 수 있어 (예: "이준오"→"이준호"),
+    // 등록 성공 여부와 무관하게 항상 수정 가능하게 노출
+    if (renameToggleBtn) renameToggleBtn.style.display = "inline-block";
     log(`📇 화자 등록 성공: ${data.speaker_name}`);
   } else {
     // 이름 자동 인식 실패 → 수동 입력 폴백 UI 표시
