@@ -52,6 +52,17 @@ class MeetingRecord:
         self._save_json()
         logger.info(f"💾 회의 기록 시작: {self.meeting_id}")
 
+    def save_profiles(self, profiles: dict) -> None:
+        """
+        사전 등록된 화자 프로필(이름→임베딩)을 회의 폴더에 저장.
+        회의 후 정밀 재분석(C-4)이 pyannote의 익명 라벨(SPEAKER_00 등)을
+        실제 이름으로 매핑할 때 사용 — 회의가 끝나면 enrolled_profiles가
+        메모리에서 정리되므로 디스크에 남겨둬야 함.
+        """
+        if not profiles:
+            return
+        np.savez(os.path.join(self.dir, "profiles.npz"), **profiles)
+
     def add_chunk(self, audio: np.ndarray, segments: list[dict]) -> None:
         """확정된 청크 하나의 오디오와 세그먼트들을 저장."""
         if self._finalized:

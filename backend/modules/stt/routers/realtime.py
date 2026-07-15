@@ -1,9 +1,12 @@
+import asyncio
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..core.config import logger
 from ..services.realtime_service import RealtimeSTTSession
 from ..services.speaker_id_service import LiveSpeakerIdentifier
 from ..services.meeting_store import MeetingRecord
+from ..services.refine_service import refine_meeting
 
 router = APIRouter()
 
@@ -33,6 +36,9 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
         initial_profiles=initial_profiles,
     )
     recorder = MeetingRecord(session_id, "enrolled" if initial_profiles else "auto")
+    if initial_profiles:
+        # 회의 후 정밀 재분석(C-4)이 익명 화자 라벨을 실제 이름으로 매핑할 때 필요
+        recorder.save_profiles(initial_profiles)
     session = RealtimeSTTSession(session_id, fast_model, precise_model, speaker_identifier, recorder)
 
     mode = "사전등록(닫힌 집합)" if initial_profiles else "자동감지(열린 집합)"
@@ -47,6 +53,8 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
                 # 잔여 버퍼를 처리해서 회의록에는 마지막 발언까지 남긴다
                 await session.flush_remaining()
                 recorder.finalize("disconnected")
+                # 끊긴 회의도 저장된 부분까지는 정밀 재분석 (백그라운드)
+                asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
                 logger.info(f"⚪ 실시간 STT 세션 종료(연결 끊김): {session_id}")
                 return
 
@@ -63,6 +71,8 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
                     })
                     # 회의가 정상 종료됐으므로 이 세션의 사전 등록 정보도 정리
                     websocket.app.state.enrolled_profiles.pop(session_id, None)
+                    # 회의 후 정밀 재분석(C-4) 백그라운드 실행 — 화자 오배정/청크 경계 오류 보정
+                    asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
                     logger.info(f"⚪ 실시간 STT 세션 정상 종료(end): {session_id}")
                     break
                 continue  # end 외의 텍스트 프레임은 무시

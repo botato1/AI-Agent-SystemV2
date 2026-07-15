@@ -1,8 +1,9 @@
 import json
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from ..core.config import MEETINGS_DIR
+from ..services.refine_service import refine_meeting
 
 router = APIRouter()
 
@@ -32,15 +33,40 @@ async def list_meetings():
     return {"count": len(items), "meetings": items}
 
 
-@router.get("/meetings/{meeting_id}")
-async def get_meeting(meeting_id: str):
-    """회의 하나의 전체 회의록(세그먼트 포함) 조회."""
-    # 경로 조작(path traversal) 방지
+def _validate_meeting_id(meeting_id: str) -> None:
+    """경로 조작(path traversal) 방지."""
     if "/" in meeting_id or "\\" in meeting_id or ".." in meeting_id:
         raise HTTPException(status_code=400, detail="잘못된 meeting_id")
 
+
+@router.get("/meetings/{meeting_id}")
+async def get_meeting(meeting_id: str):
+    """회의 하나의 전체 회의록(세그먼트 포함) 조회."""
+    _validate_meeting_id(meeting_id)
     path = os.path.join(MEETINGS_DIR, meeting_id, "transcript.json")
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="해당 회의록을 찾을 수 없습니다.")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+@router.post("/meetings/{meeting_id}/refine")
+async def refine_meeting_endpoint(meeting_id: str, request: Request):
+    """
+    정밀 재분석 수동 트리거 — 회의 종료 시 자동 실행되지만,
+    자동 실행이 실패했거나 (서버 재시작 등) 예전 회의를 다시 분석하고 싶을 때 사용.
+    무거운 GPU 작업이라 완료까지 시간이 걸릴 수 있음 (회의 길이에 비례).
+    """
+    _validate_meeting_id(meeting_id)
+    if not os.path.isfile(os.path.join(MEETINGS_DIR, meeting_id, "transcript.json")):
+        raise HTTPException(status_code=404, detail="해당 회의록을 찾을 수 없습니다.")
+
+    meta = await refine_meeting(meeting_id, request.app.state)
+    if meta is None:
+        raise HTTPException(status_code=500, detail="정밀 재분석 실패 — 서버 로그 확인 필요")
+    return {
+        "status": "success",
+        "meeting_id": meeting_id,
+        "refined": meta.get("refined", False),
+        "segment_count": len(meta.get("segments", [])),
+    }

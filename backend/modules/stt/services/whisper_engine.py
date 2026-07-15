@@ -80,23 +80,24 @@ class TransformersWhisperEngine:
             )
         return data
 
-    def _trim_silence(self, audio: np.ndarray) -> tuple[np.ndarray, bool]:
+    def _trim_silence(self, audio: np.ndarray) -> tuple[np.ndarray, bool, float]:
         """
         무음/노이즈 구간을 모델에 그대로 넣으면 Whisper가 그럴듯한 문장을 지어내는
         환각(hallucination) 현상이 잦아짐. faster-whisper는 vad_filter=True로 이걸
         자동 처리해주지만, transformers 엔진은 직접 안 해주므로 여기서 수동으로 구현.
-        (트리밍된 오디오, 발화가 실제로 감지됐는지) 튜플을 반환 — 발화가 아예 없으면
-        호출부가 모델 자체를 안 돌리게 해서, 순수 침묵에 프롬프트 힌트가 강하게 작용해
-        엉뚱한 단어를 반복 생성하는 환각을 원천 차단.
+        (트리밍된 오디오, 발화 감지 여부, 잘린 앞부분의 초 단위 길이)를 반환.
+        - 발화가 아예 없으면 호출부가 모델 자체를 안 돌리게 함 (침묵 환각 원천 차단)
+        - 잘린 앞부분 길이는 세그먼트 타임스탬프를 원본 오디오 기준으로 보정하는 데 필요
+          (화자분리 결과와 시간축을 맞춰 병합하려면 원본 기준 타임스탬프여야 함)
         """
         timestamps = get_speech_timestamps(
             audio, VadOptions(min_silence_duration_ms=300), sampling_rate=REALTIME_SAMPLE_RATE
         )
         if not timestamps:
-            return audio, False
+            return audio, False, 0.0
         start = timestamps[0]["start"]
         end = timestamps[-1]["end"]
-        return audio[start:end], True
+        return audio[start:end], True, start / REALTIME_SAMPLE_RATE
 
     @torch.inference_mode()
     def transcribe(
@@ -110,9 +111,10 @@ class TransformersWhisperEngine:
     ):
         audio = self._load_audio(audio_or_path)
         info = TranscribeInfo(language=language)
+        trim_offset_sec = 0.0
 
         if vad_filter:
-            audio, has_speech = self._trim_silence(audio)
+            audio, has_speech, trim_offset_sec = self._trim_silence(audio)
             if not has_speech:
                 # 회의 종료 시 남는 잔여 버퍼(마이크는 켜져 있지만 아무도 말 안 하는 구간) 등에서
                 # 순수 침묵을 모델에 넣으면 프롬프트 힌트를 그대로 반복 생성하는 환각이 잘 생김
@@ -137,8 +139,9 @@ class TransformersWhisperEngine:
             text, avg_logprob, no_speech_prob = self._generate_window(window, language, beam_size, prompt_ids)
             if text:
                 segments.append(Segment(
-                    start=round(window_start / REALTIME_SAMPLE_RATE, 2),
-                    end=round((window_start + len(window)) / REALTIME_SAMPLE_RATE, 2),
+                    # trim_offset을 더해 원본 오디오 기준 타임스탬프로 보정
+                    start=round(trim_offset_sec + window_start / REALTIME_SAMPLE_RATE, 2),
+                    end=round(trim_offset_sec + (window_start + len(window)) / REALTIME_SAMPLE_RATE, 2),
                     text=text,
                     avg_logprob=avg_logprob,
                     no_speech_prob=no_speech_prob,
