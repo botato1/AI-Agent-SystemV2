@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/components/MainArea.tsx","./src/components/ProfilePopup.tsx","./src/components/Settings.tsx","./src/components/Sidebar.tsx","./src/data/mockData.ts","./src/hooks/useTheme.ts"],"version":"5.9.3"}
