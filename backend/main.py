@@ -7,7 +7,7 @@ from backend.routers.chat_router import router as chat_router
 from backend.routers.rag_router import router as rag_router
 from backend.routers.document_router import router as document_router
 from backend.routers.agent_router import router as agent_router
-from backend.routers.task_router import router as task_router
+from backend.routers.action_item_router import router as action_item_router
 from backend.routers.stt_router import router as stt_router
 from backend.routers.auth_router import router as auth_router
 from backend.modules.rag.chroma_client import warm_up_reranker
@@ -38,7 +38,7 @@ app.include_router(chat_router)
 app.include_router(rag_router)
 app.include_router(document_router)
 app.include_router(agent_router)
-app.include_router(task_router)
+app.include_router(action_item_router)
 app.include_router(stt_router)
 
 @app.get("/")
