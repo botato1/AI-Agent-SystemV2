@@ -1,9 +1,23 @@
 from backend.schemas.agent_schema import AgentState
-from backend.db.crud import (
-    get_document_by_id,
-    get_document_ids_by_room,
-    get_document_by_title_and_room,
-)
+
+# TODO: 아래 함수들은 legacy 문서 조회 crud로, 새 도메인(workspace_files)으로
+# 마이그레이션되지 않았다. 노드 로직 재설계 시 file_crud 기반으로 교체 필요.
+# 지금은 import 에러만 막아두는 임시 스텁이며 호출 시 의도적으로 실패한다.
+
+def _not_implemented(name: str):
+    raise NotImplementedError(f"{name}은 아직 새 도메인으로 마이그레이션되지 않았습니다.")
+
+
+def get_document_by_id(*args, **kwargs):
+    _not_implemented("get_document_by_id")
+
+
+def get_document_ids_by_room(*args, **kwargs):
+    _not_implemented("get_document_ids_by_room")
+
+
+def get_document_by_title_and_room(*args, **kwargs):
+    _not_implemented("get_document_by_title_and_room")
 
 
 # TODO: PR #7(feature/backend)이 merge되어 get_document_by_id_for_user()가

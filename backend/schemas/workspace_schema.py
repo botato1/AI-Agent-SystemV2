@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, BaseModel
 
 from backend.schemas.common_schema import (
     ORMBaseSchema,
@@ -131,3 +131,14 @@ class RoomSchema(TimestampSchema, SoftDeleteSchema):
         max_length=100,
     )
     created_by: UUID
+
+class RoomResponse(ORMBaseSchema):
+    id: UUID
+    workspace_id: UUID
+    name: str
+    created_by: UUID
+    created_at: datetime
+
+
+class RoomListResponse(BaseModel):
+    rooms: list[RoomResponse] = Field(default_factory=list)

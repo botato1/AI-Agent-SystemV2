@@ -2,6 +2,7 @@
 
 import uuid
 from typing import Optional
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -99,3 +100,39 @@ def list_open_action_items_by_category(db: Session, category_id: uuid.UUID) -> l
         )
         .all()
     )
+
+def get_action_item(db: Session, action_item_id: uuid.UUID) -> Optional[ActionItem]:
+    return (
+        db.query(ActionItem)
+        .filter(ActionItem.id == action_item_id, ActionItem.deleted_at.is_(None))
+        .first()
+    )
+
+
+def update_action_item_status(db: Session, action_item_id: uuid.UUID, status: str) -> Optional[ActionItem]:
+    row = get_action_item(db, action_item_id)
+    if row:
+        row.status = status
+        if status == "done":
+            row.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def update_action_item_priority(db: Session, action_item_id: uuid.UUID, priority: str) -> Optional[ActionItem]:
+    row = get_action_item(db, action_item_id)
+    if row:
+        row.priority = priority
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def delete_action_item(db: Session, action_item_id: uuid.UUID) -> Optional[ActionItem]:
+    row = get_action_item(db, action_item_id)
+    if row:
+        row.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row

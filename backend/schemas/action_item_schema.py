@@ -31,9 +31,10 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_validator, BaseModel
 
 from backend.schemas.common_schema import (
+    ORMBaseSchema,
     SoftDeleteSchema,
     TimestampSchema,
 )
@@ -91,3 +92,48 @@ class ActionItemSchema(TimestampSchema, SoftDeleteSchema):
             )
 
         return self
+
+# =============================================================================
+# Re:Call: action_items API 요청/응답
+# =============================================================================
+
+class ActionItemCreateRequest(BaseModel):
+    """사용자가 직접 생성하는 할 일 요청. meeting_id/category_id는 서비스 계층에서 채운다."""
+
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    assignee_id: Optional[UUID] = None
+    assignee_label: Optional[str] = Field(default=None, max_length=100)
+    priority: Optional[ActionItemPriority] = None
+    due_at: Optional[datetime] = None
+
+
+class ActionItemStatusUpdateRequest(BaseModel):
+    status: ActionItemStatus
+
+
+class ActionItemPriorityUpdateRequest(BaseModel):
+    priority: ActionItemPriority
+
+
+class ActionItemResponse(ORMBaseSchema):
+    id: UUID
+    workspace_id: UUID
+    meeting_id: Optional[UUID] = None
+
+    title: str
+    description: Optional[str] = None
+
+    assignee_id: Optional[UUID] = None
+    assignee_label: Optional[str] = None
+
+    priority: Optional[ActionItemPriority] = None
+    status: ActionItemStatus
+
+    due_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class ActionItemListResponse(BaseModel):
+    action_items: list[ActionItemResponse] = Field(default_factory=list)

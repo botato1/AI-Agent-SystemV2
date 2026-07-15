@@ -3,6 +3,7 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+import hashlib
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -38,6 +39,11 @@ def hash_password(plain_password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
 
     return pwd_context.verify(plain_password, hashed_password)
+
+# Refresh Token 원문을 저장하지 않고 조회/무효화용 해시만 저장하기 위한 함수
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
 
 # Access Token 생성 : 기본 만료 시간 = 15분
 def create_access_token(user_id: str, role: Optional[str] = None, expires_delta: Optional[timedelta] = None) -> str:
