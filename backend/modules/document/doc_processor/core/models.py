@@ -7,10 +7,9 @@ from typing import Any
 
 @dataclass
 class LayoutBlock:
-    """Docling 레이아웃 분석 결과 — 단일 블록."""
+    """YOLO 레이아웃 분석 결과 — 단일 블록."""
 
-    type: str          # "heading" | "paragraph" | "table" | "figure" | "caption"
-                       # "header" | "footer" | "list" | "code" | "formula"
+    type: str          # "title" | "heading" | "body" | "caption" | "figure"
     page: int          # 1-based
     bbox: tuple[float, float, float, float]  # x0, y0, x1, y1 (pt, top-left origin)
     content: str = ""  # 텍스트 블록의 내용 (figure는 빈 문자열)
@@ -42,10 +41,12 @@ class ImageBlock:
     bbox: list[float]
     ocr_text: str
     voting_confidence: float
-    source_engines: list[str]
+    source_engines: list[str]  # e.g. ["paddle+surya"], ["paddle_only"], ["surya_only"]
     paddle_lines: list[str] = field(default_factory=list)
+    surya_lines: list[str] = field(default_factory=list)
     quality_score: float = -1.0   # OCR 품질 점수 (0.0~1.0, -1.0=미계산)
     debug: dict | None = None     # debug_ocr=True 일 때만 채워짐
+    image_type: str = "image"     # "image" | "diagram" (인포그래픽/다이어그램)
 
 
 @dataclass
@@ -95,7 +96,7 @@ class PageResult:
     content: PageContent
     confidence: ConfidenceScore = field(default_factory=ConfidenceScore)
     fallback_used: bool = False
-    engine: str = "pymupdf+pdfplumber+paddle"
+    engine: str = "pymupdf+pdfplumber+paddle+surya"
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -151,8 +152,9 @@ class OcrStats:
     garbage_count: int = 0   # quality_score <  QUALITY_USEFUL_THRESHOLD
 
     # ── 엔진 경로 통계 ────────────────────────────────────────────────────────
-    paddle_only_count: int = 0         # Paddle 실행 횟수
-    chart_paddle_only_count: int = 0   # chart/diagram fig_type Paddle 단독 횟수
+    paddle_only_count: int = 0         # Surya 없이 Paddle만 실행한 횟수 (이유 무관)
+    paddle_surya_count: int = 0        # Paddle+Surya 양쪽 실행한 횟수
+    chart_paddle_only_count: int = 0   # chart/diagram fig_type으로 인한 Paddle 단독 횟수
     table_tsr_count: int = 0           # table_image TSR+CellOCR 경로 실행 횟수
 
     # ── 처리 시간 ─────────────────────────────────────────────────────────────
@@ -164,8 +166,9 @@ class OcrStats:
 
     # ── 엔진별 문자 수 누적 (avg_*_length 계산용) ─────────────────────────────
     _paddle_char_sum: int = field(default=0, init=False, repr=False)
+    _surya_char_sum:  int = field(default=0, init=False, repr=False)
     _voted_char_sum:  int = field(default=0, init=False, repr=False)
-    _engine_char_n:   int = field(default=0, init=False, repr=False)
+    _engine_char_n:   int = field(default=0, init=False, repr=False)  # 누적 건수
 
     # ── 누적 메서드 ───────────────────────────────────────────────────────────
 
@@ -178,10 +181,12 @@ class OcrStats:
     def accumulate_char_counts(
         self,
         paddle_chars: int,
+        surya_chars: int,
         voted_chars: int,
     ) -> None:
         """엔진별 문자 수를 누적합니다 (avg_*_length 계산용)."""
         self._paddle_char_sum += paddle_chars
+        self._surya_char_sum  += surya_chars
         self._voted_char_sum  += voted_chars
         self._engine_char_n   += 1
 
@@ -214,6 +219,14 @@ class OcrStats:
         return round(self.useful_count / self.success_count, 3)
 
     @property
+    def surya_ratio(self) -> float:
+        """Surya 사용 비율 = paddle_surya / run (0.0~1.0)."""
+        run = self.run_count
+        if run == 0:
+            return 0.0
+        return round(self.paddle_surya_count / run, 3)
+
+    @property
     def avg_quality_score(self) -> float:
         """누적된 quality_score의 평균값 (0.0~1.0). 집계 없으면 0.0."""
         if self._quality_score_count == 0:
@@ -226,6 +239,13 @@ class OcrStats:
         if self._engine_char_n == 0:
             return 0.0
         return round(self._paddle_char_sum / self._engine_char_n, 1)
+
+    @property
+    def avg_surya_length(self) -> float:
+        """Surya 결과의 평균 문자 수 (paddle_only 건은 0으로 포함)."""
+        if self._engine_char_n == 0:
+            return 0.0
+        return round(self._surya_char_sum / self._engine_char_n, 1)
 
     @property
     def avg_voted_length(self) -> float:
@@ -246,7 +266,7 @@ class OcrStats:
         """집계 관계식이 성립하는지 검증하고, 어긋나면 WARNING을 출력합니다.
 
         검증식:
-          1) run_count == paddle_only_count + table_tsr_count
+          1) run_count == paddle_only_count + paddle_surya_count
              (실행한 엔진 수의 합이 run_count와 일치)
           2) run_count == success_count + empty_count + filtered_count
              (실행 결과의 분류 합이 run_count와 일치)
@@ -258,7 +278,7 @@ class OcrStats:
         """
         ok = True
         run = self.run_count
-        engine_sum = self.paddle_only_count + self.table_tsr_count
+        engine_sum = self.paddle_only_count + self.paddle_surya_count + self.table_tsr_count
         result_sum = self.success_count + self.empty_count + self.filtered_count
         quality_sum = self.useful_count + self.garbage_count
 
@@ -266,6 +286,7 @@ class OcrStats:
             print(
                 f"[OcrStats WARNING] 관계식 1 불일치: "
                 f"run_count({run}) != paddle_only({self.paddle_only_count})"
+                f" + paddle_surya({self.paddle_surya_count})"
                 f" + table_tsr({self.table_tsr_count}) = {engine_sum}"
             )
             ok = False
@@ -318,16 +339,20 @@ class OcrStats:
         print(f"  {'Garbage Count':<22}: {self.garbage_count}")
         print(f"  {'Useful Count':<22}: {self.useful_count}")
         print()
-        print(f"  {'Paddle Runs':<22}: {self.paddle_only_count}")
+        print(f"  {'Paddle Only Runs':<22}: {self.paddle_only_count}")
         print(f"  {'  (chart/diagram)':<22}: {self.chart_paddle_only_count}")
+        print(f"  {'  (quality-based)':<22}: {self.paddle_only_count - self.chart_paddle_only_count}")
+        print(f"  {'Paddle+Surya Runs':<22}: {self.paddle_surya_count}")
         print(f"  {'Table TSR Runs':<22}: {self.table_tsr_count}")
         print()
         print(f"  {'Avg Paddle Length':<22}: {self.avg_paddle_length:.1f} chars")
+        print(f"  {'Avg Surya Length':<22}: {self.avg_surya_length:.1f} chars")
         print(f"  {'Avg Voted Length':<22}: {self.avg_voted_length:.1f} chars")
         print()
         print(f"  {'Skip Ratio':<22}: {self.skip_ratio*100:.1f}%")
         print(f"  {'Success Ratio':<22}: {self.success_ratio*100:.1f}%")
         print(f"  {'Useful Ratio':<22}: {self.useful_ratio*100:.1f}%")
+        print(f"  {'Surya Ratio':<22}: {self.surya_ratio*100:.1f}%")
         print()
         print(f"  {'Avg Quality Score':<22}: {self.avg_quality_score:.3f}")
         print()

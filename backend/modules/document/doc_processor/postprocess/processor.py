@@ -34,8 +34,9 @@ class PostProcessor:
                 voting_confidence=img.voting_confidence,
                 source_engines=img.source_engines,
                 paddle_lines=img.paddle_lines,
-                quality_score=img.quality_score,
-                debug=new_debug,
+                surya_lines=img.surya_lines,
+                quality_score=img.quality_score,   # 손실 방지: OCR 품질 점수 유지
+                debug=new_debug,                   # 손실 방지: 디버그 정보 유지
             ))
 
         return PageContent(

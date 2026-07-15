@@ -64,7 +64,9 @@ class DocumentMetadata(BaseModel):
     ocr_skip_ratio: float = 0.0       # skip_count / attempt_count
     ocr_success_ratio: float = 0.0    # success_count / attempt_count
     ocr_useful_ratio: float = 0.0     # useful_count / success_count
-    ocr_paddle_only_count: int = 0         # Paddle 실행한 수
+    ocr_surya_ratio: float = 0.0      # paddle_surya_count / run_count
+    ocr_paddle_only_count: int = 0         # Surya 없이 Paddle만 실행한 수 (이유 무관)
+    ocr_paddle_surya_count: int = 0        # Paddle+Surya 양쪽 실행한 수
     ocr_chart_paddle_only_count: int = 0   # chart/diagram fig_type으로 인한 Paddle 단독 수
     ocr_table_tsr_count: int = 0           # table_image TSR+CellOCR 경로 실행 수
 

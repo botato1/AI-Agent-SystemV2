@@ -54,10 +54,11 @@ def extract_text_blocks(fitz_page: fitz.Page) -> list[TextBlock]:
             font  = rep_span.get("font", "")
             size  = float(rep_span.get("size", 0.0))
             # line 전체를 감싸는 bbox: 첫 span x0 ~ 마지막 span x1, y는 line wdir 기준
-            x0 = min(s["bbox"][0] for s in spans if "bbox" in s)
-            y0 = min(s["bbox"][1] for s in spans if "bbox" in s)
-            x1 = max(s["bbox"][2] for s in spans if "bbox" in s)
-            y1 = max(s["bbox"][3] for s in spans if "bbox" in s)
+            sb = [s["bbox"] for s in spans if "bbox" in s]
+            x0 = min(b[0] for b in sb) if sb else 0.0
+            y0 = min(b[1] for b in sb) if sb else 0.0
+            x1 = max(b[2] for b in sb) if sb else 0.0
+            y1 = max(b[3] for b in sb) if sb else 0.0
             bbox  = [x0, y0, x1, y1]
             style = _infer_style(size)
 
