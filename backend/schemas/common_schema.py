@@ -1,44 +1,83 @@
-# 공통 문서/STT 타입 정의 (v2 기준)
-from typing import Optional, Literal, Any
-from pydantic import BaseModel, Field
+# backend/schemas/common_schema.py
 
-from backend.schemas.type_schema import DocumentType, DEFAULT_DOCUMENT_TYPE
+from datetime import datetime
+from typing import Any, Literal, Optional
 
-# common_schema는 문서 + STT 공통 구조이므로 voice 포함 가능
-CommonSource = Literal["voice", "text", "pdf", "docx", "md", "image"]
+from pydantic import BaseModel, ConfigDict, Field
 
-CommonStatus = Literal["uploaded", "processing", "processed", "error"]
+from backend.schemas.type_schema import (
+    DEFAULT_DOCUMENT_TYPE,
+    DocumentType,
+)
 
 
+# =============================================================================
+# Re:Call 공통 스키마
+# =============================================================================
+
+# ORM 객체의 속성을 기반으로 Pydantic 모델을 생성할 수 있도록 설정
+class ORMBaseSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+# 생성일과 수정일 필드를 제공하는 공통 스키마
+class TimestampSchema(ORMBaseSchema):
+    created_at: datetime
+    updated_at: datetime
+
+# 소프트 삭제 일시 필드를 제공하는 공통 스키마
+class SoftDeleteSchema(ORMBaseSchema):
+    deleted_at: Optional[datetime] = None
+
+
+# =============================================================================
+# Legacy: 기존 문서 공통 스키마
+# =============================================================================
+
+# TODO:
+# 기존 문서 API와 그래프가 CommonDocumentSchema를 참조하고 있으므로
+# Re:Call 파일 스키마 기반 구조로 마이그레이션할 때까지 유지한다.
+#
+# 삭제 조건:
+# - CommonDocumentSchema 참조 제거
+# - DocumentType 및 DEFAULT_DOCUMENT_TYPE 의존성 제거
+# - 기존 문서 응답을 Re:Call 파일 스키마로 교체
+# - 기존 API와 그래프 호환성 테스트 완료
+
+CommonSource = Literal[
+    "voice",
+    "text",
+    "pdf",
+    "docx",
+    "md",
+    "image",
+]
+
+CommonStatus = Literal[
+    "uploaded",
+    "processing",
+    "processed",
+    "error",
+]
+
+
+# 기존 문서 처리 기능에서 사용하는 공통 문서 스키마
 class CommonDocumentSchema(BaseModel):
     id: str
     title: str
-
-    # v2 법률 도메인 기준 자료 유형
     type: DocumentType = DEFAULT_DOCUMENT_TYPE
-
-    # 입력 형식
     source: CommonSource
 
-    # 원문 텍스트 또는 STT 전체 텍스트
     content: Optional[str] = None
-
-    # AI 요약본
     summary: Optional[str] = None
-
     language: str = "ko"
-    created_at: str
 
+    created_at: str
     tags: list[str] = Field(default_factory=list)
     status: CommonStatus = "uploaded"
 
-    # v1 호환용 / 선택 필드
     notion_url: Optional[str] = None
     chroma_id: Optional[str] = None
     error: Optional[str] = None
 
-    # 사용자가 STT/문서 처리 결과를 직접 수정했는지 여부
     user_edited: bool = False
-
-    # v2에서는 단순 문자열보다 chunk dict 구조가 더 적합함
     chunks: list[dict[str, Any]] = Field(default_factory=list)
