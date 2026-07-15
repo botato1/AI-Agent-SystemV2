@@ -7,6 +7,7 @@ from backend.routers.document_router import router as document_router
 from backend.routers.agent_router import router as agent_router
 from backend.routers.task_router import router as task_router
 from backend.routers.stt_router import router as stt_router
+from backend.routers.auth_router import router as auth_router
 from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -30,6 +31,7 @@ init_db()
 # 서버 시작 시 리랭커 모델 미리 로딩
 warm_up_reranker()
 
+app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(rag_router)
 app.include_router(document_router)

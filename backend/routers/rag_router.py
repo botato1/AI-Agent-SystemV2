@@ -23,7 +23,7 @@ router = APIRouter(
 # 사용자의 검색어를 받아 ChromaDB에서 관련 문서를 검색하는 API
 @router.post("/search", response_model=RagSearchResponseSchema)
 async def search_rag(request: RagSearchRequest):
-    result = await rag_service.retrieve_relevant_knowledge(
+    result = rag_service.retrieve_relevant_knowledge(
         query=request.query,
         top_k=request.top_k,
         relative_threshold=request.relative_threshold,
