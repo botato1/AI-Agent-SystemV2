@@ -149,6 +149,16 @@ class ProfileResponse(BaseModel):
     error: Optional[str] = None
 
 
+class CheckUserIdResponse(BaseModel):
+    """기존 아이디 중복 검사 API 응답 스키마."""
+
+    status: str
+    user_id: str
+    available: bool
+    message: str
+    error: Optional[str] = None
+
+
 # =============================================================================
 # Re:Call: users
 # =============================================================================
