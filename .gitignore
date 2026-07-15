@@ -33,3 +33,23 @@ unsloth_compiled_cache/
 # RAG/finetune requirement파일
 requirements_finetune.txt
 requirements_rag.txt
+
+gitignore# 가상환경 (추가)
+venv-rag/
+venv-finetune/
+
+# DB 파일
+*.db
+*.sqlite
+
+# 환경변수 추가 패턴
+.env.*
+
+# 파인튜닝 체크포인트
+checkpoint-*/
+*.gguf
+*.safetensors
+
+
+# 모델 캐시
+.cache/
