@@ -56,11 +56,13 @@ else:
     WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE  # cuda면 large-v3, 아니면 turbo로 통일
 
 # ──────────────────────────────────────────
-# 실시간 회의 STT (2-pass) 설정
-# Fast Pass: 청크 도착 즉시 저정밀 초안 → 지연 최소화
-# Precise Pass: 곧이어 고정밀 확정본 → 오탐(false alarm) 방지
+# 실시간 회의 STT 설정
+# 잠정 텍스트(1초 주기 partial)는 Fast 모델(turbo, beam=1)이 담당하고,
+# 청크 확정본은 Precise 모델(large-v3)이 담당하는 역할 분담 구조.
+# (과거엔 확정 단계에서도 fast+precise를 병렬로 둘 다 돌렸지만, 두 결과를
+#  같은 메시지에 담아 보내는 구조라 지연 이득이 없어서 fast pass는 제거함)
 # ──────────────────────────────────────────
-FAST_BEAM_SIZE = 1        # greedy에 가깝게 → 최저 지연
+FAST_BEAM_SIZE = 1        # greedy에 가깝게 → 최저 지연 (partial 스트리밍용)
 PRECISE_BEAM_SIZE = WHISPER_BEAM_SIZE
 
 # 신뢰도 게이팅 임계값 (이 기준 미달이면 모순 감지 엔진으로 안 보내고 보류)
@@ -72,6 +74,8 @@ REALTIME_SAMPLE_RATE = 16000
 REALTIME_MIN_CHUNK_SEC = 2      # 너무 짧은 청크는 흘려보내지 않음
 REALTIME_MAX_CHUNK_SEC = 28     # 침묵이 안 와도 이 길이가 되면 강제로 자름
 REALTIME_SILENCE_MS = 500       # 이만큼 침묵이 지속되면 발화 구간 종료로 판단
+REALTIME_FLUSH_CHECK_INTERVAL_SEC = 0.3  # VAD 기반 flush 판정 주기 (매 프레임 돌리면 CPU 낭비)
+REALTIME_FLUSH_MIN_TAIL_SEC = 0.5        # 회의 종료 시 이보다 짧은 잔여 버퍼는 버림 (노이즈 수준)
 
 # Local Agreement 스트리밍 설정 — 발화자가 안 쉬고 계속 말해도
 # 청크가 끝나기 전에 미리 텍스트를 흘려보내기 위한 파라미터

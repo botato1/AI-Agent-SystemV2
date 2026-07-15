@@ -1,3 +1,5 @@
+import asyncio
+import time
 import numpy as np
 from fastapi import APIRouter, Request
 from typing import Optional
@@ -7,6 +9,29 @@ from ..services.speaker_id_service import LiveSpeakerIdentifier
 from ..utils.name_extractor import extract_name_from_greeting
 
 router = APIRouter()
+
+MIN_ENROLL_SEC = 0.5      # 이보다 짧은 오디오는 목소리 지문을 뽑기엔 정보가 부족함
+ENROLL_TTL_SEC = 2 * 3600  # 등록만 하고 회의를 시작 안 한 세션은 이 시간 뒤 자동 정리
+
+
+def _prune_stale_enrollments(app) -> None:
+    """등록 후 회의를 시작하지 않고 방치된 세션이 메모리에 영구히 쌓이는 걸 방지."""
+    now = time.time()
+    stale = [sid for sid, ts in app.state.enrolled_at.items() if now - ts > ENROLL_TTL_SEC]
+    for sid in stale:
+        app.state.enrolled_profiles.pop(sid, None)
+        app.state.enrolled_at.pop(sid, None)
+        logger.info(f"🧹 방치된 화자 등록 세션 정리: {sid}")
+
+
+def _dedupe_name(name: str, existing: dict) -> str:
+    """동명이인 등록 시 이전 사람 프로필을 조용히 덮어쓰지 않도록 이름 뒤에 번호를 붙임."""
+    if name not in existing:
+        return name
+    n = 2
+    while f"{name}{n}" in existing:
+        n += 1
+    return f"{name}{n}"
 
 
 @router.post("/enroll/{session_id}")
@@ -25,21 +50,37 @@ async def enroll_speaker(session_id: str, request: Request, speaker_name: Option
     이 등록 정보를 그대로 이어받아 "닫힌 집합(인원수 고정)" 모드로 동작한다.
     """
     pcm16_bytes = await request.body()
+
+    # 입력 검증: PCM16은 샘플당 2바이트라 홀수 길이는 깨진 데이터,
+    # 너무 짧은 오디오는 임베딩 품질이 나빠 등록 의미가 없음
+    if len(pcm16_bytes) % 2 != 0:
+        return {"status": "error", "session_id": session_id,
+                "message": "오디오 데이터가 손상됨 (PCM16은 짝수 바이트여야 함)"}
     samples = np.frombuffer(pcm16_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     duration_sec = round(len(samples) / REALTIME_SAMPLE_RATE, 2)
+    if duration_sec < MIN_ENROLL_SEC:
+        return {"status": "error", "session_id": session_id,
+                "message": f"오디오가 너무 짧음 ({duration_sec}s < {MIN_ENROLL_SEC}s). 다시 녹음해줘."}
 
-    # 1. STT로 자기소개 문장 인식 (Fast 모델로 충분 - 짧은 문장 하나뿐)
+    loop = asyncio.get_event_loop()
+
+    # GPU 작업(STT, 임베딩)을 executor로 — async 핸들러에서 직접 호출하면
+    # 몇 초간 이벤트 루프 전체가 멈춰서 진행 중인 다른 회의의 실시간 스트리밍까지 얼어붙음
     fast_model = request.app.state.stt_model_fast
-    segments, _info = fast_model.transcribe(
-        samples,
-        language=WHISPER_LANGUAGE,
-        beam_size=FAST_BEAM_SIZE,
-        vad_filter=True,
-        condition_on_previous_text=False,
-    )
-    detected_text = " ".join(seg.text.strip() for seg in segments).strip()
 
-    # 2. 텍스트에서 이름 자동 추출, 실패하면 수동 입력값으로 폴백
+    def _run_stt() -> str:
+        segments, _info = fast_model.transcribe(
+            samples,
+            language=WHISPER_LANGUAGE,
+            beam_size=FAST_BEAM_SIZE,
+            vad_filter=True,
+            condition_on_previous_text=False,
+        )
+        return " ".join(seg.text.strip() for seg in segments).strip()
+
+    detected_text = await loop.run_in_executor(None, _run_stt)
+
+    # 텍스트에서 이름 자동 추출, 실패하면 수동 입력값으로 폴백
     extracted_name = extract_name_from_greeting(detected_text)
     name_extraction_failed = extracted_name is None
     final_name = extracted_name or speaker_name
@@ -53,12 +94,14 @@ async def enroll_speaker(session_id: str, request: Request, speaker_name: Option
             "message": "이름 자동 인식 실패. speaker_name 파라미터로 직접 지정해서 다시 요청해줘.",
         }
 
-    # 3. 화자 임베딩 추출 및 등록
     inference = request.app.state.speaker_embedding_inference
     identifier = LiveSpeakerIdentifier(inference)  # 프로필 상태 없이 임베딩 추출 기능만 재사용
-    embedding = identifier.extract_embedding(samples)
+    embedding = await loop.run_in_executor(None, identifier.extract_embedding, samples)
 
+    _prune_stale_enrollments(request.app)
     profiles = request.app.state.enrolled_profiles.setdefault(session_id, {})
+    request.app.state.enrolled_at[session_id] = time.time()
+    final_name = _dedupe_name(final_name, profiles)
     profiles[final_name] = embedding
 
     logger.info(

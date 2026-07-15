@@ -108,8 +108,11 @@ class LiveSpeakerIdentifier:
         best_label, best_score = self._find_best_match(embedding)
 
         if self._closed_set:
-            # 인원수를 미리 알고 있으므로 새 화자를 만들지 않고 무조건 가장 가까운 등록자에게 배정
-            self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding
+            # 인원수를 미리 알고 있으므로 새 화자를 만들지 않고 무조건 가장 가까운 등록자에게 배정.
+            # 단, 프로필 갱신(이동 평균)은 유사도가 충분히 높을 때만 — 겹쳐 말한 구간 등이
+            # 잘못 배정됐을 때 엉뚱한 사람의 목소리 지문을 조금씩 오염시키는 걸 방지
+            if best_score >= self.similarity_threshold:
+                self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding
             logger.info(f"🗣️ 화자 매칭(사전등록): {best_label} (유사도 {best_score:.2f})")
             return best_label
 

@@ -11,6 +11,8 @@ from ..core.config import (
     REALTIME_MIN_CHUNK_SEC,
     REALTIME_MAX_CHUNK_SEC,
     REALTIME_SILENCE_MS,
+    REALTIME_FLUSH_CHECK_INTERVAL_SEC,
+    REALTIME_FLUSH_MIN_TAIL_SEC,
     REALTIME_PARTIAL_INTERVAL_SEC,
     REALTIME_PARTIAL_MIN_SEC,
     REALTIME_INITIAL_PROMPT,
@@ -33,8 +35,9 @@ def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
 
 class RealtimeSTTSession:
     """
-    실시간 회의 오디오를 VAD 기준으로 청크 분할해
-    Fast Pass(즉시, 저정밀) → Precise Pass(확정, 고정밀) 순서로 전사하는 세션.
+    실시간 회의 오디오를 VAD 기준으로 청크 분할해 전사하는 세션.
+    - 잠정 텍스트: 1초 주기로 Fast 모델(turbo)이 버퍼를 훑어 Local Agreement 방식으로 스트리밍
+    - 확정 텍스트: 발화가 끊긴 지점에서 Precise 모델(large-v3)이 청크를 확정 전사
 
     시간(초) 고정 분할 대신 '말이 끊기는 지점'을 기준으로 잘라야
     문장이 중간에 잘려 정확도가 떨어지는 걸 방지할 수 있음.
@@ -51,8 +54,13 @@ class RealtimeSTTSession:
         self.fast_model = fast_model
         self.precise_model = precise_model
         self.speaker_identifier = speaker_identifier  # LiveSpeakerIdentifier | None
-        self._buffer = np.zeros(0, dtype=np.float32)
+
+        # 오디오 버퍼: 매 프레임 np.concatenate 하면 버퍼가 길어질수록 복사 비용이
+        # O(n²)로 커지므로, 조각 리스트로 쌓아두고 필요할 때만 합침
+        self._pending: list[np.ndarray] = []
+        self._total_samples = 0
         self._elapsed_sec = 0.0
+        self._last_flush_check = 0.0
 
         # Local Agreement 스트리밍 상태 (청크가 끝나기 전에도 실시간으로 텍스트를 흘려보내기 위함)
         self._last_partial_at = 0.0
@@ -61,10 +69,19 @@ class RealtimeSTTSession:
     def push_audio(self, pcm16_bytes: bytes) -> None:
         """프론트에서 받은 PCM16LE(16kHz, mono) 오디오 바이트를 버퍼에 누적."""
         samples = np.frombuffer(pcm16_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        self._buffer = np.concatenate([self._buffer, samples])
+        self._pending.append(samples)
+        self._total_samples += len(samples)
+
+    def _materialize_buffer(self) -> np.ndarray:
+        """조각 리스트를 하나의 배열로 합침. 합친 결과를 캐시해 반복 호출 비용을 줄임."""
+        if not self._pending:
+            return np.zeros(0, dtype=np.float32)
+        if len(self._pending) > 1:
+            self._pending = [np.concatenate(self._pending)]
+        return self._pending[0]
 
     def _buffer_duration_sec(self) -> float:
-        return len(self._buffer) / REALTIME_SAMPLE_RATE
+        return self._total_samples / REALTIME_SAMPLE_RATE
 
     def should_flush(self) -> bool:
         """
@@ -72,6 +89,7 @@ class RealtimeSTTSession:
         - 최소 길이(2초) 미만이면 아직 안 보냄
         - 최대 길이(28초)에 도달하면 침묵을 못 찾아도 강제로 자름 (지연 폭주 방지)
         - 그 사이엔 VAD로 '말이 끊긴 지점(500ms 이상 침묵)'을 찾으면 자름
+        VAD는 버퍼 전체를 훑는 비싼 연산이라 매 프레임이 아니라 일정 주기로만 수행.
         """
         duration = self._buffer_duration_sec()
         if duration < REALTIME_MIN_CHUNK_SEC:
@@ -79,8 +97,14 @@ class RealtimeSTTSession:
         if duration >= REALTIME_MAX_CHUNK_SEC:
             return True
 
+        now = time.monotonic()
+        if now - self._last_flush_check < REALTIME_FLUSH_CHECK_INTERVAL_SEC:
+            return False
+        self._last_flush_check = now
+
+        buffer = self._materialize_buffer()
         speech_timestamps = get_speech_timestamps(
-            self._buffer,
+            buffer,
             VadOptions(min_silence_duration_ms=REALTIME_SILENCE_MS),
             sampling_rate=REALTIME_SAMPLE_RATE,
         )
@@ -93,10 +117,11 @@ class RealtimeSTTSession:
 
     def pop_chunk(self) -> tuple[np.ndarray, float]:
         """현재 버퍼를 청크로 확정하고 비움. (청크, 회의 시작 기준 오프셋 초) 반환."""
-        chunk = self._buffer
+        chunk = self._materialize_buffer()
         offset_sec = self._elapsed_sec
         self._elapsed_sec += self._buffer_duration_sec()
-        self._buffer = np.zeros(0, dtype=np.float32)
+        self._pending = []
+        self._total_samples = 0
         self._last_partial_at = 0.0
         self._prev_partial_words = []
         return chunk, offset_sec
@@ -135,32 +160,31 @@ class RealtimeSTTSession:
 
     async def process_chunk(self, audio: np.ndarray, offset_sec: float) -> dict:
         """
-        Fast Pass와 Precise Pass를 동시에 GPU에 던져서 병렬로 처리 (순차 대기 대비 지연 감소).
+        확정 전사(Precise)와 화자 식별을 병렬로 실행.
+        잠정 텍스트는 maybe_stream_partial()이 이미 흘려보냈으므로 여기선 확정본만 만든다.
         신뢰도 낮은 세그먼트(confident=False)는 호출 측(모순 감지 엔진)에서
         경고를 보류하고 다음 신호를 기다리는 판단 근거로 사용.
         """
         loop = asyncio.get_event_loop()
+        started = time.monotonic()
 
-        fast_start = time.monotonic()
-        fast_task = loop.run_in_executor(None, self._transcribe, self.fast_model, audio, FAST_BEAM_SIZE)
         precise_task = loop.run_in_executor(None, self._transcribe, self.precise_model, audio, PRECISE_BEAM_SIZE)
-
-        fast_segments, precise_segments = await asyncio.gather(fast_task, precise_task)
-        fast_latency_sec = round(time.monotonic() - fast_start, 2)
-
-        self._apply_offset_and_confidence(fast_segments, offset_sec)
-        self._apply_offset_and_confidence(precise_segments, offset_sec)
-
-        speaker_label = None
         if self.speaker_identifier is not None:
-            speaker_label = await loop.run_in_executor(None, self.speaker_identifier.identify, audio)
+            speaker_task = loop.run_in_executor(None, self.speaker_identifier.identify, audio)
+            precise_segments, speaker_label = await asyncio.gather(precise_task, speaker_task)
+        else:
+            precise_segments = await precise_task
+            speaker_label = None
+
+        latency_sec = round(time.monotonic() - started, 2)
+        self._apply_offset_and_confidence(precise_segments, offset_sec)
+        if speaker_label is not None:
             for seg in precise_segments:
                 seg["speaker"] = speaker_label
 
         logger.info(
             f"🎙️ [{self.session_id}] 청크 처리 완료 "
-            f"(offset={offset_sec:.1f}s, fast={fast_latency_sec}s, "
-            f"fast_segs={len(fast_segments)}, precise_segs={len(precise_segments)})"
+            f"(offset={offset_sec:.1f}s, latency={latency_sec}s, segs={len(precise_segments)}, speaker={speaker_label})"
         )
 
         return {
@@ -168,9 +192,20 @@ class RealtimeSTTSession:
             "type": "final",
             "chunk_offset_sec": round(offset_sec, 2),
             "speaker": speaker_label,
-            "draft": {"latency_sec": fast_latency_sec, "segments": fast_segments},
+            "latency_sec": latency_sec,
             "final": {"segments": precise_segments},
         }
+
+    async def flush_remaining(self) -> dict | None:
+        """
+        회의 종료(또는 연결 종료 직전) 시 아직 청크로 확정 안 된 잔여 버퍼를 마지막
+        청크로 처리. 이게 없으면 회의 마지막 발언이 조용히 유실된다.
+        노이즈 수준(0.5초 미만)이면 버림.
+        """
+        if self._buffer_duration_sec() < REALTIME_FLUSH_MIN_TAIL_SEC:
+            return None
+        chunk, offset_sec = self.pop_chunk()
+        return await self.process_chunk(chunk, offset_sec)
 
     async def maybe_stream_partial(self) -> dict | None:
         """
@@ -187,9 +222,10 @@ class RealtimeSTTSession:
             return None
         self._last_partial_at = now
 
+        buffer = self._materialize_buffer()
         loop = asyncio.get_event_loop()
         segments = await loop.run_in_executor(
-            None, self._transcribe, self.fast_model, self._buffer, FAST_BEAM_SIZE
+            None, self._transcribe, self.fast_model, buffer, FAST_BEAM_SIZE
         )
         text = " ".join(seg["text"] for seg in segments).strip()
         words = text.split()

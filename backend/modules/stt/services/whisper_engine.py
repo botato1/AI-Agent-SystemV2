@@ -6,6 +6,11 @@ from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from ..core.config import logger, REALTIME_SAMPLE_RATE
 
+# Whisper 인코더의 고정 입력 길이. processor가 이보다 긴 오디오를 조용히 잘라버리므로
+# (truncate) 긴 오디오는 반드시 이 크기 이하 창(window)으로 쪼개서 처리해야 함.
+_WINDOW_SEC = 30
+_WINDOW_SAMPLES = _WINDOW_SEC * REALTIME_SAMPLE_RATE
+
 
 class Segment:
     """faster_whisper의 Segment와 동일한 속성명을 가진 경량 대체 객체.
@@ -38,18 +43,18 @@ class TransformersWhisperEngine:
     를 제공해서 나머지 코드(stt_service.py, realtime_service.py)를 거의 그대로 재사용한다.
 
     주의:
-    - avg_logprob / no_speech_prob는 ctranslate2와 100% 동일한 산식이 아니라
-      transformers generate() 출력에서 근사적으로 계산한 값. 신뢰도 게이팅 임계값
-      (config.CONF_AVG_LOGPROB_THRESHOLD 등)은 실제 서버에서 로그를 보고 재튜닝이 필요할 수 있음.
+    - avg_logprob는 beam search일 땐 transformers가 주는 sequences_scores(선택된 시퀀스의
+      길이 정규화 로그확률)를 그대로 쓰고, greedy일 땐 스텝별 argmax 로그확률 평균으로 근사.
+      ctranslate2와 100% 동일한 산식은 아니므로 임계값(config.CONF_*)은 실측 재튜닝 여지 있음.
+    - no_speech_prob는 근사치이며 신뢰도 낮음 — VAD가 1차로 침묵을 걸러주므로 보조 신호로만 사용.
     - SDPA(scaled_dot_product_attention)를 사용해 flash-attn 같은 별도 CUDA wheel
       설치 없이도 PyTorch 내장 고속 어텐션 커널을 활용함.
-    - GPU 서버에서 첫 실행 시 모델 다운로드(수 GB)와 동작 검증이 필요함 — 로컬(Mac)에서는
-      import/문법 검증만 했고 실제 추론 호출은 못 해봤음.
     """
 
     def __init__(self, model_id: str, device: str = "cuda"):
         self.device = device
         self.torch_dtype = torch.float16 if device == "cuda" else torch.float32
+        self._warned_no_scores = False
 
         logger.info(f"🧠 transformers Whisper 로딩 중... ({model_id} / {device})")
         self.processor = AutoProcessor.from_pretrained(model_id)
@@ -99,15 +104,45 @@ class TransformersWhisperEngine:
         beam_size: int = 5,
         vad_filter: bool = True,   # True면 발화 앞뒤 무음/노이즈를 잘라내고 모델에 전달 (환각 방지)
         initial_prompt: str = None,
-        condition_on_previous_text: bool = False,  # 호환용. 청크 단위 독립 디코딩만 지원.
+        condition_on_previous_text: bool = False,  # 호환용. 청크/창 단위 독립 디코딩만 지원.
     ):
         audio = self._load_audio(audio_or_path)
         if vad_filter:
             audio = self._trim_silence(audio)
 
-        inputs = self.processor(
-            audio, sampling_rate=REALTIME_SAMPLE_RATE, return_tensors="pt"
-        )
+        info = TranscribeInfo(language=language)
+        if len(audio) < REALTIME_SAMPLE_RATE // 20:  # 0.05초 미만이면 전사 무의미
+            return [], info
+
+        prompt_ids = None
+        if initial_prompt:
+            prompt_ids = self.processor.get_prompt_ids(initial_prompt, return_tensors="pt").to(self.device)
+
+        # 30초 초과 오디오는 창 단위로 쪼개서 순차 전사 (processor의 조용한 truncate 방지).
+        # 창 경계에서 단어가 잘릴 수 있는 건 알려진 한계 — 배치 경로의 정밀도가 더 중요해지면
+        # VAD 경계 기반 분할로 개선할 것.
+        segments = []
+        window_start = 0
+        while window_start < len(audio):
+            window = audio[window_start: window_start + _WINDOW_SAMPLES]
+            if len(window) < REALTIME_SAMPLE_RATE // 20:
+                break
+            text, avg_logprob, no_speech_prob = self._generate_window(window, language, beam_size, prompt_ids)
+            if text:
+                segments.append(Segment(
+                    start=round(window_start / REALTIME_SAMPLE_RATE, 2),
+                    end=round((window_start + len(window)) / REALTIME_SAMPLE_RATE, 2),
+                    text=text,
+                    avg_logprob=avg_logprob,
+                    no_speech_prob=no_speech_prob,
+                ))
+            window_start += _WINDOW_SAMPLES
+
+        return segments, info
+
+    def _generate_window(self, window: np.ndarray, language: str, beam_size: int, prompt_ids):
+        """30초 이하 오디오 창 하나를 전사해 (텍스트, avg_logprob, no_speech_prob)를 반환."""
+        inputs = self.processor(window, sampling_rate=REALTIME_SAMPLE_RATE, return_tensors="pt")
         input_features = inputs.input_features.to(self.device, dtype=self.torch_dtype)
 
         generate_kwargs = dict(
@@ -119,28 +154,37 @@ class TransformersWhisperEngine:
         )
         # 주의: return_timestamps=True를 return_dict_in_generate=True와 같이 쓰면
         # transformers가 장문(long-form) 모드로 전환되면서 반환 구조가 dict로 바뀌어
-        # outputs.sequences 접근이 깨짐. 우리는 세그먼트 내부 타임스탬프를 안 쓰므로
-        # (청크 전체를 Segment 하나로 취급) 아예 빼서 표준 GenerateOutput을 유지함.
-        if initial_prompt:
-            prompt_ids = self.processor.get_prompt_ids(initial_prompt, return_tensors="pt")
-            generate_kwargs["prompt_ids"] = prompt_ids.to(self.device)
+        # outputs.sequences 접근이 깨짐. 장문 처리는 위의 창 분할 루프가 담당하므로 여기선 사용 안 함.
+        if prompt_ids is not None:
+            generate_kwargs["prompt_ids"] = prompt_ids
 
         outputs = self.model.generate(input_features, **generate_kwargs)
 
         text = self.processor.batch_decode(outputs.sequences, skip_special_tokens=True)[0].strip()
         avg_logprob = self._compute_avg_logprob(outputs)
         no_speech_prob = self._estimate_no_speech_prob(outputs)
+        return text, avg_logprob, no_speech_prob
 
-        duration_sec = round(len(audio) / REALTIME_SAMPLE_RATE, 2)
-        segments = [Segment(0.0, duration_sec, text, avg_logprob, no_speech_prob)]
-        info = TranscribeInfo(language=language)
-        return segments, info
+    def _compute_avg_logprob(self, outputs) -> float:
+        """
+        선택된 시퀀스의 평균 로그확률 → ctranslate2의 avg_logprob에 대응.
+        - beam search: transformers가 계산해주는 sequences_scores(길이 정규화 완료)를 그대로 사용
+        - greedy: 스텝별 argmax 로그확률 평균으로 근사 (greedy에선 선택 토큰 = argmax라 정확)
+        - scores가 아예 비어있으면(transformers 버전에 따라 output_scores가 무시될 수 있음)
+          0.0을 반환하는데, 이는 '완벽한 신뢰도'로 해석돼 게이팅이 무력화되므로 경고를 남김
+        """
+        seq_scores = getattr(outputs, "sequences_scores", None)
+        if seq_scores is not None:
+            return float(seq_scores[0].item())
 
-    @staticmethod
-    def _compute_avg_logprob(outputs) -> float:
-        """생성된 각 토큰의 최고 로그확률 평균 → ctranslate2의 avg_logprob에 대응하는 근사치."""
         scores = getattr(outputs, "scores", None)
         if not scores:
+            if not self._warned_no_scores:
+                self._warned_no_scores = True
+                logger.warning(
+                    "⚠️ generate()가 scores를 반환하지 않음 — avg_logprob가 항상 0.0이 되어 "
+                    "신뢰도 게이팅이 무력화됨. transformers 버전의 output_scores 지원 여부 확인 필요."
+                )
             return 0.0
         log_probs = []
         for step_scores in scores:
@@ -152,9 +196,9 @@ class TransformersWhisperEngine:
     def _estimate_no_speech_prob(outputs) -> float:
         """
         ctranslate2처럼 전용 no_speech 토큰 확률을 직접 노출하는 공식 API가
-        transformers엔 없어서, 첫 디코딩 스텝의 불확실성(최고 확률이 낮을수록
-        '무슨 소리인지 모르겠다'에 가까움)으로 근사. VAD가 1차로 침묵을 걸러주므로
-        이 값은 보조 신호로만 사용할 것.
+        transformers엔 없어서, 첫 디코딩 스텝의 불확실성으로 근사.
+        첫 스텝이 강제 토큰(언어/태스크)이면 항상 0.0에 가까워 의미가 없을 수 있음 —
+        VAD가 1차로 침묵을 걸러주므로 어디까지나 보조 신호로만 사용할 것.
         """
         scores = getattr(outputs, "scores", None)
         if not scores:

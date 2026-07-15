@@ -297,7 +297,7 @@ function renderFinal(data) {
     transcriptEl.appendChild(span);
   });
   transcriptEl.appendChild(document.createElement("br"));
-  log(`✅ final 청크 수신 (offset=${data.chunk_offset_sec}s, fast_latency=${data.draft.latency_sec}s, speaker=${data.speaker})`);
+  log(`✅ final 청크 수신 (offset=${data.chunk_offset_sec}s, latency=${data.latency_sec}s, speaker=${data.speaker})`);
 }
 
 async function start() {
@@ -311,6 +311,10 @@ async function start() {
     const data = JSON.parse(event.data);
     if (data.type === "partial") renderPartial(data);
     else if (data.type === "final") renderFinal(data);
+    else if (data.type === "session_end") {
+      log("✅ 서버가 잔여 버퍼 처리 완료 — 세션 정상 종료");
+      ws.close();
+    }
   };
 
   mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -340,11 +344,18 @@ function stop() {
   if (sourceNode) sourceNode.disconnect();
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
   if (audioContext) audioContext.close();
-  if (ws) ws.close();
+
+  // 바로 끊지 않고 "end"를 보내서 서버가 잔여 버퍼(마지막 발언)를 처리하게 함.
+  // 서버가 session_end로 응답하면 onmessage에서 소켓을 닫는다.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send("end");
+    log("녹음 종료 — 서버의 잔여 버퍼 처리 대기 중...");
+  } else if (ws) {
+    ws.close();
+  }
 
   startBtn.disabled = false;
   stopBtn.disabled = true;
-  log("녹음 종료");
 }
 
 startBtn.onclick = () => start().catch((e) => log("시작 실패: " + e.message));

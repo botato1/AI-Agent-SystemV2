@@ -59,8 +59,10 @@ async def lifespan(app: FastAPI):
     logger.info("✅ 화자 임베딩 모델 로딩 완료")
 
     # 회의 시작 전 사전 등록된 화자 프로필 임시 저장소: {session_id: {화자이름: 임베딩}}
-    # /api/enroll에서 채워지고, 실시간 WebSocket 세션 시작 시 소비됨
+    # /api/enroll에서 채워지고, 실시간 WebSocket 세션이 참조. 회의 정상 종료(end) 시 정리됨.
+    # enrolled_at은 등록만 하고 방치된 세션의 TTL 정리용 타임스탬프.
     app.state.enrolled_profiles = {}
+    app.state.enrolled_at = {}
 
     yield  # 서버 동작
 
