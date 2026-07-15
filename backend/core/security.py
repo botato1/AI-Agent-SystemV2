@@ -126,3 +126,34 @@ def get_user_id_from_access_token(token: str) -> str:
 def get_user_id_from_refresh_token(token: str) -> str:
     payload = verify_refresh_token(token)
     return payload["sub"]
+
+# Password Reset Token 생성 : 기본 만료 시간 = settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+def create_password_reset_token(user_id: str, expires_delta: Optional[timedelta] = None) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "type": "password_reset",
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+# Password Reset Token인지 확인 후 payload 반환
+def verify_password_reset_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "password_reset":
+        raise JWTError("비밀번호 재설정 토큰이 아닙니다.")
+
+    if not payload.get("sub"):
+        raise JWTError("토큰에 user_id 정보가 없습니다.")
+
+    return payload
+
+# Password Reset Token에서 user_id 추출
+def get_user_id_from_password_reset_token(token: str) -> str:
+    payload = verify_password_reset_token(token)
+    return payload["sub"]
