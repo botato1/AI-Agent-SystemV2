@@ -6,24 +6,71 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import UploadFile
 
-from backend.db.crud import (
-    create_conversation,
-    get_conversation_by_id,
-    save_document_metadata,
-    save_document_chunks,
-    delete_document_chunks,
-    get_document_by_id_for_user,
-    get_document_chunks,
-    get_voice_documents_for_user,
-    delete_document_for_user,
-    update_chroma_status,
-    link_document_to_room,
-)
-from backend.modules.rag.document_loader import (
-    _load_voice,
-    _get_upload_context,
-    _build_base_meta,
-)
+# TODO: 아래 함수들은 legacy SQLite/conversation 기반 crud + document_loader 헬퍼로,
+# 새 도메인(meetings/meeting_segments + content_chunk_crud)으로 마이그레이션되지 않았다.
+# meeting_postprocess_state.py 그래프 노드 구현 시 실제 로직으로 교체해야 한다.
+# 지금은 import 에러만 막아두는 임시 스텁이며 호출 시 의도적으로 실패한다.
+
+def _not_implemented(name: str):
+    raise NotImplementedError(f"{name}은 아직 새 도메인으로 마이그레이션되지 않았습니다.")
+
+
+def create_conversation(*args, **kwargs):
+    _not_implemented("create_conversation")
+
+
+def get_conversation_by_id(*args, **kwargs):
+    _not_implemented("get_conversation_by_id")
+
+
+def save_document_metadata(*args, **kwargs):
+    _not_implemented("save_document_metadata")
+
+
+def save_document_chunks(*args, **kwargs):
+    _not_implemented("save_document_chunks")
+
+
+def delete_document_chunks(*args, **kwargs):
+    _not_implemented("delete_document_chunks")
+
+
+def get_document_by_id_for_user(*args, **kwargs):
+    _not_implemented("get_document_by_id_for_user")
+
+
+def get_document_chunks(*args, **kwargs):
+    _not_implemented("get_document_chunks")
+
+
+def get_voice_documents_for_user(*args, **kwargs):
+    _not_implemented("get_voice_documents_for_user")
+
+
+def delete_document_for_user(*args, **kwargs):
+    _not_implemented("delete_document_for_user")
+
+
+def update_chroma_status(*args, **kwargs):
+    _not_implemented("update_chroma_status")
+
+
+def link_document_to_room(*args, **kwargs):
+    _not_implemented("link_document_to_room")
+
+
+def _load_voice(*args, **kwargs):
+    _not_implemented("_load_voice")
+
+
+def _get_upload_context(*args, **kwargs):
+    _not_implemented("_get_upload_context")
+
+
+def _build_base_meta(*args, **kwargs):
+    _not_implemented("_build_base_meta")
+
+
 from backend.modules.rag.chroma_client import delete_document as chroma_delete_document
 
 

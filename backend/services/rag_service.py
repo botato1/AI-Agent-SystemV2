@@ -16,10 +16,17 @@ from backend.modules.rag.chroma_client import (
     KNOWLEDGE_COLLECTION,
     CONTEXT_TO_COLLECTION,
 )
-from backend.db.crud import (
-    get_documents_by_room_id,
-    get_document_by_title_and_room,
-)
+
+# TODO: room 기반 문서 조회는 legacy 개념. AI Chat 그래프(ai_chat_state.py) 노드
+# 구현 시 workspace_id/category_id 기준 content_chunk_crud로 교체해야 한다.
+# 지금은 import 에러만 막아두는 임시 스텁이며 실제 호출 시 의도적으로 실패한다.
+def get_documents_by_room_id(room_id: str) -> list:
+    raise NotImplementedError("get_documents_by_room_id는 아직 새 도메인으로 마이그레이션되지 않았습니다.")
+
+
+def get_document_by_title_and_room(room_id: str, title: str) -> dict | None:
+    raise NotImplementedError("get_document_by_title_and_room은 아직 새 도메인으로 마이그레이션되지 않았습니다.")
+
 
 # ── 상수 ─────────────────────────────────────────────────────
 CANDIDATE_K  = 40
