@@ -1,45 +1,57 @@
-# 문서 관련 API 엔드포인트
+# backend/routers/document_router.py
+
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
 from backend.services.document_service import (
     upload_and_process_document,
     delete_processed_document,
     get_document_detail,
 )
-from backend.db.crud import get_documents_for_user
-from backend.core.dependencies import get_current_user_id
+from backend.db.crud import file_crud
+from backend.db.session import get_db
+from backend.core.dependencies import get_current_user_id, require_workspace_member
 
 
 router = APIRouter(
-    prefix="/api/documents",
-    tags=["Documents"]
+    prefix="/api/workspaces/{workspace_id}/documents",
+    tags=["Documents"],
 )
 
 
-# 업로드된 전체 문서 목록 조회 API
-# 실제 경로: GET /api/documents
+def _get_workspace_file_or_404(db: Session, file_id: UUID, workspace_id: UUID):
+    workspace_file = file_crud.get_file(db, file_id)
+    if not workspace_file or workspace_file.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="문서를 찾을 수 없습니다.",
+        )
+    return workspace_file
+
+
+# 워크스페이스 내 문서 목록 조회
 @router.get("")
 def get_document_list(
+    workspace_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
+    require_workspace_member(db, workspace_id, current_user_id)
+
     try:
-        rows = get_documents_for_user(current_user_id)
+        files = file_crud.list_files_by_kind(db, workspace_id, "document")
 
         documents = [
             {
-                "document_id": row["document_id"],
-                "filename": row["filename"],
-                "room_id": row.get("room_id"),  # TODO: v1 호환용, 추후 제거 예정
-                "conversation_id": row.get("conversation_id") or row.get("room_id"),
-                "type": row.get("type"),
-                "source": row.get("source"),
-                "json_path": row.get("json_path"),
-                "chroma_status": row.get("chroma_status"),
-                "created_at": row["created_at"],
+                "document_id": str(f.id),
+                "filename": f.original_filename,
+                "analysis_status": f.analysis_status,
+                "created_at": f.created_at,
             }
-            for row in rows
+            for f in files
         ]
 
         return {
@@ -59,17 +71,18 @@ def get_document_list(
 
 
 # 문서 업로드 통합 API
-# 실제 경로: POST /api/documents/upload
-# 프론트는 이 API만 호출
 # 문서 파일은 8003 문서 처리 서버로 전달한다.
 @router.post("/upload")
 async def upload_document(
+    workspace_id: UUID,
     file: UploadFile = File(...),
-    conversation_id: str | None = Form(None),
-    room_id: str | None = Form(None),  # TODO: v1 호환용, 추후 제거 예정
+    room_id: str | None = Form(None),
     document_type: Literal["document", "meeting"] = Form("document", alias="type"),
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
+    require_workspace_member(db, workspace_id, current_user_id)
+
     if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -78,8 +91,9 @@ async def upload_document(
 
     try:
         return await upload_and_process_document(
+            db=db,
             file=file,
-            conversation_id=conversation_id,
+            workspace_id=workspace_id,
             room_id=room_id,
             document_type=document_type,
             user_id=current_user_id,
@@ -106,27 +120,19 @@ async def upload_document(
         )
 
 
-# 문서 상세 조회 API
-# 실제 경로: GET /api/documents/{document_id}
-# 문서 보관함에서 문서 1개 클릭 시 사용
+# 문서 상세 조회
 @router.get("/{document_id}")
 def get_document_detail_api(
-    document_id: str,
+    workspace_id: UUID,
+    document_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
     try:
-        result = get_document_detail(
-            document_id=document_id,
-            user_id=current_user_id,
-        )
-
-        if not result:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="문서를 찾을 수 없습니다.",
-            )
-
-        return result
+        return get_document_detail(db=db, file_id=document_id)
 
     except HTTPException:
         raise
@@ -143,26 +149,19 @@ def get_document_detail_api(
         )
 
 
-# 문서 삭제 API
-# 실제 경로: DELETE /api/documents/{document_id}
+# 문서 삭제
 @router.delete("/{document_id}")
 def delete_document_api(
-    document_id: str,
+    workspace_id: UUID,
+    document_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
     try:
-        result = delete_processed_document(
-            document_id=document_id,
-            user_id=current_user_id,
-        )
-
-        if not result:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="삭제할 문서를 찾을 수 없습니다.",
-            )
-
-        return result
+        return delete_processed_document(db=db, file_id=document_id)
 
     except HTTPException:
         raise
