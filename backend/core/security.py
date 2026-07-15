@@ -127,8 +127,18 @@ def get_user_id_from_refresh_token(token: str) -> str:
     payload = verify_refresh_token(token)
     return payload["sub"]
 
+# 비밀번호 해시의 일부를 재설정 토큰에 지문으로 남긴다.
+# 비밀번호가 바뀌면 지문도 달라지므로, 이미 사용된(비밀번호가 이미 바뀐)
+# reset_token은 검증 시 자동으로 걸러진다 (재사용 방지).
+def password_fingerprint(password_hash: str) -> str:
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+
 # Password Reset Token 생성 : 기본 만료 시간 = settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
-def create_password_reset_token(user_id: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_password_reset_token(
+    user_id: str,
+    password_hash: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
     )
@@ -136,6 +146,7 @@ def create_password_reset_token(user_id: str, expires_delta: Optional[timedelta]
     payload: dict[str, Any] = {
         "sub": user_id,
         "type": "password_reset",
+        "pwd_fp": password_fingerprint(password_hash),
         "exp": expire,
     }
 
