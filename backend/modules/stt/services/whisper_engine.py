@@ -160,7 +160,14 @@ class TransformersWhisperEngine:
 
         outputs = self.model.generate(input_features, **generate_kwargs)
 
-        text = self.processor.batch_decode(outputs.sequences, skip_special_tokens=True)[0].strip()
+        # transformers의 prompt_ids 방식은 (faster-whisper와 달리) 프롬프트 텍스트를
+        # sequences 맨 앞에 그대로 포함시켜서 반환함 — HF 공식 문서에도 명시된 동작.
+        # 디코딩 전에 프롬프트 길이만큼 잘라내지 않으면 "비고 프로젝트 팀 회의. 용어: ..."가
+        # 실제 전사 결과 앞에 그대로 붙어서 나옴.
+        sequences = outputs.sequences
+        if prompt_ids is not None:
+            sequences = sequences[:, prompt_ids.shape[-1]:]
+        text = self.processor.batch_decode(sequences, skip_special_tokens=True)[0].strip()
         avg_logprob = self._compute_avg_logprob(outputs)
         no_speech_prob = self._estimate_no_speech_prob(outputs)
         return text, avg_logprob, no_speech_prob
