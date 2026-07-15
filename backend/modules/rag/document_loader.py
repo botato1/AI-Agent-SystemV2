@@ -38,7 +38,7 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
 
-from backend.modules.rag.chroma_client import insert_document
+from backend.modules.rag.chroma_client import insert_document, delete_document
 from backend.db.crud import content_chunk_crud, file_crud
 
 # ── 청킹 파라미터 ──────────────────────────────────────────────
@@ -234,43 +234,69 @@ def load_document(
         print(f"[document_loader] 청킹 결과 없음 → file_id: {file_id}")
         return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": "chunk_result_empty"}
 
-    # 3. ChromaDB + Postgres 동시 저장
-    saved = 0
-    for idx, chunk in enumerate(chunked):
-        chroma_id = f"{file_id}_chunk_{idx:04d}"
+    # 3. ChromaDB + Postgres 저장
+    #
+    # [수정 사항 - 2026.07.15] 리뷰 피드백 반영: 트랜잭션 미분리 문제
+    # 기존에는 청크마다 insert_document() → content_chunk_crud.create_chunk()를
+    # 반복 호출해서, create_chunk 내부의 개별 commit이 청크 수만큼 발생했음.
+    # 중간에 실패하면 ChromaDB엔 있는데 Postgres엔 없는 고아 청크가 생김.
+    #
+    # 변경: 1) ChromaDB 저장을 먼저 전부 수행하면서 Postgres에 넣을 dict만 모아둠
+    #       2) 마지막에 bulk_create_chunks()로 Postgres에 단 한 번만 commit
+    #       3) 2번이 실패하면 1번에서 이미 넣은 ChromaDB 청크를 보정 삭제(delete_document)
+    #          해서 "ChromaDB엔 있는데 Postgres엔 없는" 상태를 남기지 않음
+    chroma_inserted_ids: list[str] = []
+    pg_chunk_rows: list[dict] = []
 
-        extra_meta = {}
-        if transcription is not None:
-            extra_meta = {"stt_start": chunk.get("start", 0.0), "stt_end": chunk.get("end", 0.0)}
+    try:
+        for idx, chunk in enumerate(chunked):
+            chroma_id = f"{file_id}_chunk_{idx:04d}"
 
-        # 3-1. ChromaDB
-        insert_document({
-            "id": chroma_id,
-            "content": chunk["content"],
-            "workspace_id": workspace_id,
-            "category_id": category_id,
-            "document_id": str(file_id),
-            "chunk_index": idx,
-            "upload_context": upload_context,
-            "title": file_row.original_filename,
-            "filename": file_row.original_filename,
-            **extra_meta,
-        })
+            extra_meta = {}
+            if transcription is not None:
+                extra_meta = {"stt_start": chunk.get("start", 0.0), "stt_end": chunk.get("end", 0.0)}
 
-        # 3-2. Postgres content_chunks (메타데이터 + chroma_id 연결)
-        content_chunk_crud.create_chunk(
-            db,
-            workspace_id=file_row.workspace_id,
-            category_id=file_row.category_id,
-            file_id=file_id,
-            chunk_type=chunk_type,
-            chunk_index=idx,
-            chunk_text=chunk["content"],
-            chroma_id=chroma_id,
-            page_number=chunk.get("page_number") if transcription is None else None,
-            metadata_json=extra_meta or None,
-        )
-        saved += 1
+            # 3-1. ChromaDB
+            insert_document({
+                "id": chroma_id,
+                "content": chunk["content"],
+                "workspace_id": workspace_id,
+                "category_id": category_id,
+                "document_id": str(file_id),
+                "chunk_index": idx,
+                "upload_context": upload_context,
+                "title": file_row.original_filename,
+                "filename": file_row.original_filename,
+                **extra_meta,
+            })
+            chroma_inserted_ids.append(chroma_id)
+
+            # 3-2. Postgres에 넣을 값은 일단 리스트에만 모아둠 (커밋은 아래서 한 번에)
+            pg_chunk_rows.append(dict(
+                workspace_id=file_row.workspace_id,
+                category_id=file_row.category_id,
+                file_id=file_id,
+                chunk_type=chunk_type,
+                chunk_index=idx,
+                chunk_text=chunk["content"],
+                chroma_id=chroma_id,
+                page_number=chunk.get("page_number") if transcription is None else None,
+                metadata_json=extra_meta or None,
+            ))
+
+        # 3-3. Postgres 단일 트랜잭션으로 일괄 저장
+        content_chunk_crud.bulk_create_chunks(db, pg_chunk_rows)
+        saved = len(pg_chunk_rows)
+
+    except Exception as e:
+        # Postgres 저장(또는 그 이전 단계)이 실패하면, 이미 ChromaDB에 들어간
+        # 청크를 보정 삭제해서 고아 데이터를 남기지 않는다.
+        print(f"[document_loader] 저장 실패, ChromaDB 보정 삭제 시도: {e}")
+        try:
+            delete_document(str(file_id), workspace_id)
+        except Exception as cleanup_error:
+            print(f"[document_loader] 보정 삭제도 실패 — 수동 확인 필요: {cleanup_error}")
+        return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": str(e)}
 
     print(f"[document_loader] 완료 → {saved}개 청크 적재 (file_id: {file_id})")
     return {"status": "success", "chunk_count": saved, "file_id": str(file_id), "error": None}

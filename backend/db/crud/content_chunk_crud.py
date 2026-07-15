@@ -41,6 +41,27 @@ def create_chunk(
     return row
 
 
+def bulk_create_chunks(db: Session, chunks: list[dict]) -> list[ContentChunk]:
+    """
+    여러 청크를 단일 트랜잭션으로 저장한다.
+
+    [추가 사유 - 2026.07.15] 리뷰 피드백 반영
+    기존 create_chunk()는 호출마다 db.commit()이 발생해서, document_loader가
+    청크 수만큼 개별 커밋을 반복했음. 중간에 커밋 하나가 실패하면 이미 저장된
+    ChromaDB 청크에 대응하는 Postgres row가 없는 상태(고아 데이터)가 될 수 있었음.
+    이 함수는 모든 row를 add만 해두고 마지막에 한 번만 commit하므로,
+    Postgres 쪽 저장은 전부 성공하거나 전부 실패하거나 둘 중 하나로 귀결된다.
+    (ChromaDB insert 자체의 원자성까지는 보장 못 함 — 그건 document_loader에서
+    실패 시 보정 삭제(delete_document)로 별도 처리.)
+    """
+    rows = [ContentChunk(**c) for c in chunks]
+    db.add_all(rows)
+    db.commit()
+    for r in rows:
+        db.refresh(r)
+    return rows
+
+
 def get_chunks_by_file(
     db: Session, file_id: uuid.UUID, chunk_type: Optional[str] = None
 ) -> list[ContentChunk]:
