@@ -15,7 +15,6 @@ from ..core.config import (
     REALTIME_FLUSH_MIN_TAIL_SEC,
     REALTIME_PARTIAL_INTERVAL_SEC,
     REALTIME_PARTIAL_MIN_SEC,
-    REALTIME_INITIAL_PROMPT,
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
     CONF_AVG_LOGPROB_THRESHOLD,
@@ -132,7 +131,6 @@ class RealtimeSTTSession:
             language=WHISPER_LANGUAGE,
             beam_size=beam_size,
             vad_filter=True,
-            initial_prompt=REALTIME_INITIAL_PROMPT,
             condition_on_previous_text=False,
         )
         return [
