@@ -52,6 +52,31 @@ CONTEXT_TO_COLLECTION = {
 }
 
 
+# ── where 절 빌더 (공용) ──────────────────────────────────────
+#
+# [수정 사항 - 2026.07.15] 리뷰 피드백 반영: search_hybrid의 where 검증 오류
+# 문제: chromadb의 validate_where()는 top-level key가 1개인 dict만 허용한다.
+#       {"workspace_id": x, "category_id": y}처럼 키가 2개 이상이면
+#       ValueError("Expected where to have exactly one operator")가 발생함.
+#       get_documents_by_document_id/delete_document는 이미 $and로 감싸서
+#       고쳐놨는데 search_hybrid만 이 패턴이 빠져있었음 (버그).
+# 조치: 조건이 1개면 그대로, 2개 이상이면 $and로 감싸는 헬퍼를 공용으로 만들어
+#       세 함수(search_hybrid/get_documents_by_document_id/delete_document)가
+#       전부 이 함수 하나만 쓰도록 통일. 앞으로 where 조건이 늘어나도
+#       이 함수만 거치면 검증 오류가 재발하지 않음.
+def _build_where(conditions: dict) -> dict:
+    """
+    {"workspace_id": "a"} -> {"workspace_id": "a"}
+    {"workspace_id": "a", "category_id": "b"} -> {"$and": [{"workspace_id": "a"}, {"category_id": "b"}]}
+    """
+    clauses = [{k: v} for k, v in conditions.items() if v is not None]
+    if not clauses:
+        return {}
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$and": clauses}
+
+
 # ── 컬렉션 ────────────────────────────────────────────────────
 def get_or_create_collection(collection_name: str):
     ollama_ef = OllamaEmbeddingFunction(
@@ -258,11 +283,14 @@ def search_hybrid(
         MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION
     ]
 
-    # workspace_id(+category_id)를 항상 where filter에 강제 병합
-    merged_filter = dict(filter) if filter else {}
-    merged_filter["workspace_id"] = workspace_id
+    # workspace_id(+category_id, +호출부 filter)를 _build_where로 병합
+    # chromadb where 검증(top-level key 1개 제한)을 통과하도록 $and로 감쌈
+    base_conditions = {"workspace_id": workspace_id}
     if category_id:
-        merged_filter["category_id"] = category_id
+        base_conditions["category_id"] = category_id
+    if filter:
+        base_conditions.update(filter)
+    merged_filter = _build_where(base_conditions)
 
     all_results = []
 
@@ -353,7 +381,7 @@ def get_documents_by_document_id(document_id: str, workspace_id: str) -> dict:
         collection = get_or_create_collection(collection_name)
         try:
             result = collection.get(
-                where={"$and": [{"document_id": document_id}, {"workspace_id": workspace_id}]},
+                where=_build_where({"document_id": document_id, "workspace_id": workspace_id}),
                 include=["metadatas", "documents"]
             )
             total_ids.extend(result.get("ids", []))
@@ -381,7 +409,7 @@ def delete_document(doc_id: str, workspace_id: str, collection_name: str | None 
         try:
             collection = get_or_create_collection(col_name)
             result = collection.get(
-                where={"$and": [{"document_id": doc_id}, {"workspace_id": workspace_id}]},
+                where=_build_where({"document_id": doc_id, "workspace_id": workspace_id}),
                 include=[],
             )
             chunk_ids = result.get("ids", [])
