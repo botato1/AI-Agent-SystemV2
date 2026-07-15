@@ -3,6 +3,7 @@
 import uuid
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.db.modules import RefreshToken, User
@@ -43,6 +44,5 @@ def store_refresh_token(db: Session, **fields) -> RefreshToken:
 def revoke_refresh_token(db: Session, token_hash: str) -> None:
     row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
     if row:
-        from sqlalchemy import func
         row.revoked_at = func.now()
         db.commit()

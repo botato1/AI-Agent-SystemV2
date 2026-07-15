@@ -7,7 +7,7 @@
 
 import hashlib
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -40,7 +40,12 @@ def is_in_cooldown(db: Session, workspace_id: uuid.UUID, dedup_key: str) -> bool
     )
     if not row or not row.cooldown_until:
         return False
-    return datetime.utcnow() < row.cooldown_until.replace(tzinfo=None)
+    # [수정 사항 - 2026.07.15] 리뷰 피드백 반영: naive/aware datetime 혼용 버그
+    # cooldown_until 컬럼은 DateTime(timezone=True)라 DB에서 항상 tz-aware로
+    # 돌아온다. 기존엔 naive(datetime.utcnow())를 만들어서 row 쪽을 억지로
+    # naive로 깎아 비교했는데, 세션 타임존이 UTC가 아니면 조용히 틀어질 수
+    # 있었음. 양쪽 다 tz-aware(UTC)로 통일해서 비교.
+    return datetime.now(timezone.utc) < row.cooldown_until
 
 
 def create_contradiction(
@@ -75,7 +80,7 @@ def create_contradiction(
         confidence_score=confidence_score,
         deduplication_key=deduplication_key,
         severity=severity,
-        cooldown_until=datetime.utcnow() + timedelta(minutes=cooldown_minutes),
+        cooldown_until=datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes),
         **extra_fields,
     )
     db.add(row)
@@ -124,7 +129,7 @@ def resolve_contradiction(
     )
     db.add(resolution)
 
-    contradiction = db.query(Contradiction).get(contradiction_id)
+    contradiction = db.get(Contradiction, contradiction_id)
     if contradiction:
         contradiction.status = "resolved"
 
