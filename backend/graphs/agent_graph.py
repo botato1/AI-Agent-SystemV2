@@ -11,7 +11,20 @@ from backend.graphs.nodes.law_retrieval import law_retrieval_node
 from backend.graphs.nodes.case_law_retrieval import case_law_retrieval_node
 from backend.graphs.nodes.legal_analysis import legal_analysis_node
 from backend.graphs.nodes.task_generate import task_generate_node
+from backend.graphs.nodes.case_card import case_card_node
 from backend.graphs.nodes.answer import answer_node
+
+
+def is_case_card_requested(state: AgentState) -> bool:
+    """
+    기존 코드에서 혼용 중인 사건 카드 생성 요청 플래그를 확인한다.
+
+    추후 need_case_card 또는 case_card_requested 중 하나로 통일한다.
+    """
+    return bool(
+        state.get("need_case_card")
+        or state.get("case_card_requested")
+    )
 
 
 def route_after_classify(state: AgentState) -> str:
@@ -23,6 +36,7 @@ def route_after_classify(state: AgentState) -> str:
         state.get("need_rag")
         or state.get("need_legal_analysis")
         or state.get("need_task_generate")
+        or is_case_card_requested(state)
     ):
         return "document_context_node"
 
@@ -50,12 +64,13 @@ def route_after_document_context(state: AgentState) -> str:
 
 def route_after_case_law_retrieval(state: AgentState) -> str:
     """
-    법률 분석이나 업무 생성이 필요한 경우 법률 분석 노드로 이동한다.
-    그렇지 않으면 바로 답변을 생성한다.
+    법률 분석, 업무 생성 또는 사건 카드 생성이 필요한 경우
+    법률 분석 노드로 이동한다.
     """
     if (
         state.get("need_legal_analysis")
         or state.get("need_task_generate")
+        or is_case_card_requested(state)
     ):
         return "legal_analysis_node"
 
@@ -64,10 +79,23 @@ def route_after_case_law_retrieval(state: AgentState) -> str:
 
 def route_after_legal_analysis(state: AgentState) -> str:
     """
-    후속 업무 생성이 필요한 경우 업무 생성 노드로 이동한다.
+    법률 분석 이후 업무 또는 사건 카드를 생성한다.
     """
     if state.get("need_task_generate"):
         return "task_generate_node"
+
+    if is_case_card_requested(state):
+        return "case_card_node"
+
+    return "answer_node"
+
+
+def route_after_task_generate(state: AgentState) -> str:
+    """
+    업무 생성 이후 사건 카드 생성 여부를 확인한다.
+    """
+    if is_case_card_requested(state):
+        return "case_card_node"
 
     return "answer_node"
 
@@ -77,17 +105,42 @@ def build_agent_graph():
 
     # 노드 등록
     graph.add_node("classifier_node", classifier_node)
-    graph.add_node("document_context_node", document_context_node)
-    graph.add_node("clause_extractor_node", clause_extractor_node)
-    graph.add_node("fact_extractor_node", fact_extractor_node)
-    graph.add_node("law_retrieval_node", law_retrieval_node)
+    graph.add_node(
+        "document_context_node",
+        document_context_node,
+    )
+    graph.add_node(
+        "clause_extractor_node",
+        clause_extractor_node,
+    )
+    graph.add_node(
+        "fact_extractor_node",
+        fact_extractor_node,
+    )
+    graph.add_node(
+        "law_retrieval_node",
+        law_retrieval_node,
+    )
     graph.add_node(
         "case_law_retrieval_node",
         case_law_retrieval_node,
     )
-    graph.add_node("legal_analysis_node", legal_analysis_node)
-    graph.add_node("task_generate_node", task_generate_node)
-    graph.add_node("answer_node", answer_node)
+    graph.add_node(
+        "legal_analysis_node",
+        legal_analysis_node,
+    )
+    graph.add_node(
+        "task_generate_node",
+        task_generate_node,
+    )
+    graph.add_node(
+        "case_card_node",
+        case_card_node,
+    )
+    graph.add_node(
+        "answer_node",
+        answer_node,
+    )
 
     # 시작
     graph.add_edge(START, "classifier_node")
@@ -139,19 +192,30 @@ def build_agent_graph():
         },
     )
 
-    # 법률 분석 후 업무 생성 또는 답변
+    # 법률 분석 후 업무 생성, 사건 카드 생성 또는 답변
     graph.add_conditional_edges(
         "legal_analysis_node",
         route_after_legal_analysis,
         {
             "task_generate_node": "task_generate_node",
+            "case_card_node": "case_card_node",
             "answer_node": "answer_node",
         },
     )
 
-    # 업무 생성 후 답변
-    graph.add_edge(
+    # 업무 생성 후 사건 카드 생성 또는 답변
+    graph.add_conditional_edges(
         "task_generate_node",
+        route_after_task_generate,
+        {
+            "case_card_node": "case_card_node",
+            "answer_node": "answer_node",
+        },
+    )
+
+    # 사건 카드 생성 후 답변
+    graph.add_edge(
+        "case_card_node",
         "answer_node",
     )
 
