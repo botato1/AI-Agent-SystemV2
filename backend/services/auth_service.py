@@ -1,9 +1,12 @@
 # backend/services/auth_service.py
 
-import sqlite3
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import HTTPException, status
 from jose import JWTError
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from backend.schemas.auth_schema import (
     SignupRequest,
@@ -17,19 +20,11 @@ from backend.schemas.auth_schema import (
     LogoutResponse,
     ProfileResponse,
     TokenResponse,
-    UserResponse,
+    UserPublicSchema,
     CheckUserIdResponse,
 )
 
-from backend.db.crud import (
-    create_user,
-    get_user_by_user_id,
-    get_user_by_id,
-    update_user_profile,
-    update_user_password,
-    update_user_last_login,
-    is_user_id_exists,
-)
+from backend.db.crud import auth_crud
 
 from backend.core.security import (
     hash_password,
@@ -38,27 +33,23 @@ from backend.core.security import (
     create_refresh_token,
     get_user_id_from_access_token,
     get_user_id_from_refresh_token,
+    hash_token,
+    REFRESH_TOKEN_EXPIRE_DAYS,
 )
 
 from backend.core.config import settings
 
 
-# DB user row를 API 응답용 UserResponse로 변환
-def _to_user_response(user: dict) -> UserResponse:
-    return UserResponse(
-        id=user.get("id"),
-        user_id=user.get("user_id") or "",
-        name=user.get("name") or "",
-        role=user.get("role") or "member",
-        created_at=user.get("created_at"),
-        last_login_at=user.get("last_login_at"),
+def _create_token_response(db: Session, user_id: UUID) -> TokenResponse:
+    access_token = create_access_token(user_id=str(user_id))
+    refresh_token = create_refresh_token(user_id=str(user_id))
+
+    auth_crud.store_refresh_token(
+        db,
+        user_id=user_id,
+        token_hash=hash_token(refresh_token),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
     )
-
-
-# Access Token / Refresh Token 응답 생성
-def _create_token_response(user_id: str, role: str = "member") -> TokenResponse:
-    access_token = create_access_token(user_id=user_id, role=role)
-    refresh_token = create_refresh_token(user_id=user_id, role=role)
 
     return TokenResponse(
         access_token=access_token,
@@ -68,28 +59,24 @@ def _create_token_response(user_id: str, role: str = "member") -> TokenResponse:
     )
 
 
-# 아이디 정규화 및 형식 검증
-def _normalize_and_validate_user_id(user_id: str) -> str:
-    normalized_user_id = user_id.strip()
+def _normalize_and_validate_username(username: str) -> str:
+    normalized = username.strip()
 
-    if not normalized_user_id:
+    if not normalized:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="아이디는 공백일 수 없습니다.",
         )
 
-    if len(normalized_user_id) > 50:
+    if len(normalized) > 50:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="아이디는 50자 이하만 사용할 수 있습니다.",
         )
 
-    return normalized_user_id
+    return normalized
 
 
-# 비밀번호 형식을 검증
-# 조건: 8자 이상, 72 bytes 이하,
-# 영문 대문자 / 소문자 / 숫자 / 특수문자 중 2종류 이상 조합
 def _validate_password_format(password: str) -> None:
     if len(password) < 8:
         raise HTTPException(
@@ -107,13 +94,10 @@ def _validate_password_format(password: str) -> None:
 
     if any(char.isupper() for char in password):
         categories += 1
-
     if any(char.islower() for char in password):
         categories += 1
-
     if any(char.isdigit() for char in password):
         categories += 1
-
     if any(not char.isalnum() for char in password):
         categories += 1
 
@@ -127,111 +111,96 @@ def _validate_password_format(password: str) -> None:
         )
 
 
-# 프로필 수정 요청에 실제 수정할 값이 있는지 확인
 def _has_profile_update_fields(request: ProfileUpdateRequest) -> bool:
-    return request.name is not None or request.new_password is not None
+    return request.display_name is not None or request.new_password is not None
 
 
 # 아이디 중복 확인
-def check_user_id_available(user_id: str) -> CheckUserIdResponse:
-    normalized_user_id = _normalize_and_validate_user_id(user_id)
+def check_user_id_available(db: Session, username: str) -> CheckUserIdResponse:
+    normalized_username = _normalize_and_validate_username(username)
 
-    exists = is_user_id_exists(normalized_user_id)
+    exists = auth_crud.get_user_by_username(db, normalized_username) is not None
 
     return CheckUserIdResponse(
         status="success",
-        user_id=normalized_user_id,
+        username=normalized_username,
         available=not exists,
-        message=(
-            "이미 사용 중인 아이디입니다."
-            if exists
-            else "사용 가능한 아이디입니다."
-        ),
+        message="이미 사용 중인 아이디입니다." if exists else "사용 가능한 아이디입니다.",
         error=None,
     )
 
 
 # 회원가입 처리
-def signup(request: SignupRequest) -> SignupResponse:
-    normalized_user_id = _normalize_and_validate_user_id(request.user_id)
+def signup(db: Session, request: SignupRequest) -> SignupResponse:
+    normalized_username = _normalize_and_validate_username(request.username)
 
-    existing_user = get_user_by_user_id(normalized_user_id)
-
-    if existing_user:
+    if auth_crud.get_user_by_username(db, normalized_username):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 사용 중인 아이디입니다.",
         )
 
-    _validate_password_format(request.user_password)
+    if auth_crud.get_user_by_email(db, request.email):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 사용 중인 이메일입니다.",
+        )
 
-    password_hash = hash_password(request.user_password)
+    _validate_password_format(request.password)
+
+    password_hash = hash_password(request.password)
 
     try:
-        user = create_user(
-            user_id=normalized_user_id,
-            user_password=password_hash,
-            name=request.name,
-            role=request.role,
+        user = auth_crud.create_user(
+            db,
+            username=normalized_username,
+            email=request.email,
+            display_name=request.display_name,
+            password_hash=password_hash,
+            account_status="active",
         )
-    except sqlite3.IntegrityError as exc:
+    except IntegrityError:
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="이미 사용 중인 아이디입니다.",
-        ) from exc
+            detail="이미 사용 중인 아이디 또는 이메일입니다.",
+        )
 
     return SignupResponse(
         status="success",
-        user=_to_user_response(user),
+        user=UserPublicSchema.model_validate(user),
         message="회원가입이 완료되었습니다.",
         error=None,
     )
 
 
 # 로그인 처리
-def login(request: LoginRequest) -> LoginResponse:
-    normalized_user_id = _normalize_and_validate_user_id(request.user_id)
+def login(db: Session, request: LoginRequest) -> LoginResponse:
+    normalized_username = _normalize_and_validate_username(request.username)
 
-    user = get_user_by_user_id(normalized_user_id)
+    user = auth_crud.get_user_by_username(db, normalized_username)
 
-    if not user:
+    if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="아이디 또는 비밀번호가 올바르지 않습니다.",
         )
 
-    password_hash = user.get("user_password")
+    auth_crud.update_user_last_login(db, user.id)
 
-    if not password_hash or not verify_password(
-        request.user_password,
-        password_hash,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="아이디 또는 비밀번호가 올바르지 않습니다.",
-        )
-
-    update_user_last_login(user["id"])
-
-    # last_login_at 갱신 후 최신 사용자 정보 다시 조회
-    refreshed_user = get_user_by_id(user["id"]) or user
+    refreshed_user = auth_crud.get_user_by_id(db, user.id) or user
 
     return LoginResponse(
         status="success",
-        user=_to_user_response(refreshed_user),
-        token=_create_token_response(
-            user_id=str(refreshed_user["id"]),
-            role=refreshed_user.get("role") or "member",
-        ),
+        user=UserPublicSchema.model_validate(refreshed_user),
+        token=_create_token_response(db, refreshed_user.id),
         message="로그인에 성공했습니다.",
         error=None,
     )
 
 
 # Refresh Token으로 Access Token 재발급
-def refresh_access_token(
-    request: RefreshTokenRequest,
-) -> RefreshTokenResponse:
+def refresh_access_token(db: Session, request: RefreshTokenRequest) -> RefreshTokenResponse:
     try:
         user_pk = get_user_id_from_refresh_token(request.refresh_token)
     except JWTError:
@@ -240,7 +209,21 @@ def refresh_access_token(
             detail="유효하지 않은 Refresh Token입니다.",
         )
 
-    user = get_user_by_id(user_pk)
+    token_row = auth_crud.get_refresh_token_by_hash(db, hash_token(request.refresh_token))
+
+    if not token_row or token_row.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="무효화된 Refresh Token입니다.",
+        )
+
+    if token_row.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="만료된 Refresh Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
 
     if not user:
         raise HTTPException(
@@ -248,10 +231,7 @@ def refresh_access_token(
             detail="사용자를 찾을 수 없습니다.",
         )
 
-    access_token = create_access_token(
-        user_id=str(user["id"]),
-        role=user.get("role") or "member",
-    )
+    access_token = create_access_token(user_id=str(user.id))
 
     return RefreshTokenResponse(
         status="success",
@@ -266,12 +246,11 @@ def refresh_access_token(
     )
 
 
-def logout(request: LogoutRequest) -> LogoutResponse:
-    """
-    현재 구조에서는 JWT를 서버에 저장하지 않으므로,
-    로그아웃은 클라이언트가 Access Token / Refresh Token을
-    삭제하는 방식으로 처리한다.
-    """
+# 로그아웃 처리 - refresh_tokens를 실제로 revoke한다
+def logout(db: Session, request: LogoutRequest) -> LogoutResponse:
+    if request.refresh_token:
+        auth_crud.revoke_refresh_token(db, hash_token(request.refresh_token))
+
     return LogoutResponse(
         status="success",
         message="로그아웃이 완료되었습니다.",
@@ -279,7 +258,7 @@ def logout(request: LogoutRequest) -> LogoutResponse:
     )
 
 
-def get_profile(access_token: str) -> ProfileResponse:
+def get_profile(db: Session, access_token: str) -> ProfileResponse:
     try:
         user_pk = get_user_id_from_access_token(access_token)
     except JWTError:
@@ -288,7 +267,7 @@ def get_profile(access_token: str) -> ProfileResponse:
             detail="유효하지 않은 Access Token입니다.",
         )
 
-    user = get_user_by_id(user_pk)
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
 
     if not user:
         raise HTTPException(
@@ -298,16 +277,13 @@ def get_profile(access_token: str) -> ProfileResponse:
 
     return ProfileResponse(
         status="success",
-        user=_to_user_response(user),
+        user=UserPublicSchema.model_validate(user),
         message="사용자 정보를 조회했습니다.",
         error=None,
     )
 
 
-def update_profile(
-    access_token: str,
-    request: ProfileUpdateRequest,
-) -> ProfileResponse:
+def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest) -> ProfileResponse:
     try:
         user_pk = get_user_id_from_access_token(access_token)
     except JWTError:
@@ -322,7 +298,7 @@ def update_profile(
             detail="수정할 회원 정보가 없습니다.",
         )
 
-    user = get_user_by_id(user_pk)
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
 
     if not user:
         raise HTTPException(
@@ -330,22 +306,17 @@ def update_profile(
             detail="사용자를 찾을 수 없습니다.",
         )
 
-    # 이름 수정
-    if request.name is not None:
-        name = request.name.strip()
+    if request.display_name is not None:
+        display_name = request.display_name.strip()
 
-        if not name:
+        if not display_name:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="이름은 빈 값으로 수정할 수 없습니다.",
             )
 
-        update_user_profile(
-            id=user_pk,
-            name=name,
-        )
+        auth_crud.update_user_profile(db, user.id, display_name=display_name)
 
-    # 비밀번호 수정
     if request.new_password is not None:
         if not request.current_password:
             raise HTTPException(
@@ -355,25 +326,15 @@ def update_profile(
 
         _validate_password_format(request.new_password)
 
-        password_hash = user.get("user_password")
-
-        if not password_hash or not verify_password(
-            request.current_password,
-            password_hash,
-        ):
+        if not verify_password(request.current_password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="현재 비밀번호가 올바르지 않습니다.",
             )
 
-        new_password_hash = hash_password(request.new_password)
+        auth_crud.update_user_password(db, user.id, hash_password(request.new_password))
 
-        update_user_password(
-            id=user_pk,
-            user_password=new_password_hash,
-        )
-
-    updated_user = get_user_by_id(user_pk)
+    updated_user = auth_crud.get_user_by_id(db, user.id)
 
     if not updated_user:
         raise HTTPException(
@@ -383,7 +344,7 @@ def update_profile(
 
     return ProfileResponse(
         status="success",
-        user=_to_user_response(updated_user),
+        user=UserPublicSchema.model_validate(updated_user),
         message="사용자 정보가 수정되었습니다.",
         error=None,
     )

@@ -5,15 +5,11 @@
 
 TODO:
 - auth_router.py와 auth_service.py를 Re:Call 인증 구조로 마이그레이션
-- SignupRequest, LoginRequest, UserResponse 등 기존 요청·응답 스키마 교체
-- users의 기존 UserRole 제거
-- 사용자 권한은 workspace_members.role을 기준으로 처리
-- 신규 회원가입·로그인 API 스키마는 인증 기능 마이그레이션 시 별도 설계
 - 마이그레이션 완료 후 Legacy 블록 삭제
 """
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -30,42 +26,39 @@ from backend.schemas.type_schema import AccountStatus
 # Legacy: 기존 회원가입·로그인·토큰·프로필 스키마
 # =============================================================================
 
-# 기존 인증 코드에서 사용하는 전역 사용자 역할.
-# Re:Call에서는 사용자 권한을 workspace_members.role로 관리한다.
-UserRole = Literal[
-    "member",
-    "lawyer",
-    "admin",
-]
-
-
 class SignupRequest(BaseModel):
-    user_id: str = Field(
+    username: str = Field(
         ...,
-        description="로그인에 사용할 사용자 아이디",
+        min_length=1,
+        max_length=50,
+        description="로그인에 사용할 아이디",
     )
-    user_password: str = Field(
+    email: str = Field(
         ...,
-        description="로그인 비밀번호",
+        min_length=1,
+        max_length=255,
+        description="이메일",
     )
-    name: str = Field(
+    password: str = Field(
         ...,
-        description="사용자 이름",
+        description="비밀번호",
     )
-    role: UserRole = Field(
-        default="member",
-        description="사용자 권한",
+    display_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="화면에 표시할 이름",
     )
 
 
 class LoginRequest(BaseModel):
-    user_id: str = Field(
+    username: str = Field(
         ...,
         description="로그인 아이디",
     )
-    user_password: str = Field(
+    password: str = Field(
         ...,
-        description="로그인 비밀번호",
+        description="비밀번호",
     )
 
 
@@ -84,9 +77,9 @@ class LogoutRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    name: Optional[str] = Field(
+    display_name: Optional[str] = Field(
         default=None,
-        description="변경할 사용자 이름",
+        description="변경할 표시 이름",
     )
     current_password: Optional[str] = Field(
         default=None,
@@ -98,15 +91,6 @@ class ProfileUpdateRequest(BaseModel):
     )
 
 
-class UserResponse(BaseModel):
-    id: int
-    user_id: str
-    name: str
-    role: UserRole
-    created_at: Optional[str] = None
-    last_login_at: Optional[str] = None
-
-
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: Optional[str] = None
@@ -116,14 +100,14 @@ class TokenResponse(BaseModel):
 
 class SignupResponse(BaseModel):
     status: str
-    user: Optional[UserResponse] = None
+    user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
     status: str
-    user: Optional[UserResponse] = None
+    user: Optional["UserPublicSchema"] = None
     token: Optional[TokenResponse] = None
     message: str
     error: Optional[str] = None
@@ -144,16 +128,16 @@ class LogoutResponse(BaseModel):
 
 class ProfileResponse(BaseModel):
     status: str
-    user: Optional[UserResponse] = None
+    user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
 
 
 class CheckUserIdResponse(BaseModel):
-    """기존 아이디 중복 검사 API 응답 스키마."""
+    """아이디 중복 검사 API 응답 스키마."""
 
     status: str
-    user_id: str
+    username: str
     available: bool
     message: str
     error: Optional[str] = None
