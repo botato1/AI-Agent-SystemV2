@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.core.dependencies import get_current_user_id
+from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import room_crud, workspace_crud
 from backend.schemas.chat_schema import RoomMessageSchema
@@ -28,24 +28,6 @@ class RoomMessageListResponse(BaseModel):
     messages: list[RoomMessageSchema] = Field(default_factory=list)
 
 
-def _require_workspace_member(db: Session, workspace_id: UUID, user_id: str):
-    workspace = workspace_crud.get_workspace(db, workspace_id)
-    if not workspace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="워크스페이스를 찾을 수 없습니다.",
-        )
-
-    membership = workspace_crud.get_membership(db, workspace_id, UUID(user_id))
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="워크스페이스 접근 권한이 없습니다.",
-        )
-
-    return workspace
-
-
 def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
     room = room_crud.get_room_by_id(db, room_id, workspace_id)
     if not room:
@@ -64,7 +46,7 @@ def create_room(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
 
     category = room_crud.get_default_category(db, workspace_id)
     if not category:
@@ -90,7 +72,7 @@ def list_rooms(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
 
     rooms = room_crud.list_rooms(db, workspace_id)
     return RoomListResponse(rooms=[RoomResponse.model_validate(r) for r in rooms])
@@ -104,7 +86,7 @@ def get_room(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
     room = _get_room_or_404(db, room_id, workspace_id)
     return RoomResponse.model_validate(room)
 
@@ -118,7 +100,7 @@ def update_room(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
 
     room = room_crud.update_room_name(db, room_id, request.name)
@@ -133,7 +115,7 @@ def delete_room(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
 
     room_crud.delete_room(db, room_id)
@@ -148,7 +130,7 @@ def get_room_messages(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
 
     messages = room_crud.get_recent_messages(db, room_id, limit=limit)
@@ -166,7 +148,7 @@ def delete_room_message(
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    _require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
 
     message = room_crud.get_message_by_id(db, message_id)
