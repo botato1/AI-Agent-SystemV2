@@ -1,4 +1,5 @@
-import { useState } from "react";
+// src/App.tsx
+import { useState, useEffect } from "react";
 import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
@@ -8,11 +9,12 @@ import GraphView from "./components/GraphView";
 import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
-import { mockChannels, mockTasks, mockContradictionLog, mockWorkspaces } from "./data/mockData";
 import { Channel, ContradictionLogEntry, Task, TaskPriority, TaskStatus, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
 import { useVoiceMeetings } from "./hooks/useVoiceMeetings";
 import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
+import { Language, translations } from "./data/translations";
+import { getMockData } from "./data/mockData"; // 구조화된 목업 가져오기
 
 type Selection = { type: "channel"; channel: Channel } | { type: "placeholder"; key: PlaceholderKey };
 
@@ -28,50 +30,76 @@ const PLACEHOLDER_LABELS: Record<
 > = {};
 
 export default function App() {
-  // 로그인/회원가입 - 실제 백엔드 없이 브라우저 메모리에만 저장 (새로고침하면 초기화됨)
+  const [lang, setLang] = useState<Language>("ko");
+  const t = translations[lang];
+  
+  // 현재 언어셋에 맞는 목업 데이터 미리 가져오기
+  const initialData = getMockData(lang);
+
+  // 로그인/회원가입 상태
   const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  // 워크스페이스 목록 - 생성/이름변경/전환 가능
-  const [workspaces, setWorkspaces] = useState<Workspace[]>(mockWorkspaces);
-  const [currentWorkspaceId, setCurrentWorkspaceId] = useState(mockWorkspaces[0].id);
+  // 워크스페이스 목록 관리
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(initialData.mockWorkspaces);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState(initialData.mockWorkspaces[0].id);
 
-  // 채팅방/할일을 워크스페이스 id별로 분리 저장 - 워크스페이스를 바꿔도 서로 안 섞이게 함
+  // 채팅방/할일/로그 등 목업 데이터 상태 분배
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, Channel[]>>({
-    [mockWorkspaces[0].id]: mockChannels,
+    [initialData.mockWorkspaces[0].id]: initialData.mockChannels,
   });
   const [tasksByWorkspace, setTasksByWorkspace] = useState<Record<string, Task[]>>({
-    [mockWorkspaces[0].id]: mockTasks,
+    [initialData.mockWorkspaces[0].id]: initialData.mockTasks,
   });
   const [contradictionLogByWorkspace, setContradictionLogByWorkspace] = useState<
     Record<string, ContradictionLogEntry[]>
   >({
-    [mockWorkspaces[0].id]: mockContradictionLog,
+    [initialData.mockWorkspaces[0].id]: initialData.mockContradictionLog,
   });
+
+  // 언어가 변경될 때 독립된 함수로부터 새로운 언어 목업 세트를 할당받아 에러 완치
+  useEffect(() => {
+    const data = getMockData(lang);
+    const defaultWsId = data.mockWorkspaces[0].id;
+
+    setWorkspaces(data.mockWorkspaces);
+    setCurrentWorkspaceId(defaultWsId);
+    setChannelsByWorkspace({
+      [defaultWsId]: data.mockChannels,
+    });
+    setTasksByWorkspace({
+      [defaultWsId]: data.mockTasks,
+    });
+    setContradictionLogByWorkspace({
+      [defaultWsId]: data.mockContradictionLog,
+    });
+    setSelection({
+      type: "channel",
+      channel: data.mockChannels[0],
+    });
+  }, [lang]);
+
   const channels = channelsByWorkspace[currentWorkspaceId] ?? [];
   const tasks = tasksByWorkspace[currentWorkspaceId] ?? [];
   const contradictionLog = contradictionLogByWorkspace[currentWorkspaceId] ?? [];
 
   const [selection, setSelection] = useState<Selection>({
     type: "channel",
-    channel: mockChannels[0],
+    channel: initialData.mockChannels[0],
   });
+  
   const [showProfile, setShowProfile] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
-  // 음성 회의/문서 분석 상태도 워크스페이스 id 기준으로 분리됨 (각 훅 내부에서 처리)
-  const voiceMeetings = useVoiceMeetings(currentWorkspaceId);
+  const voiceMeetings = useVoiceMeetings(currentWorkspaceId, lang);
   const hasRecording = voiceMeetings.meetings.some((m) => m.status === "recording");
   const hasPaused = voiceMeetings.meetings.some((m) => m.status === "paused");
   const voiceMeetingStatus = hasRecording ? "recording" : hasPaused ? "paused" : null;
 
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
-
-  // 지금 녹음 중인 회의가 있으면 "누가 시작했는지" 이름을 뽑아서 채팅방 참여자 아바타에 표시
   const activeRecorderName = voiceMeetings.meetings.find((m) => m.status === "recording")?.startedBy ?? null;
 
-  // 아직 로그인 안 했으면 로그인/회원가입 화면만 보여줌
   if (!currentUser) {
     return (
       <AuthView
@@ -119,8 +147,8 @@ export default function App() {
   function handleTaskStatusChange(id: string, newStatus: TaskStatus) {
     setTasksByWorkspace((prev) => ({
       ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((t) =>
-        t.id === id ? { ...t, status: newStatus } : t
+      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((tItem) =>
+        tItem.id === id ? { ...tItem, status: newStatus } : tItem
       ),
     }));
   }
@@ -128,8 +156,8 @@ export default function App() {
   function handleTaskPriorityChange(id: string, newPriority: TaskPriority) {
     setTasksByWorkspace((prev) => ({
       ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((t) =>
-        t.id === id ? { ...t, priority: newPriority } : t
+      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((tItem) =>
+        tItem.id === id ? { ...tItem, priority: newPriority } : tItem
       ),
     }));
   }
@@ -137,15 +165,14 @@ export default function App() {
   function handleDeleteTask(id: string) {
     setTasksByWorkspace((prev) => ({
       ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).filter((t) => t.id !== id),
+      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).filter((tItem) => tItem.id !== id),
     }));
   }
 
-  // 새 워크스페이스는 채널/할일이 하나도 없는 빈 상태로 시작 - 전환하면 대시보드로 이동
   function handleCreateWorkspace() {
     const newWorkspace: Workspace = {
       id: crypto.randomUUID(),
-      name: `워크스페이스 ${workspaces.length + 1}`,
+      name: `${t.name_new_workspace}${workspaces.length + 1}`,
     };
     setWorkspaces((prev) => [...prev, newWorkspace]);
     setChannelsByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
@@ -159,8 +186,6 @@ export default function App() {
     setWorkspaces((prev) => prev.map((w) => (w.id === id ? { ...w, name } : w)));
   }
 
-  // 워크스페이스 전환 - 지금 보고 있던 채널은 다른 워크스페이스 것일 수 있으니
-  // 새 워크스페이스의 첫 채널로(없으면 대시보드로) 화면을 옮겨줌
   function handleSelectWorkspace(id: string) {
     setCurrentWorkspaceId(id);
     const nextChannels = channelsByWorkspace[id] ?? [];
@@ -174,7 +199,7 @@ export default function App() {
   function handleCreateChannel() {
     const newChannel: Channel = {
       id: crypto.randomUUID(),
-      name: `채팅방 ${channels.length + 1}`,
+      name: `${t.name_new_chatroom}${channels.length + 1}`,
     };
     setChannelsByWorkspace((prev) => ({
       ...prev,
@@ -188,7 +213,6 @@ export default function App() {
       ...prev,
       [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((c) => (c.id === id ? { ...c, name } : c)),
     }));
-    // 지금 보고 있는 채널이 이름 바뀐 채널이면 selection도 최신 이름으로 갱신
     setSelection((prev) =>
       prev.type === "channel" && prev.channel.id === id
         ? { type: "channel", channel: { ...prev.channel, name } }
@@ -199,7 +223,6 @@ export default function App() {
   function handleDeleteChannel(id: string) {
     setChannelsByWorkspace((prev) => {
       const next = (prev[currentWorkspaceId] ?? []).filter((c) => c.id !== id);
-      // 지금 보고 있던 채널이 삭제된 채널이면, 남은 채널 중 첫 번째로 이동 (없으면 대시보드로)
       setSelection((sel) => {
         if (sel.type === "channel" && sel.channel.id === id) {
           return next.length > 0
@@ -235,12 +258,14 @@ export default function App() {
         onLogout={handleLogout}
         theme={theme}
         onToggleTheme={toggleTheme}
+        lang={lang}
+        t={t}
       />
 
       {selection.type === "channel" ? (
-        <MainArea channel={selection.channel} activeRecorderName={activeRecorderName} />
+        <MainArea channel={selection.channel} activeRecorderName={activeRecorderName} t={t} />
       ) : selection.key === "voiceMeeting" ? (
-        <VoiceMeetingView {...voiceMeetings} />
+        <VoiceMeetingView {...voiceMeetings} t={t} />
       ) : selection.key === "dashboard" ? (
         <DashboardView
           userName={currentUser.name}
@@ -250,9 +275,10 @@ export default function App() {
           onPriorityChange={handleTaskPriorityChange}
           onDeleteTask={handleDeleteTask}
           contradictionLog={contradictionLog}
+          t={t}
         />
       ) : selection.key === "docAnalysis" ? (
-        <DocumentAnalysisView {...documentAnalysis} />
+        <DocumentAnalysisView {...documentAnalysis} t={t} />
       ) : selection.key === "graph" ? (
         <GraphView
           documents={documentAnalysis.documents}
@@ -260,6 +286,7 @@ export default function App() {
             documentAnalysis.selectDocument(id);
             setSelection({ type: "placeholder", key: "docAnalysis" });
           }}
+          t={t}
         />
       ) : (
         <div className="flex h-full flex-1 items-center justify-center bg-recall-bgMain">
@@ -275,10 +302,18 @@ export default function App() {
           onClose={() => setShowProfile(false)}
           onChangeAvatarColor={handleChangeAvatarColor}
           onChangeAvatarImage={handleChangeAvatarImage}
+          t={t}
         />
       )}
       {showSettings && (
-        <Settings onClose={() => setShowSettings(false)} theme={theme} onToggleTheme={toggleTheme} />
+        <Settings
+          onClose={() => setShowSettings(false)}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          lang={lang}
+          onChangeLang={setLang}
+          t={t}
+        />
       )}
     </div>
   );

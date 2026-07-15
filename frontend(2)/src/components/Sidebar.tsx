@@ -17,15 +17,7 @@ import {
   CheckIcon,
 } from "./icons";
 
-// 카테고리 계층 없이 평평한 메뉴 구조: 대시보드/채팅방(메인) + 문서분석/음성회의/그래프뷰(분석)
 export type PlaceholderKey = "dashboard" | "docAnalysis" | "voiceMeeting" | "graph";
-
-// "메인" - 매일 들어가서 쓰는 것 (개요 + 실제 작업 공간, 회의도 여기 포함)
-// "분석" - 필요할 때 들여다보는 부가 도구
-const ANALYSIS_ITEMS: { key: PlaceholderKey; icon: typeof DocumentIcon; label: string }[] = [
-  { key: "docAnalysis", icon: DocumentIcon, label: "문서 분석" },
-  { key: "graph", icon: GraphIcon, label: "그래프뷰" },
-];
 
 interface SidebarProps {
   workspaces: Workspace[];
@@ -48,6 +40,8 @@ interface SidebarProps {
   onLogout: () => void;
   theme: Theme;
   onToggleTheme: () => void;
+  lang: any; // 언어 상태 프로퍼티 추가
+  t: any;    // 번역 사전 매핑 객체 추가
 }
 
 export default function Sidebar({
@@ -71,6 +65,8 @@ export default function Sidebar({
   onLogout,
   theme,
   onToggleTheme,
+  lang,
+  t,
 }: SidebarProps) {
   const [isChannelsExpanded, setIsChannelsExpanded] = useState(true);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -87,7 +83,11 @@ export default function Sidebar({
 
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId) ?? workspaces[0];
 
-  // 워크스페이스가 새로 생기면 바로 이름 입력 상태로 진입 (채널 만들기랑 같은 패턴)
+  const ANALYSIS_ITEMS: { key: PlaceholderKey; icon: typeof DocumentIcon; label: string }[] = [
+    { key: "docAnalysis", icon: DocumentIcon, label: t.sidebar_doc_analysis },
+    { key: "graph", icon: GraphIcon, label: t.sidebar_graph },
+  ];
+
   useEffect(() => {
     if (workspaces.length > prevWorkspaceCountRef.current) {
       const newest = workspaces[workspaces.length - 1];
@@ -120,7 +120,6 @@ export default function Sidebar({
     setEditingWorkspaceId(null);
   }
 
-  // 채널이 새로 생기면(개수가 늘어나면) 그 채널을 바로 이름 입력 상태로 진입시킴
   useEffect(() => {
     if (channels.length > prevChannelCountRef.current) {
       const newest = channels[channels.length - 1];
@@ -199,7 +198,7 @@ export default function Sidebar({
                       </button>
                       <button
                         onClick={() => startRenameWorkspace(ws)}
-                        aria-label="워크스페이스 이름 변경"
+                        aria-label="Rename workspace"
                         className="hidden flex-shrink-0 px-1.5 text-recall-textMuted hover:text-recall-text group-hover:inline"
                       >
                         <PencilIcon size={13} />
@@ -220,7 +219,7 @@ export default function Sidebar({
               className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
             >
               <PlusIcon size={15} className="flex-shrink-0" />
-              새 워크스페이스 만들기
+              {t.sidebar_new_workspace}
             </button>
           </div>
         )}
@@ -229,7 +228,7 @@ export default function Sidebar({
       <div className="flex-1 overflow-y-auto px-3">
         {/* 메인 그룹 */}
         <p className="mb-1.5 px-2 text-[11px] font-medium uppercase tracking-wide text-recall-textMuted">
-          메인
+          {t.main_group}
         </p>
 
         <button
@@ -241,7 +240,7 @@ export default function Sidebar({
           }`}
         >
           <HomeIcon size={16} className="flex-shrink-0" />
-          <span className="truncate">대시보드</span>
+          <span className="truncate">{t.sidebar_dashboard}</span>
         </button>
 
         <button
@@ -254,7 +253,7 @@ export default function Sidebar({
             <ChevronRightIcon size={13} className="flex-shrink-0" />
           )}
           <ChatIcon size={16} className="flex-shrink-0" />
-          <span className="truncate">채팅</span>
+          <span className="truncate">{t.sidebar_chat}</span>
         </button>
 
         {isChannelsExpanded && (
@@ -292,7 +291,7 @@ export default function Sidebar({
                           e.stopPropagation();
                           setOpenMenuChannelId(isMenuOpen ? null : channel.id);
                         }}
-                        aria-label="채팅방 옵션"
+                        aria-label="Channel options"
                         className="hidden flex-shrink-0 px-1.5 text-recall-textMuted hover:text-recall-text group-hover:inline"
                       >
                         <MoreIcon size={15} />
@@ -333,7 +332,7 @@ export default function Sidebar({
               className="mt-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
             >
               <PlusIcon size={15} className="flex-shrink-0" />
-              <span>채팅방 만들기</span>
+              <span>{t.sidebar_create_channel}</span>
             </button>
           </div>
         )}
@@ -347,20 +346,20 @@ export default function Sidebar({
           }`}
         >
           <MicIcon size={16} className="flex-shrink-0" />
-          <span className="truncate">음성 회의</span>
+          <span className="truncate">{t.sidebar_voice_meeting}</span>
           {voiceMeetingStatus && (
             <span
               className={`ml-auto h-1.5 w-1.5 flex-shrink-0 rounded-full ${
                 voiceMeetingStatus === "recording" ? "bg-recall-danger" : "bg-recall-textMuted"
               }`}
-              title={voiceMeetingStatus === "recording" ? "녹음 중" : "녹음 일시정지됨"}
+              title={voiceMeetingStatus === "recording" ? t.sidebar_recording : t.sidebar_paused}
             />
           )}
         </button>
 
         {/* 분석 그룹 */}
         <p className="mb-1.5 mt-4 px-2 text-[11px] font-medium uppercase tracking-wide text-recall-textMuted">
-          분석
+          {t.analysis_group}
         </p>
 
         {ANALYSIS_ITEMS.map((item) => {
@@ -389,6 +388,7 @@ export default function Sidebar({
         onLogout={onLogout}
         theme={theme}
         onToggleTheme={onToggleTheme}
+        t={t}
       />
     </div>
   );

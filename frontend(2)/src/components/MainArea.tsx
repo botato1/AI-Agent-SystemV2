@@ -1,12 +1,13 @@
+// src/components/MainArea.tsx
 import { useEffect, useRef, useState } from "react";
-import { Channel } from "../types";
+import { Channel, MemberActivity } from "../types"; // types.ts에서 정식 MemberActivity 타입을 가져옴 (충돌 해결!)
 import { SendIcon, DocumentIcon, MicIcon, PlusIcon, CloseIcon, SparklesIcon, WarningIcon, CheckIcon, UploadIcon } from "./icons";
 import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRuntime";
-import { mockMemberActivities } from "../data/mockData";
 
 interface MainAreaProps {
   channel: Channel;
   activeRecorderName: string | null;
+  t: any; // 번역 객체 타입
 }
 
 type Tab = "message" | "docs" | "aiChat";
@@ -17,18 +18,19 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-// 채팅 입력창 - "+"로 문서/음성 업로드 선택. 드래그앤드롭 대기 파일 목록은 부모(MessageTab)가 관리해서
-// 화면 전체 어디에 드롭해도 여기 칩으로 쌓이게 함 (텍스트 없이 파일만 보내는 것도 가능)
+// 채팅 입력창 - "+"로 문서/음성 업로드 선택
 function ComposerBar({
   pendingFiles,
   onAddFiles,
   onRemovePendingFile,
   onSend,
+  t,
 }: {
   pendingFiles: File[];
   onAddFiles: (fileList: FileList | null) => void;
   onRemovePendingFile: (index: number) => void;
   onSend: (text: string) => void;
+  t: any;
 }) {
   const [input, setInput] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -49,7 +51,6 @@ function ComposerBar({
 
   function handleSend() {
     const text = input.trim();
-    // 텍스트도 없고 대기 중인 파일도 없으면 보낼 게 없음
     if (!text && pendingFiles.length === 0) return;
     onSend(text);
     setInput("");
@@ -90,7 +91,7 @@ function ComposerBar({
               <span className="max-w-[140px] truncate">{file.name}</span>
               <button
                 onClick={() => onRemovePendingFile(i)}
-                aria-label="첨부 제거"
+                aria-label="Remove attachment"
                 className="text-recall-textMuted hover:text-recall-danger"
               >
                 <CloseIcon size={13} />
@@ -128,7 +129,7 @@ function ComposerBar({
           )}
           <button
             onClick={() => setIsMenuOpen((v) => !v)}
-            aria-label="업로드"
+            aria-label="Upload"
             className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-recall-accent/10 text-recall-accent hover:bg-recall-accent/20"
           >
             <PlusIcon size={16} />
@@ -144,14 +145,14 @@ function ComposerBar({
               handleSend();
             }
           }}
-          placeholder="메시지 보내기... (Enter로 전송)"
+          placeholder={t.chat_input_placeholder}
           rows={1}
           className="max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none"
         />
 
         <button
           onClick={handleSend}
-          aria-label="보내기"
+          aria-label="Send"
           className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl transition ${
             input.trim() || pendingFiles.length > 0
               ? "bg-recall-accent text-white"
@@ -165,39 +166,38 @@ function ComposerBar({
   );
 }
 
-// 모순 감지 패널 - 메시지 탭 오른쪽에 항상 떠있는 패널 (더미 데이터, 기존유지/변경 두 버튼)
-function ContradictionPanel() {
+// 모순 감지 패널
+function ContradictionPanel({ t }: { t: any }) {
   const [resolved, setResolved] = useState<"kept" | "changed" | null>(null);
 
   return (
     <div className="flex w-64 flex-shrink-0 flex-col rounded-lg border border-recall-border bg-recall-bgSoft p-3">
       <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
         <WarningIcon size={13} className="text-recall-danger" />
-        모순 감지 내역
+        {t.dashboard_contradiction_title}
       </p>
       {resolved ? (
         <p className="flex items-center gap-1.5 text-sm text-recall-textMuted">
           <CheckIcon size={15} className="text-recall-accent" />
-          {resolved === "kept" ? "기존 내용을 유지했어요." : "새 내용으로 변경했어요."}
+          {resolved === "kept" ? t.contradiction_resolved_kept : t.contradiction_resolved_changed}
         </p>
       ) : (
         <>
           <p className="mb-4 text-sm text-recall-text">
-            지수님이 6/19에 "게이트웨이는 하나로 통합"하기로 했는데, 승주님이 방금 올린 문서엔
-            "게이트웨이를 분리"하는 내용으로 되어있어요. 어느 쪽이 맞나요?
+            {t.contradiction_panel_desc}
           </p>
           <div className="flex gap-2">
             <button
               onClick={() => setResolved("kept")}
               className="flex-1 rounded-lg border border-recall-border px-2 py-1.5 text-xs text-recall-text hover:bg-white/5"
             >
-              기존 유지
+              {t.contradiction_btn_keep}
             </button>
             <button
               onClick={() => setResolved("changed")}
               className="flex-1 rounded-lg border border-recall-accent px-2 py-1.5 text-xs text-recall-accent hover:bg-recall-accent/10"
             >
-              변경
+              {t.contradiction_btn_change}
             </button>
           </div>
         </>
@@ -206,20 +206,23 @@ function ContradictionPanel() {
   );
 }
 
-// 메시지 탭: 왼쪽엔 팀원별 최근 활동 + 실제 채팅 내역, 오른쪽엔 모순 감지 패널
-// 화면 전체(이 탭 영역) 어디에 파일을 끌어다 놓아도 감지해서 오버레이 + 대기 칩으로 쌓임
+// 메시지 탭
 function MessageTab({
   messages,
   onSend,
   onUploadFiles,
+  t,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
   onUploadFiles: (files: File[], kind: "file" | "voice") => void;
+  t: any;
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
+
+  const memberActivities: MemberActivity[] = t.mock_member_activities || [];
 
   function addPendingFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -234,7 +237,6 @@ function MessageTab({
     if (text) onSend(text);
 
     if (pendingFiles.length > 0) {
-      // mime 타입으로 문서/음성 자동 구분해서 각각 올림
       const voiceFiles = pendingFiles.filter((f) => f.type.startsWith("audio/"));
       const docFiles = pendingFiles.filter((f) => !f.type.startsWith("audio/"));
       if (docFiles.length > 0) onUploadFiles(docFiles, "file");
@@ -244,7 +246,7 @@ function MessageTab({
     setPendingFiles([]);
   }
 
-  return (
+ return (
     <div
       onDragEnter={(e) => {
         e.preventDefault();
@@ -268,34 +270,34 @@ function MessageTab({
       {isDragOver && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-recall-bg/85 backdrop-blur-sm">
           <UploadIcon size={22} className="text-recall-accent" />
-          <p className="text-base font-medium text-recall-text">파일을 올려두세요</p>
+          <p className="text-base font-medium text-recall-text">{t.drop_overlay}</p>
         </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex-1 space-y-3 overflow-y-auto">
-         {mockMemberActivities.map((activity) =>
-  activity.isAi ? (
-    <div
-      key={activity.name}
-      className="flex items-start gap-1.5 rounded-lg border border-recall-border px-3 py-2"
-    >
-      <SparklesIcon size={13} className="mt-0.5 flex-shrink-0 text-recall-accent" />
-      <p className="text-sm text-recall-text">{activity.preview}</p>
-    </div>
-  ) : (
-    <div key={activity.name} className="flex gap-2">
-      <div className="h-7 w-7 flex-shrink-0 rounded-full bg-recall-accent/30" />
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-recall-text">{activity.name}</p>
-        <p className="flex items-center gap-1 truncate text-sm text-recall-textMuted">
-          {activity.kind === "upload" && <DocumentIcon size={13} className="flex-shrink-0" />}
-          {activity.preview}
-        </p>
-      </div>
-    </div>
-  )
-)}
+          {memberActivities.map((activity: MemberActivity) =>
+            activity.isAi ? (
+              <div
+                key={activity.name}
+                className="flex items-start gap-1.5 rounded-lg border border-recall-border px-3 py-2"
+              >
+                <SparklesIcon size={13} className="mt-0.5 flex-shrink-0 text-recall-accent" />
+                <p className="text-sm text-recall-text">{activity.preview}</p>
+              </div>
+            ) : (
+              <div key={activity.name} className="flex gap-2">
+                <div className="h-7 w-7 flex-shrink-0 rounded-full bg-recall-accent/30" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-recall-text">{activity.name}</p>
+                  <p className="flex items-center gap-1 truncate text-sm text-recall-textMuted">
+                    {activity.kind === "upload" && <DocumentIcon size={13} className="flex-shrink-0" />}
+                    {activity.preview}
+                  </p>
+                </div>
+              </div>
+            )
+          )}
 
           {messages.map((m) => (
             <div key={m.id} className="flex gap-2">
@@ -313,24 +315,26 @@ function MessageTab({
           onAddFiles={addPendingFiles}
           onRemovePendingFile={removePendingFile}
           onSend={handleSend}
+          t={t}
         />
       </div>
 
-      <ContradictionPanel />
+      <ContradictionPanel t={t} />
     </div>
   );
 }
 
-// 문서보관함 탭: 문서/음성 파일 목록 (채팅 "+"로 올린 것도 여기 같이 보임)
-// 화면 전체 어디에 파일을 끌어다 놓아도 감지해서 오버레이가 뜸
+// 문서보관함 탭
 function DocsTab({
   docs,
   onUploadFiles,
   onRemoveDoc,
+  t,
 }: {
   docs: DocItem[];
   onUploadFiles: (fileList: FileList | null, kind: "file" | "voice") => void;
   onRemoveDoc: (id: string) => void;
+  t: any;
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -360,7 +364,7 @@ function DocsTab({
       {isDragOver && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-recall-bg/85 backdrop-blur-sm">
           <UploadIcon size={22} className="text-recall-accent" />
-          <p className="text-base font-medium text-recall-text">파일을 올려두세요</p>
+          <p className="text-base font-medium text-recall-text">{t.drop_overlay}</p>
         </div>
       )}
 
@@ -379,8 +383,8 @@ function DocsTab({
         onClick={() => fileInputRef.current?.click()}
         className="mb-3 flex flex-col items-center justify-center rounded-lg border border-dashed border-recall-border px-3 py-6 text-center hover:bg-white/5"
       >
-        <p className="text-sm text-recall-text">파일을 끌어다 놓거나 클릭해서 선택하세요</p>
-        <p className="mt-1 text-xs text-recall-textMuted">PDF, DOCX, 이미지 등</p>
+        <p className="text-sm text-recall-text">{t.docs_tab_msg}</p>
+        <p className="mt-1 text-xs text-recall-textMuted">{t.docs_tab_sub}</p>
       </button>
 
       <div className="space-y-2">
@@ -420,8 +424,8 @@ interface AiMessage {
   text: string;
 }
 
-// AI Chat 탭: 이 채팅방(메시지+문서)을 참고해서 답하는 AI, 전체 탭 하나를 다 씀
-function AiChatTab() {
+// AI Chat 탭
+function AiChatTab({ t }: { t: any }) {
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
@@ -438,7 +442,7 @@ function AiChatTab() {
         {
           id: crypto.randomUUID(),
           from: "ai",
-          text: "이 채팅방의 메시지·문서를 참고해서 답할게요. (지금은 더미 답변이에요, API 연동 전)",
+          text: t.ai_chat_dummy_answer,
         },
       ]);
       setIsThinking(false);
@@ -449,7 +453,7 @@ function AiChatTab() {
     <div className="flex flex-1 flex-col">
       <div className="flex-1 space-y-2 overflow-y-auto">
         {messages.length === 0 && (
-          <p className="text-sm text-recall-textMuted">이 채팅방 내용에 대해 뭐든 물어보세요.</p>
+          <p className="text-sm text-recall-textMuted">{t.ai_chat_welcome}</p>
         )}
         {messages.map((m) => (
           <div
@@ -463,19 +467,19 @@ function AiChatTab() {
             {m.text}
           </div>
         ))}
-        {isThinking && <p className="text-xs text-recall-textMuted">답변 작성 중...</p>}
+        {isThinking && <p className="text-xs text-recall-textMuted">{t.ai_chat_thinking}</p>}
       </div>
       <div className="mt-3 flex gap-2">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="궁금한 점을 입력하세요"
+          placeholder={t.ai_input_placeholder}
           className="flex-1 rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
         />
         <button
           onClick={handleSend}
-          aria-label="전송"
+          aria-label="Send"
           className="flex flex-shrink-0 items-center justify-center rounded-lg border border-recall-border px-3 py-2 text-sm text-recall-text hover:bg-white/5"
         >
           <SendIcon size={14} />
@@ -485,20 +489,18 @@ function AiChatTab() {
   );
 }
 
-export default function MainArea({ channel, activeRecorderName }: MainAreaProps) {
+export default function MainArea({ channel, activeRecorderName, t }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
 
-  // 채널 id 단위로 독립적인 채팅/문서 상태 (다른 채널로 넘어가도 안 섞이고, 돌아오면 그대로 이어짐)
   const { chatMessages, docs, sendChatMessage, addDocFiles, removeDoc } = useChannelRuntime(channel.id);
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: "message", label: "메시지" },
-    { id: "docs", label: "문서보관함" },
-    { id: "aiChat", label: "AI" },
+    { id: "message", label: t.chat_tab_message },
+    { id: "docs", label: t.chat_tab_docs },
+    { id: "aiChat", label: t.chat_tab_ai },
   ];
 
-  // 참여 중인 팀원 아바타 - 더미
-  const participants = ["지수", "나연", "승주", "동현"];
+  const participants = [t.name_jisu, t.name_nayeon, t.name_seungju, t.name_donghyun];
 
   return (
     <div className="flex h-full flex-1 flex-col bg-recall-bgMain p-3">
@@ -509,7 +511,7 @@ export default function MainArea({ channel, activeRecorderName }: MainAreaProps)
             {participants.map((name) => {
               const isRecording = name === activeRecorderName;
               return (
-                <div key={name} title={isRecording ? `${name} · 녹음 중` : name} className="relative">
+                <div key={name} title={isRecording ? `${name} · ${t.sidebar_recording}` : name} className="relative">
                   <div
                     className={`h-6 w-6 flex-shrink-0 rounded-full border-2 bg-recall-accent/40 ${
                       isRecording ? "border-recall-danger" : "border-recall-bgMain"
@@ -537,7 +539,7 @@ export default function MainArea({ channel, activeRecorderName }: MainAreaProps)
               activeTab === tab.id
                 ? "border-b-2 border-recall-accent text-recall-text"
                 : "text-recall-textMuted hover:text-recall-text"
-            }`}
+              }`}
           >
             {tab.label}
           </button>
@@ -549,6 +551,7 @@ export default function MainArea({ channel, activeRecorderName }: MainAreaProps)
           messages={chatMessages}
           onSend={sendChatMessage}
           onUploadFiles={(files, kind) => addDocFiles(files, kind, true)}
+          t={t}
         />
       )}
       {activeTab === "docs" && (
@@ -556,9 +559,10 @@ export default function MainArea({ channel, activeRecorderName }: MainAreaProps)
           docs={docs}
           onUploadFiles={(files, kind) => addDocFiles(files, kind, false)}
           onRemoveDoc={removeDoc}
+          t={t}
         />
       )}
-      {activeTab === "aiChat" && <AiChatTab />}
+      {activeTab === "aiChat" && <AiChatTab t={t} />}
     </div>
   );
 }

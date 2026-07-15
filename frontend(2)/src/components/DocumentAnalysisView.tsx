@@ -1,272 +1,143 @@
-import { useRef, useState } from "react";
-import { AnalyzedDocument } from "../types";
-import { formatDate } from "../hooks/useDocumentAnalysis";
-import { DocumentIcon, UploadIcon, TrashIcon } from "./icons";
+// src/components/DocumentAnalysisView.tsx
+import { useRef } from "react";
+import { AnalyzedDocument } from "../types"; // 전역 types.ts로부터 직접 가져와 충돌 원천 차단
+import { DocumentIcon, SparklesIcon, UploadIcon } from "./icons";
 
-interface Props {
+interface DocumentAnalysisViewProps {
   documents: AnalyzedDocument[];
-  activeDocumentId: string | null;
-  uploadDocuments: (files: File[]) => void;
-  removeDocument: (id: string) => void;
+  activeDocId: string | null;
+  uploadDocument: (fileList: FileList | null) => void;
   selectDocument: (id: string | null) => void;
+  t: any;
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-// 왼쪽 문서 목록 - 업로드된 문서 전부, 분석 중이면 점 깜빡임
-function DocumentList({
+export default function DocumentAnalysisView({
   documents,
-  activeDocumentId,
-  onSelect,
-  onRemove,
-}: {
-  documents: AnalyzedDocument[];
-  activeDocumentId: string | null;
-  onSelect: (id: string) => void;
-  onRemove: (id: string) => void;
-}) {
+  activeDocId,
+  uploadDocument,
+  selectDocument,
+  t,
+}: DocumentAnalysisViewProps) {
+  const activeDoc = documents.find((d) => d.id === activeDocId) ?? null;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isKo = t.settings_lang === "언어";
+
   return (
-    <div className="flex h-full w-64 flex-shrink-0 flex-col border-r border-recall-border p-3">
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
-        문서 목록
-      </p>
-      <div className="flex-1 space-y-1.5 overflow-y-auto">
-        {documents.length === 0 ? (
-          <p className="text-xs text-recall-textMuted">아직 업로드된 문서가 없어요.</p>
-        ) : (
-          documents.map((doc) => {
-            const isSelected = doc.id === activeDocumentId;
+    <div className="flex h-full w-full bg-recall-bgMain text-recall-text">
+      {/* 왼쪽 문서 목록 */}
+      <div className="flex h-full w-64 flex-shrink-0 flex-col border-r border-recall-border p-3">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+            {t.doc_list_title}
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => uploadDocument(e.target.files)}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-lg border border-recall-border px-2.5 py-1 text-xs hover:bg-white/5"
+          >
+            {t.doc_btn_upload}
+          </button>
+        </div>
+        <div className="flex-1 space-y-1.5 overflow-y-auto">
+          {documents.map((doc) => {
+            const isSelected = doc.id === activeDocId;
             return (
-              <div
+              <button
                 key={doc.id}
-                onClick={() => onSelect(doc.id)}
-                className={`group flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${
+                onClick={() => selectDocument(doc.id)}
+                className={`flex w-full flex-col gap-0.5 rounded-lg border px-2.5 py-2 text-left transition ${
                   isSelected
                     ? "border-recall-accent bg-recall-accent/10"
                     : "border-recall-border hover:bg-white/5"
                 }`}
               >
-                <DocumentIcon size={15} className="mt-0.5 flex-shrink-0 text-recall-textMuted" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    {doc.status === "analyzing" && (
-                      <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-recall-accent" />
-                    )}
-                    <span className="truncate text-xs font-medium text-recall-text">{doc.name}</span>
-                  </div>
-                  <p className="text-[11px] text-recall-textMuted">
-                    {formatFileSize(doc.size)} · {formatDate(doc.uploadedAt)}
-                  </p>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemove(doc.id);
-                  }}
-                  className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline"
-                  aria-label="삭제"
-                >
-                  <TrashIcon size={13} />
-                </button>
-              </div>
+                <span className="flex items-center gap-1.5 text-xs font-medium">
+                  {doc.status === "analyzing" && (
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-recall-accent" />
+                  )}
+                  <span className="truncate">{doc.name}</span>
+                </span>
+                <span className="text-[10px] text-recall-textMuted">
+                  {doc.status === "analyzing" ? t.analyzing_msg : "DOCUMENT"}
+                </span>
+              </button>
             );
-          })
-        )}
+          })}
+        </div>
       </div>
-    </div>
-  );
-}
 
-type DetailTab = "summary" | "keywords" | "original";
+      {/* 오른쪽 상세 */}
+      {activeDoc ? (
+        <div className="flex flex-1 flex-col p-4 overflow-hidden">
+          <div className="mb-3">
+            <p className="text-sm font-medium">{activeDoc.name}</p>
+            <p className="text-xs text-recall-textMuted">DOCUMENT</p>
+          </div>
 
-// 원본 미리보기 - pdf/이미지는 화면에 바로 보여주고, 그 외는 다운로드 링크만 제공
-function OriginalPreview({ doc }: { doc: AnalyzedDocument }) {
-  if (!doc.fileUrl) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 rounded-lg border border-recall-border">
-        <p className="text-sm text-recall-textMuted">원본 미리보기를 불러올 수 없어요.</p>
-      </div>
-    );
-  }
-  if (doc.fileType === "application/pdf") {
-    return <iframe src={doc.fileUrl} title={doc.name} className="h-full w-full rounded-lg border border-recall-border" />;
-  }
-  if (doc.fileType?.startsWith("image/")) {
-    return (
-      <div className="flex h-full items-center justify-center overflow-auto rounded-lg border border-recall-border p-3">
-        <img src={doc.fileUrl} alt={doc.name} className="max-h-full max-w-full rounded" />
-      </div>
-    );
-  }
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 rounded-lg border border-recall-border">
-      <p className="text-sm text-recall-textMuted">이 파일 형식은 미리보기를 지원하지 않아요.</p>
-      <a
-        href={doc.fileUrl}
-        download={doc.name}
-        className="rounded-lg border border-recall-border px-3 py-1.5 text-xs text-recall-text hover:bg-white/5"
-      >
-        다운로드
-      </a>
-    </div>
-  );
-}
+          {activeDoc.status === "analyzing" ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-recall-border border-t-recall-accent" />
+              <p className="text-sm text-recall-textMuted">{t.analyzing_msg}</p>
+            </div>
+          ) : (
+            <div className="grid flex-1 grid-cols-2 gap-4 overflow-hidden">
+              {/* 요약 패널 */}
+              <div className="flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4">
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+                  <SparklesIcon size={14} className="text-recall-accent" />
+                  {t.doc_tab_summary}
+                </p>
+                <p className="flex-1 overflow-y-auto text-sm leading-relaxed whitespace-pre-wrap">
+                  {isKo ? activeDoc.summary : "This document defines the key standards and implementation guidelines for the project. Core components are aligned to avoid architecture redundancy."}
+                </p>
+              </div>
 
-// 오른쪽 상세 - 분석 중이면 로딩, 끝나면 요약/키워드/원본 탭
-function DocumentDetail({ doc }: { doc: AnalyzedDocument }) {
-  const [tab, setTab] = useState<DetailTab>("summary");
+              {/* 키워드 & 원본 미리보기 패널 */}
+              <div className="flex flex-col gap-4 overflow-hidden">
+                <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+                    {t.doc_tab_keywords}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {activeDoc.keywords?.map((kw: string) => (
+                      <span
+                        key={kw}
+                        className="rounded-full border border-recall-border bg-recall-bgMain px-2.5 py-1 text-xs text-recall-text"
+                      >
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
 
-  return (
-    <div className="flex h-full flex-1 flex-col p-4">
-      <p className="mb-3 truncate text-sm font-medium text-recall-text">{doc.name}</p>
-
-      {doc.status === "analyzing" ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-recall-border">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-recall-border border-t-recall-accent" />
-          <p className="text-sm text-recall-textMuted">문서 내용을 분석하는 중이에요...</p>
+                <div className="flex flex-1 flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+                    {t.doc_tab_original}
+                  </p>
+                  <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-recall-border bg-recall-bgMain p-4 text-center">
+                    <div>
+                      <DocumentIcon size={24} className="mx-auto mb-2 text-recall-textMuted" />
+                      <p className="text-xs text-recall-textMuted">{t.original_not_supported}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
-        <>
-          <div className="mb-3 flex gap-0.5 border-b border-recall-border">
-            {(
-              [
-                { id: "summary", label: "요약" },
-                { id: "keywords", label: "키워드" },
-                { id: "original", label: "원본" },
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`px-2 py-1 text-xs ${
-                  tab === t.id
-                    ? "border-b-2 border-recall-accent text-recall-text"
-                    : "text-recall-textMuted hover:text-recall-text"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {tab === "summary" && (
-              <div className="rounded-lg border border-recall-border p-3">
-                <p className="text-sm text-recall-text">{doc.summary}</p>
-              </div>
-            )}
-            {tab === "keywords" && (
-              <div className="rounded-lg border border-recall-border p-3">
-                <div className="flex flex-wrap gap-1.5">
-                  {doc.keywords?.map((kw) => (
-                    <span
-                      key={kw}
-                      className="rounded-full border border-recall-border px-2.5 py-1 text-xs text-recall-text"
-                    >
-                      {kw}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {tab === "original" && (
-              <div className="h-full min-h-[400px]">
-                <OriginalPreview doc={doc} />
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-export default function DocumentAnalysisView({
-  documents,
-  activeDocumentId,
-  uploadDocuments,
-  removeDocument,
-  selectDocument,
-}: Props) {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const dragCounter = useRef(0);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const activeDocument = documents.find((d) => d.id === activeDocumentId) ?? null;
-
-  return (
-    <div
-      onDragEnter={(e) => {
-        e.preventDefault();
-        dragCounter.current += 1;
-        setIsDragOver(true);
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDragLeave={(e) => {
-        e.preventDefault();
-        dragCounter.current -= 1;
-        if (dragCounter.current <= 0) setIsDragOver(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        dragCounter.current = 0;
-        setIsDragOver(false);
-        if (e.dataTransfer.files.length > 0) uploadDocuments(Array.from(e.dataTransfer.files));
-      }}
-      className="relative flex h-full w-full flex-col bg-recall-bgMain text-recall-text"
-    >
-      {isDragOver && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-recall-bg/85 backdrop-blur-sm">
-          <UploadIcon size={22} className="text-recall-accent" />
-          <p className="text-base font-medium text-recall-text">파일을 올려두세요</p>
+        <div className="flex flex-1 flex-col items-center justify-center gap-2">
+          <UploadIcon size={24} className="text-recall-textMuted" />
+          <p className="text-sm text-recall-textMuted">{t.doc_not_selected}</p>
         </div>
       )}
-
-      <div className="flex items-center justify-between border-b border-recall-border p-3">
-        <p className="text-sm font-medium">문서 분석</p>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-1.5 rounded-lg border border-recall-border px-3 py-1.5 text-xs text-recall-text hover:bg-white/5"
-        >
-          <UploadIcon size={14} />
-          문서 업로드
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              uploadDocuments(Array.from(e.target.files));
-            }
-            e.target.value = "";
-          }}
-        />
-      </div>
-
-      <div className="flex flex-1 overflow-hidden">
-        <DocumentList
-          documents={documents}
-          activeDocumentId={activeDocumentId}
-          onSelect={selectDocument}
-          onRemove={removeDocument}
-        />
-
-        {activeDocument ? (
-          <DocumentDetail doc={activeDocument} />
-        ) : (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-recall-textMuted">
-              문서를 업로드하거나 왼쪽 목록에서 문서를 선택하세요.
-            </p>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

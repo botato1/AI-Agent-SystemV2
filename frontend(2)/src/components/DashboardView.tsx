@@ -12,45 +12,39 @@ interface DashboardViewProps {
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
   onDeleteTask: (id: string) => void;
   contradictionLog: ContradictionLogEntry[];
+  t: any; // App.tsx에서 주입되는 번역 객체
 }
 
 type DashboardTab = "tasks" | "log";
 
-function todayGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "좋은 아침이에요";
-  if (hour < 18) return "오늘도 화이팅이에요";
-  return "오늘 하루도 고생 많았어요";
-}
-
-function statusBadge(status: ContradictionLogEntry["status"]) {
+function statusBadge(status: ContradictionLogEntry["status"], t: any) {
   if (status === "pending") {
     return (
       <span className="rounded-full bg-recall-danger/15 px-2 py-0.5 text-[11px] text-recall-danger">
-        확인 필요
+        {t.dashboard_contradiction_pending}
       </span>
     );
   }
   if (status === "kept") {
     return (
       <span className="rounded-full bg-recall-border px-2 py-0.5 text-[11px] text-recall-textMuted">
-        기존 유지됨
+        {t.dashboard_contradiction_kept}
       </span>
     );
   }
   return (
     <span className="rounded-full bg-recall-accent/15 px-2 py-0.5 text-[11px] text-recall-accent">
-      변경됨
+      {t.dashboard_contradiction_changed}
     </span>
   );
 }
 
 // 모순 감지 로그 - 채널/회의 전반에서 감지된 모순 이력
-function ContradictionLogList({ log }: { log: ContradictionLogEntry[] }) {
+function ContradictionLogList({ log, t }: { log: ContradictionLogEntry[]; t: any }) {
   return (
     <div className="space-y-2">
       {log.length === 0 ? (
-        <p className="text-sm text-recall-textMuted">아직 감지된 모순이 없어요.</p>
+        <p className="text-sm text-recall-textMuted">{t.dashboard_no_contradiction}</p>
       ) : (
         log.map((entry) => (
           <div key={entry.id} className="rounded-lg border border-recall-border p-3">
@@ -62,7 +56,7 @@ function ContradictionLogList({ log }: { log: ContradictionLogEntry[] }) {
               <span className="text-[11px] text-recall-textMuted">{entry.date}</span>
             </div>
             <p className="mb-1.5 text-sm text-recall-text">{entry.description}</p>
-            {statusBadge(entry.status)}
+            {statusBadge(entry.status, t)}
           </div>
         ))
       )}
@@ -78,24 +72,19 @@ export default function DashboardView({
   onPriorityChange,
   onDeleteTask,
   contradictionLog,
+  t,
 }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("tasks");
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const tabs: { id: DashboardTab; label: string }[] = [
-    { id: "tasks", label: "할일" },
-    { id: "log", label: "로그" },
+    { id: "tasks", label: t.dashboard_tab_tasks },
+    { id: "log", label: t.dashboard_tab_log },
   ];
 
   return (
     <div className="flex h-full w-full flex-col bg-recall-bgMain p-4">
-      <div className="mb-4">
-        <p className="text-lg font-semibold text-recall-text">
-          {todayGreeting()}, {userName}님
-        </p>
-        <p className="text-sm text-recall-textMuted">오늘도 당신의 업무를 스마트하게 도와드릴게요.</p>
-      </div>
-
+      {/* 사용자 그리팅 메시지 및 보조 멘트 영역이 완전히 제거되어 콘텐츠가 상단부터 시작합니다 */}
       <div className="mb-3 flex gap-0.5 border-b border-recall-border">
         {tabs.map((tab) => (
           <button
@@ -120,14 +109,16 @@ export default function DashboardView({
             onStatusChange={onStatusChange}
             onPriorityChange={onPriorityChange}
             onDelete={onDeleteTask}
+            t={t}
           />
         ) : (
-          <ContradictionLogList log={contradictionLog} />
+          <ContradictionLogList log={contradictionLog} t={t} />
         )}
       </div>
 
       {showCreateModal && (
-        <CreateTaskModal onClose={() => setShowCreateModal(false)} onCreate={onCreateTask} />
+        <CreateTaskModal onClose={() => setShowCreateModal(false)} onCreate={onCreateTask}
+        t={t} />
       )}
     </div>
   );

@@ -1,3 +1,5 @@
+// src/types.ts
+
 // 카테고리 계층 없이 채팅방(채널) 하나하나가 사이드바에 바로 나열되는 구조로 변경
 export interface Channel {
   id: string;
@@ -22,8 +24,8 @@ export interface User {
   name: string;
   username: string; // 로그인용 아이디 (중복 불가)
   status: "online" | "away" | "offline";
-  avatarColor: string; // 프로필 동그라미 색상 (회원가입 때 고르거나, 안 고르면 랜덤 배정)
-  avatarImageUrl: string | null; // 직접 업로드한 사진 - 있으면 색상 대신 이걸 보여줌
+  avatarColor: string; // 프로필 동그라미 색상
+  avatarImageUrl: string | null; // 직접 업로드한 사진
 }
 
 // 대시보드 - 할 일 (칸반보드)
@@ -39,7 +41,7 @@ export interface Task {
   priority: TaskPriority;
 }
 
-// 대시보드 - 모순 감지 로그 (채널별 회의/채팅에서 감지된 모순 이력)
+// 대시보드 - 모순 감지 로그
 export interface ContradictionLogEntry {
   id: string;
   channelName: string;
@@ -48,8 +50,8 @@ export interface ContradictionLogEntry {
   date: string;
 }
 
-// 문서 분석
-export type DocumentAnalysisStatus = "analyzing" | "done";
+// [핵심 교정] 훅과 뷰 컴포넌트 전체가 사용하는 규격에 맞게 "analyzed"로 통일합니다.
+export type DocumentAnalysisStatus = "analyzing" | "analyzed";
 
 export interface AnalyzedDocument {
   id: string;
@@ -57,8 +59,8 @@ export interface AnalyzedDocument {
   size: number;
   uploadedAt: number;
   status: DocumentAnalysisStatus;
-  summary: string | null; // 분석 끝나면 채워짐 (더미)
-  keywords: string[] | null; // 분석 끝나면 채워짐 (더미)
-  fileType: string; // 원본 미리보기 방식을 결정하는 mime 타입 (예: application/pdf, image/png)
-  fileUrl: string; // URL.createObjectURL로 만든 임시 URL - 원본 보기/다운로드용
+  summary: string | null; // 분석 끝나면 채워짐
+  keywords: string[] | null; // 분석 끝나면 채워짐
+  fileType: string; // 원본 미리보기용 mime 타입
+  fileUrl: string; // 임시 URL
 }

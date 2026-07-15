@@ -11,10 +11,9 @@ interface ProfilePopupProps {
   onLogout: () => void;
   theme: Theme;
   onToggleTheme: () => void;
+  t: any; // 다국어 번역 객체 추가
 }
 
-// Ver2에서 만들었던 사이드바 프로필 팝업과 동일한 패턴:
-// isOpen state로 토글, 바깥 클릭하면 자동으로 닫힘 (useRef + click 이벤트로 감지)
 export default function ProfilePopup({
   user,
   onOpenProfile,
@@ -22,6 +21,7 @@ export default function ProfilePopup({
   onLogout,
   theme,
   onToggleTheme,
+  t, // props 구조 분해 할당 추가
 }: ProfilePopupProps) {
   const [isOpen, setIsOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -37,12 +37,18 @@ export default function ProfilePopup({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // 아이콘 없이 텍스트 라벨만 사용 (리스트형)
-  // 내 프로필 = 계정 정보 전용 작은 모달, 설정 = 워크스페이스/알림/화면 모달
+  // 한글 메뉴 텍스트를 t를 활용해 번역 처리
   const menuItems: { label: string; onClick: () => void }[] = [
-    { label: "내 프로필", onClick: onOpenProfile },
-    { label: "설정", onClick: onOpenSettings },
+    { label: t.profile_my_profile, onClick: onOpenProfile },
+    { label: t.settings_title, onClick: onOpenSettings },
   ];
+
+  // 유저의 온라인 상태 번역 헬퍼 함수
+  function getStatusLabel(status: string) {
+    if (status === "online") return t.profile_status_online;
+    if (status === "away") return t.profile_status_away;
+    return t.profile_status_offline;
+  }
 
   return (
     <div ref={wrapperRef} className="relative mt-auto px-2 pb-2">
@@ -65,7 +71,7 @@ export default function ProfilePopup({
             className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-recall-text hover:bg-white/5"
           >
             {theme === "dark" ? <MoonIcon size={14} /> : <SunIcon size={14} />}
-            {theme === "dark" ? "다크 모드" : "라이트 모드"}
+            {theme === "dark" ? t.settings_theme_dark : t.settings_theme_light}
           </button>
           <div className="my-1 border-t border-recall-border" />
           <button
@@ -75,7 +81,7 @@ export default function ProfilePopup({
             }}
             className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-sm text-recall-danger hover:bg-white/5"
           >
-            로그아웃
+            {t.logout}
           </button>
         </div>
       )}
@@ -88,7 +94,7 @@ export default function ProfilePopup({
         <div className="min-w-0 flex-1 text-left">
           <p className="truncate text-sm font-medium text-recall-text">{user.name}</p>
           <p className="truncate text-xs text-recall-textMuted">
-            {user.status === "online" ? "온라인" : user.status === "away" ? "자리비움" : "오프라인"}
+            {getStatusLabel(user.status)}
           </p>
         </div>
         <span className="text-recall-textMuted">

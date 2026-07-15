@@ -27,45 +27,18 @@ interface Props {
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
   onDelete: (taskId: string) => void;
+  t: any; // 번역 객체 추가
 }
 
-const priorityLabel: Record<TaskPriority, string> = { high: "높음", medium: "중간", low: "낮음" };
-
-// 우선순위/상태는 accent 하나로만 표현하면 구분이 안 되니, 의미 있는 색(빨강/주황/초록)을 그대로 사용
 const priorityDotClass: Record<TaskPriority, string> = {
   high: "bg-rose-400",
   medium: "bg-amber-400",
   low: "bg-emerald-400",
 };
 
-const columns: { id: TaskStatus; title: string; barColorClass: string }[] = [
-  { id: "todo", title: "해야 할 일", barColorClass: "bg-recall-textMuted" },
-  { id: "in_progress", title: "진행 중", barColorClass: "bg-amber-400" },
-  { id: "done", title: "완료", barColorClass: "bg-emerald-400" },
-  { id: "delayed", title: "지연", barColorClass: "bg-rose-400" },
-];
-
-const statusOptions: { value: TaskStatus; label: string }[] = [
-  { value: "todo", label: "해야 할 일" },
-  { value: "in_progress", label: "진행 중" },
-  { value: "done", label: "완료" },
-  { value: "delayed", label: "지연" },
-];
-
-const priorityOptions: { value: TaskPriority; label: string }[] = [
-  { value: "high", label: "높음" },
-  { value: "medium", label: "중간" },
-  { value: "low", label: "낮음" },
-];
-
 const priorityWeight: Record<TaskPriority, number> = { high: 0, medium: 1, low: 2 };
 
 type SortMode = "deadline" | "priority" | "custom";
-const sortOptions: { value: SortMode; label: string }[] = [
-  { value: "deadline", label: "마감일순" },
-  { value: "priority", label: "중요도순" },
-  { value: "custom", label: "사용자 지정" },
-];
 
 const CUSTOM_ORDER_KEY = "recall-task-custom-order";
 
@@ -75,7 +48,7 @@ function saveCustomOrder(columnId: string, taskIds: string[]) {
     all[columnId] = taskIds;
     localStorage.setItem(CUSTOM_ORDER_KEY, JSON.stringify(all));
   } catch {
-    /* 무시 - 정렬 저장 실패해도 기능엔 지장 없음 */
+    /* 무시 */
   }
 }
 
@@ -147,15 +120,30 @@ function TaskDropdown({
   onPriorityChange,
   onDelete,
   onClose,
+  t,
 }: {
   task: Task;
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
   onDelete: (taskId: string) => void;
   onClose: () => void;
+  t: any;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<DropdownView>("main");
+
+  const statusOptions: { value: TaskStatus; label: string }[] = [
+    { value: "todo", label: t.status_todo },
+    { value: "in_progress", label: t.status_in_progress },
+    { value: "done", label: t.status_done },
+    { value: "delayed", label: t.status_delayed },
+  ];
+
+  const priorityOptions: { value: TaskPriority; label: string }[] = [
+    { value: "high", label: t.priority_high },
+    { value: "medium", label: t.priority_medium },
+    { value: "low", label: t.priority_low },
+  ];
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -192,7 +180,7 @@ function TaskDropdown({
             className="flex w-full items-center gap-2 px-3 py-2 text-xs text-recall-danger hover:bg-white/5"
           >
             <TrashIcon size={13} />
-            삭제
+            {t.task_delete}
           </button>
         </>
       )}
@@ -249,13 +237,13 @@ function TaskDropdown({
 
       {view === "delete" && (
         <div className="p-3">
-          <p className="mb-3 text-xs leading-relaxed text-recall-text">이 업무를 삭제할까요?</p>
+          <p className="mb-3 text-xs leading-relaxed text-recall-text">{t.task_delete_confirm}</p>
           <div className="flex gap-2">
             <button
               onClick={() => setView("main")}
               className="flex-1 rounded-lg border border-recall-border py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
             >
-              취소
+              {t.task_cancel}
             </button>
             <button
               onClick={() => {
@@ -264,7 +252,7 @@ function TaskDropdown({
               }}
               className="flex-1 rounded-lg bg-recall-danger py-1.5 text-xs text-white"
             >
-              삭제
+              {t.task_delete}
             </button>
           </div>
         </div>
@@ -273,7 +261,6 @@ function TaskDropdown({
   );
 }
 
-// 카드와 카드 사이 삽입 지점 - 평소엔 얇은 줄, 드래그 중인 카드가 위에 오면 강조색으로 확장
 function InsertionGap({ id }: { id: string }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
@@ -292,15 +279,23 @@ function DraggableCard({
   onStatusChange,
   onPriorityChange,
   onDelete,
+  t,
 }: {
   task: Task;
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
   onDelete: (taskId: string) => void;
+  t: any;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id });
   const [openDropdown, setOpenDropdown] = useState(false);
   const isDone = task.status === "done";
+
+  const priorityLabel: Record<TaskPriority, string> = {
+    high: t.priority_high,
+    medium: t.priority_medium,
+    low: t.priority_low,
+  };
 
   const style = transform
     ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50 }
@@ -329,7 +324,7 @@ function DraggableCard({
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={handleToggleDone}
-            aria-label={isDone ? "완료 취소" : "완료 처리"}
+            aria-label={isDone ? "Undo complete" : "Mark as complete"}
             className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded border transition-colors ${
               isDone ? "border-recall-border" : "border-recall-textMuted hover:border-recall-text"
             }`}
@@ -361,6 +356,7 @@ function DraggableCard({
               onPriorityChange={onPriorityChange}
               onDelete={onDelete}
               onClose={() => setOpenDropdown(false)}
+              t={t}
             />
           )}
         </div>
@@ -382,7 +378,7 @@ function DraggableCard({
   );
 }
 
-function DroppableColumn({ col, children }: { col: (typeof columns)[0]; children: React.ReactNode }) {
+function DroppableColumn({ col, children }: { col: any; children: React.ReactNode }) {
   const { isOver, setNodeRef } = useDroppable({ id: col.id });
   return (
     <div
@@ -394,11 +390,27 @@ function DroppableColumn({ col, children }: { col: (typeof columns)[0]; children
   );
 }
 
-export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPriorityChange, onDelete }: Props) {
+export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPriorityChange, onDelete, t }: Props) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("deadline");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const sortMenuRef = useRef<HTMLDivElement>(null);
+
+  // 컴포넌트 내부 최상단에 lang 선언 배치 (선언 전 참조 타입에러 해결)
+  const lang = t.settings_lang === "언어" ? "ko" : "en";
+
+  const columns: { id: TaskStatus; title: string; barColorClass: string }[] = [
+    { id: "todo", title: t.status_todo, barColorClass: "bg-recall-textMuted" },
+    { id: "in_progress", title: t.status_in_progress, barColorClass: "bg-amber-400" },
+    { id: "done", title: t.status_done, barColorClass: "bg-emerald-400" },
+    { id: "delayed", title: t.status_delayed, barColorClass: "bg-rose-400" },
+  ];
+
+  const sortOptions: { value: SortMode; label: string }[] = [
+    { value: "deadline", label: lang === "ko" ? "마감일순" : "By Deadline" },
+    { value: "priority", label: lang === "ko" ? "중요도순" : "By Priority" },
+    { value: "custom", label: lang === "ko" ? "사용자 지정" : "Custom Order" },
+  ];
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -510,6 +522,7 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
                       onStatusChange={onStatusChange}
                       onPriorityChange={onPriorityChange}
                       onDelete={onDelete}
+                      t={t}
                     />
                     <InsertionGap id={`gap:${col.id}:${i + 1}`} />
                   </div>
@@ -519,7 +532,7 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
                   onClick={onOpenModal}
                   className="mt-2 w-full rounded-xl border border-dashed border-recall-border py-2 text-xs text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
                 >
-                  + 업무 추가
+                  {t.task_add_btn}
                 </button>
               </DroppableColumn>
             </div>

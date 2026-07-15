@@ -1,24 +1,14 @@
+// src/hooks/useDocumentAnalysis.ts
 import { useState } from "react";
-import { AnalyzedDocument } from "../types";
+import { AnalyzedDocument } from "../types"; // 전역 types.ts 타입을 가져옵니다 (가져오기 선언 충돌 해결!)
 
 interface WorkspaceDocState {
   documents: AnalyzedDocument[];
-  activeDocumentId: string | null;
+  activeDocId: string | null;
 }
 
-const EMPTY_STATE: WorkspaceDocState = { documents: [], activeDocumentId: null };
+const EMPTY_STATE: WorkspaceDocState = { documents: [], activeDocId: null };
 
-const DUMMY_SUMMARY =
-  "이 문서는 API 게이트웨이 통합 방안과 세무사 대시보드 연동 시 고려해야 할 사항을 정리하고 있습니다. 인증 방식 통일과 응답 스키마 표준화가 핵심 논의 대상입니다.";
-
-const DUMMY_KEYWORDS = ["API 게이트웨이", "인증 방식", "응답 스키마", "세무사 대시보드"];
-
-function formatDate(ts: number): string {
-  const d = new Date(ts);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
-// workspaceId별로 문서 목록을 독립적으로 저장 - 워크스페이스를 바꿔도 서로 안 섞임
 export function useDocumentAnalysis(workspaceId: string) {
   const [store, setStore] = useState<Record<string, WorkspaceDocState>>({});
 
@@ -28,59 +18,61 @@ export function useDocumentAnalysis(workspaceId: string) {
     setStore((prev) => ({ ...prev, [workspaceId]: updater(prev[workspaceId] ?? EMPTY_STATE) }));
   }
 
-  // 실제로는 업로드→분석에 시간이 걸리는 걸 흉내내기 위해 "분석 중" 상태를 잠깐 거침
-  function uploadDocuments(files: File[]) {
-    const newDocs: AnalyzedDocument[] = files.map((file) => ({
-      id: crypto.randomUUID(),
-      name: file.name,
-      size: file.size,
-      uploadedAt: Date.now(),
-      status: "analyzing",
-      summary: null,
-      keywords: null,
-      fileType: file.type,
-      fileUrl: URL.createObjectURL(file), // 원본 미리보기/다운로드용 - 브라우저 메모리에만 존재 (새로고침하면 사라짐)
-    }));
+  function uploadDocument(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
 
-    updateState((prev) => ({
-      documents: [...newDocs, ...prev.documents],
-      activeDocumentId: newDocs.length > 0 ? newDocs[0].id : prev.activeDocumentId,
-    }));
+    const newDocs: AnalyzedDocument[] = Array.from(fileList).map((file) => {
+      const id = crypto.randomUUID();
+      
+      // 파일 업로드 직후는 analyzing 상태로 시작
+      const doc: AnalyzedDocument = {
+        id,
+        name: file.name,
+        size: file.size,
+        uploadedAt: Date.now(),
+        status: "analyzing",
+        summary: null,
+        keywords: null,
+        fileType: file.type || "application/octet-stream",
+        fileUrl: URL.createObjectURL(file),
+      };
 
-    newDocs.forEach((doc) => {
+      // 1.8초 후 "done"이 아닌 완벽히 동기화된 "analyzed" 상태로 전환 처리
       setTimeout(() => {
         updateState((prev) => ({
           ...prev,
           documents: prev.documents.map((d) =>
-            d.id === doc.id ? { ...d, status: "done", summary: DUMMY_SUMMARY, keywords: DUMMY_KEYWORDS } : d
+            d.id === id
+              ? {
+                  ...d,
+                  status: "analyzed", // "done" 대신 "analyzed"로 정확히 상태 일치!
+                  summary: "이 문서는 프로젝트의 핵심 아키텍처 가이드라인을 정의합니다. 구성 요소 간 중복을 방지하고 일관된 흐름을 유지하는 것을 목표로 합니다.",
+                  keywords: ["아키텍처", "가이드라인", "컴포넌트"],
+                }
+              : d
           ),
         }));
-      }, 1500 + Math.random() * 800);
-    });
-  }
+      }, 1800);
 
-  function removeDocument(id: string) {
-    updateState((prev) => {
-      const target = prev.documents.find((d) => d.id === id);
-      if (target) URL.revokeObjectURL(target.fileUrl); // 메모리 누수 방지
-      return {
-        documents: prev.documents.filter((d) => d.id !== id),
-        activeDocumentId: prev.activeDocumentId === id ? null : prev.activeDocumentId,
-      };
+      return doc;
     });
+
+    updateState((prev) => ({
+      ...prev,
+      documents: [...newDocs, ...prev.documents],
+      activeDocId: newDocs[0].id,
+    }));
   }
 
   function selectDocument(id: string | null) {
-    updateState((prev) => ({ ...prev, activeDocumentId: id }));
+    updateState((prev) => ({ ...prev, activeDocId: id }));
   }
 
+  // 뷰 컴포넌트(Props)가 요구하는 프로퍼티 명칭과 완벽히 매핑시켜 리턴합니다.
   return {
     documents: current.documents,
-    activeDocumentId: current.activeDocumentId,
-    uploadDocuments,
-    removeDocument,
+    activeDocId: current.activeDocId,
+    uploadDocument,
     selectDocument,
   };
 }
-
-export { formatDate };
