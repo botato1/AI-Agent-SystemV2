@@ -1,0 +1,19 @@
+# 설치 순서 (Windows - CUDA 12.6)
+# 아래 3개를 순서대로 복사 붙여넣기
+
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+
+pip install paddlepaddle==3.0.0
+
+pip install -r requirements.txt
+
+
+# ----------------------------------------
+# Linux 서버 설치 순서 (CUDA 13.x)
+# ----------------------------------------
+
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+pip install paddlepaddle-gpu -i https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
+
+pip install -r requirements.txt

@@ -1,0 +1,44 @@
+# ==========================================
+# Vigo Project V4.0 - STT & Diarization
+# ==========================================
+
+# 1. Web Server & API (서버 구동 필수)
+fastapi>=0.111.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9
+pydantic>=2.7.0
+
+# 2. Environment & Security (환경 변수 및 보안)
+python-dotenv>=1.0.1
+
+# 3. Speaker Diarization (화자 분리 AI 엔진)
+# (주의: pyannote 객체 문법 유지를 위해 3.1.x 버전 고정)
+torch>=2.2.0
+torchaudio>=2.2.0
+pyannote.audio==3.1.1
+soundfile>=0.12.1
+huggingface_hub>=0.23.0
+
+
+#서버 켜기 전에 다운받아야할 것들.
+
+# whisper.cpp
+cd /Users/junoh/Documents/AI-Agent-System/backend/modules/stt
+git clone https://github.com/ggerganov/whisper.cpp.git
+cd whisper.cpp
+
+# 폴더 구조에 맞게 빌드하기 (가장 중요 ⭐️)
+mkdir build
+cd build
+cmake ..
+make -j
+
+# large-v3-turbo
+cd ..
+bash ./models/download-ggml-model.sh large-v3-turbo
+
+pip install --upgrade pyannote.audio
+cd /Users/junoh/Documents/AI-Agent-System/backend
+
+#junoh@ijun-oui-MacBookPro backend %
+uvicorn modules.stt.main:app --reload --host 0.0.0.0 --port 8001

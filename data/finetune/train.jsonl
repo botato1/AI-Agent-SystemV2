@@ -1,0 +1,300 @@
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "OOM 또 났어", "output": "쿠버네티스 Pod에서 OOMKilled가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "파드 뻗음", "output": "쿠버네티스 Pod가 비정상 종료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "PR 머지됨?", "output": "Pull Request가 병합되었는지 확인 요청."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "디비 뻑났어", "output": "데이터베이스 장애가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "서버 뻗었어", "output": "서버가 다운되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "쿠버 파드 터졌어", "output": "쿠버네티스 Pod가 비정상 종료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "머지 꼬였어", "output": "Git merge 충돌이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "롤백해야 할듯", "output": "이전 버전으로 롤백이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "핫픽스 쳐야해", "output": "긴급 버그 수정 배포가 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "CI 터졌어", "output": "CI 파이프라인이 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "빌드 깨졌어", "output": "빌드가 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "디플로이 나갔어", "output": "배포가 완료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스테이징 올렸어", "output": "스테이징 환경에 배포했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "프로드 나갔어", "output": "프로덕션 환경에 배포되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레디스 죽었어", "output": "Redis 서버가 다운되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "엔진엑스 설정 꼬였어", "output": "Nginx 설정에 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "도커 컨테이너 올려", "output": "Docker 컨테이너를 실행해라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "쿠버 클러스터 이상해", "output": "쿠버네티스 클러스터에 이상이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "노드 죽었어", "output": "쿠버네티스 Node가 다운되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "인그레스 설정 봐줘", "output": "Ingress 설정을 확인해달라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "포트 막혔어", "output": "포트가 차단되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "방화벽 뚫어야해", "output": "방화벽 규칙을 수정해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "로그 뒤져봐", "output": "로그를 확인해라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스택트레이스 봐봐", "output": "스택 트레이스를 확인해라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "NPE 떴어", "output": "NullPointerException이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "500 터졌어", "output": "HTTP 500 Internal Server Error가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "404 뜨네", "output": "HTTP 404 Not Found 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "타임아웃 났어", "output": "요청 시간이 초과되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "커넥션 끊겼어", "output": "데이터베이스 연결이 끊어졌다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "쿼리 느려터졌어", "output": "데이터베이스 쿼리 성능이 저하되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "인덱스 안탔어", "output": "데이터베이스 인덱스가 적용되지 않았다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "풀스캔 돌았어", "output": "데이터베이스 Full Table Scan이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "데드락 걸렸어", "output": "데이터베이스 Deadlock이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "트랜잭션 꼬였어", "output": "데이터베이스 트랜잭션 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "캐시 날아갔어", "output": "캐시 데이터가 초기화되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레이턴시 튀었어", "output": "응답 지연 시간이 급증했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "처리량 떨어졌어", "output": "시스템 처리량이 감소했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "메모리 먹고있어", "output": "메모리 사용량이 높다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "CPU 치솟았어", "output": "CPU 사용률이 급증했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "디스크 꽉찼어", "output": "디스크 용량이 부족하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "브랜치 땄어", "output": "Git 브랜치를 생성했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "커밋 날렸어", "output": "Git 커밋을 했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "리베이스 했어", "output": "Git rebase를 수행했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스쿼시 했어", "output": "Git squash로 커밋을 합쳤다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "체리픽 했어", "output": "Git cherry-pick으로 특정 커밋을 적용했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "코드 리뷰 달렸어", "output": "코드 리뷰 코멘트가 등록되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "LGTM 달렸어", "output": "코드 리뷰 승인이 완료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "어프루브 났어", "output": "Pull Request 승인이 완료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "컨플릭 났어", "output": "Git merge 충돌이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "리모트 푸시했어", "output": "원격 저장소에 Push했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "JWT 만료됐어", "output": "JWT 토큰이 만료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "토큰 터졌어", "output": "인증 토큰이 만료되거나 유효하지 않다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "401 떴어", "output": "HTTP 401 Unauthorized 인증 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "403 떴어", "output": "HTTP 403 Forbidden 권한 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "CORS 떴어", "output": "CORS 정책 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "API 게이트웨이 막혔어", "output": "API Gateway에서 요청이 차단되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "엔드포인트 죽었어", "output": "API 엔드포인트가 응답하지 않는다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "페이로드 이상해", "output": "요청 페이로드 형식이 올바르지 않다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "직렬화 깨졌어", "output": "데이터 직렬화 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "역직렬화 실패했어", "output": "데이터 역직렬화 오류가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스키마 안맞아", "output": "데이터 스키마가 일치하지 않는다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "마이그레이션 깨졌어", "output": "데이터베이스 마이그레이션이 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "시드 데이터 날아갔어", "output": "초기 데이터가 삭제되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "환경변수 빠졌어", "output": "환경 변수가 설정되지 않았다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "env 없어", "output": ".env 파일이 존재하지 않는다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "패키지 충돌났어", "output": "패키지 의존성 충돌이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "requirements 깨졌어", "output": "requirements.txt 패키지 설치가 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "가상환경 날아갔어", "output": "Python 가상환경이 손상되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "임포트 안돼", "output": "모듈 import가 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "모듈 없대", "output": "해당 모듈이 설치되지 않았다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "소켓 끊겼어", "output": "WebSocket 연결이 끊어졌다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "웹소켓 죽었어", "output": "WebSocket 서버가 응답하지 않는다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "큐 밀렸어", "output": "메시지 큐에 처리되지 않은 작업이 쌓였다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "워커 죽었어", "output": "백그라운드 워커 프로세스가 종료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "배치 돌렸어", "output": "배치 작업을 실행했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "크론 안돌아", "output": "크론 작업이 실행되지 않는다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스케줄러 멈췄어", "output": "스케줄러가 작동을 멈췄다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "GC 돌았어", "output": "Garbage Collection이 실행되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "힙 터졌어", "output": "JVM Heap 메모리가 초과되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스레드 죽었어", "output": "스레드가 비정상 종료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "동시성 문제 났어", "output": "동시성 충돌이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레이스 컨디션 났어", "output": "Race Condition이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "락 걸렸어", "output": "데이터베이스 Lock이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "트래픽 터졌어", "output": "트래픽이 급증했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스케일 아웃 해야해", "output": "수평 확장이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스케일 업 해야해", "output": "수직 확장이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "LB 설정 봐줘", "output": "Load Balancer 설정을 확인해달라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "헬스체크 실패해", "output": "Health Check가 실패하고 있다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "리플리카 줄었어", "output": "Pod Replica 수가 감소했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "오토스케일 안돼", "output": "Auto Scaling이 동작하지 않는다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "시크릿 빠졌어", "output": "Kubernetes Secret이 누락되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "컨피그맵 잘못됐어", "output": "ConfigMap 설정이 잘못되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "네임스페이스 확인해봐", "output": "Kubernetes Namespace를 확인해라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "퍼시스턴트 볼륨 마운트 안돼", "output": "Persistent Volume 마운트가 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "서비스 어카운트 권한 없어", "output": "Service Account 권한이 부족하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "이미지 풀 실패해", "output": "Docker 이미지 Pull이 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레지스트리 인증 안돼", "output": "Container Registry 인증이 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "태그 잘못됐어", "output": "Docker 이미지 태그가 잘못되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "베이스 이미지 바꿔야해", "output": "Docker 베이스 이미지를 변경해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레이어 너무 많아", "output": "Docker 이미지 레이어가 너무 많다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "멀티스테이지 빌드 써야해", "output": "Docker 멀티스테이지 빌드를 적용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "컨테이너 로그 봐줘", "output": "컨테이너 로그를 확인해달라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "exec 들어가서 봐야해", "output": "컨테이너 내부에 접속해서 확인해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "포트포워딩 해야해", "output": "포트 포워딩 설정이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "프록시 설정 봐줘", "output": "Proxy 설정을 확인해달라."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "SSL 인증서 만료됐어", "output": "SSL 인증서가 만료되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "HTTPS 설정 안됐어", "output": "HTTPS 설정이 완료되지 않았다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "DNS 안잡혀", "output": "DNS 설정이 올바르지 않다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "도메인 안뜨네", "output": "도메인이 정상적으로 연결되지 않았다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "CDN 캐시 날려야해", "output": "CDN 캐시를 초기화해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "버킷 퍼미션 없어", "output": "S3 버킷 접근 권한이 없다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "오브젝트 스토리지 터졌어", "output": "Object Storage 장애가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "람다 타임아웃 났어", "output": "Lambda 함수 실행 시간이 초과되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "서버리스 콜드스타트 문제야", "output": "Serverless Cold Start 지연이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "이벤트 드리븐 아키텍처로 바꿔야해", "output": "Event-Driven Architecture로 전환이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "MSA로 쪼개야해", "output": "Microservice Architecture로 분리가 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "모놀리스가 문제야", "output": "Monolithic Architecture의 한계로 문제가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "API 버저닝 해야해", "output": "API 버전 관리가 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레이트 리밋 걸렸어", "output": "API Rate Limit이 초과되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스로틀링 걸렸어", "output": "API Throttling이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "페이지네이션 구현해야해", "output": "페이지네이션 기능 구현이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "커서 기반으로 바꿔야해", "output": "Cursor 기반 페이지네이션으로 변경이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "N+1 문제 났어", "output": "N+1 쿼리 문제가 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "배치 인서트 써야해", "output": "Batch Insert를 사용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "샤딩 해야할 것 같아", "output": "데이터베이스 샤딩이 필요할 것 같다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "리드 레플리카 써야해", "output": "Read Replica를 사용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "커넥션 풀 다 찼어", "output": "데이터베이스 Connection Pool이 소진되었다."}
+{"instruction": "질문의 의도를 분류하라", "input": "OOM 또 났어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "파드 뻗음", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "서버 왜 이렇게 느려", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "빌드 왜 깨졌어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "디비 연결 안돼", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "CORS 에러 어떻게 고쳐", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "401 왜 뜨는거야", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "타임아웃 계속 나는데", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "메모리 왜 이렇게 먹어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "CPU 100% 찍었어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "500 에러 계속 나", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "배포하고 나서 터졌어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "CI 왜 실패해", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "테스트 왜 깨져", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "NPE 어디서 났어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "데드락 어떻게 해결해", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "쿼리 왜 이렇게 느려", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "레디스 왜 안붙어", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "도커 빌드 실패해", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "헬스체크 왜 실패해", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번에 파드 뻗었을 때 어떻게 해결했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난번 OOM 이슈 어떻게 처리했어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번 배포 때 뭐가 문제였지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난주 회의에서 뭐 결정했어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "전에 롤백했을 때 어떻게 했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번에 CORS 해결한 방법이 뭐였지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난 스프린트에서 뭐 했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "이전 장애 대응 어떻게 했어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번 머지 때 뭐가 문제였어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "예전에 데드락 해결했던 방법", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난번 배포 회의록 찾아줘", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번 장애 회의록 있어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "2주전에 어떤 이슈 있었지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "이전 스프린트 회고 내용 뭐였지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난번 코드리뷰에서 뭐가 지적됐지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "이 회의록 요약해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이 문서 핵심만 뽑아줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "회의 내용 정리해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이거 요약해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "주요 내용만 뽑아줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이 PR 설명 요약해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이슈 내용 정리해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이 에러 로그 분석해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이 코드 설명해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "이 문서 번역해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "장애 보고서 작성해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "스펙 문서 정리해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "README 작성해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "릴리즈 노트 만들어줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "API 문서 정리해줘", "output": "document_summary"}
+{"instruction": "질문의 의도를 분류하라", "input": "OOM이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "CI/CD가 뭔지 설명해줘", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "쿠버네티스가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "레이턴시가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "MSA 개념 설명해줘", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "JWT가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "데드락이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "인덱스가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "캐시 히트율이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "멱등성이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "샤딩이 뭔지 알려줘", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "레이스 컨디션 설명해줘", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "TDD가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "SOLID 원칙이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "이벤트 소싱이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "오늘 회의에서 누가 뭐 해야해", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "액션아이템 뽑아줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "이번 스프린트 할일 정리해줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "담당자 정리해줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "데드라인 정리해줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "누가 뭐 담당이야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "할일 목록 만들어줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "이번주 태스크 뭐야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "미팅 후속 조치 정리해줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "PR 리뷰어 누구야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "이번 배포 담당자 누구야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "다음 스프린트 계획 잡아줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "버그 담당자 배정해줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "코드리뷰 누가 해야해", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "온콜 일정 확인해줘", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "배포 어떻게 해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "코드 리뷰 어떻게 하면 돼", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "Git 브랜치 어떻게 따", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "도커 컨테이너 어떻게 올려", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "API 테스트 어떻게 해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "로컬에서 서버 어떻게 실행해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "환경변수 어떻게 설정해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "pytest 어떻게 실행해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "가상환경 어떻게 만들어", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "requirements.txt 어떻게 만들어", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "FastAPI 라우터 어떻게 만들어", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "도커파일 어떻게 작성해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "깃 커밋 메시지 어떻게 써", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "코드 컨벤션이 뭐야", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "PR 어떻게 올려", "output": "general"}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "API 응답 느려터졌어", "output": "API 응답 속도가 저하되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "서킷브레이커 열렸어", "output": "Circuit Breaker가 작동하여 요청이 차단되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "리트라이 로직 넣어야해", "output": "재시도 로직을 구현해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "멱등키 써야해", "output": "Idempotency Key를 사용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "옵저버빌리티 챙겨야해", "output": "시스템 관찰 가능성을 확보해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "트레이싱 붙여야해", "output": "분산 추적 시스템을 연동해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "메트릭 수집 안돼", "output": "메트릭 수집이 실패했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "알럿 울렸어", "output": "모니터링 알림이 발생했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "온콜 받았어", "output": "온콜 알림을 수신했다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "포스트모텀 써야해", "output": "장애 사후 분석 보고서를 작성해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "테크뎁 쌓였어", "output": "기술 부채가 누적되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "레거시 코드 건드려야해", "output": "레거시 코드를 수정해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "리팩 해야해", "output": "리팩토링이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "코드 스멜 나", "output": "코드 품질이 저하되어 있다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "커버리지 낮아", "output": "테스트 커버리지가 낮다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "유닛테스트 짜야해", "output": "단위 테스트를 작성해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "E2E 테스트 추가해야해", "output": "End-to-End 테스트를 추가해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "목 객체 써야해", "output": "Mock 객체를 사용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "픽스처 만들어야해", "output": "테스트 Fixture를 생성해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "스냅샷 테스트 깨졌어", "output": "스냅샷 테스트가 실패했다."}
+{"instruction": "질문의 의도를 분류하라", "input": "저번 장애때 포스트모텀 어떻게 썼지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난번 리팩토링 어떻게 했어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "예전에 서킷브레이커 어떻게 설정했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번 온콜 때 뭐가 문제였어", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난 회의에서 테크뎁 어떻게 처리하기로 했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "서킷브레이커가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "옵저버빌리티가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "분산 추적이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "멱등성이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "테크뎁이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "API 왜 이렇게 느려", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "알럿 왜 울려", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "메트릭 왜 안잡혀", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "커버리지 왜 이렇게 낮아", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "스냅샷 테스트 왜 깨져", "output": "error_troubleshooting"}
+{"instruction": "질문의 의도를 분류하라", "input": "이번 스프린트 리팩토링 담당자 누구야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "테스트 커버리지 올리는거 누가 담당이야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "포스트모텀 작성 누가 해야해", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "온콜 일정 누가 담당이야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "레거시 코드 정리 언제까지야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "리팩토링 어떻게 해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "테스트 커버리지 어떻게 올려", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "포스트모텀 어떻게 써", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "서킷브레이커 어떻게 설정해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "모니터링 어떻게 붙여", "output": "general"}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "싱글톤 패턴 써야해", "output": "Singleton 패턴을 적용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "팩토리 패턴으로 바꿔야해", "output": "Factory 패턴으로 리팩토링이 필요하다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "옵저버 패턴 넣어야해", "output": "Observer 패턴을 구현해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "DI 컨테이너 써야해", "output": "의존성 주입 컨테이너를 사용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "인터페이스 분리해야해", "output": "인터페이스를 분리하여 의존성을 줄여야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "추상화 레이어 넣어야해", "output": "추상화 레이어를 추가해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "의존성 역전 원칙 지켜야해", "output": "의존성 역전 원칙을 적용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "단일책임 원칙 위반이야", "output": "단일 책임 원칙이 위반되었다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "개방폐쇄 원칙 지켜야해", "output": "개방 폐쇄 원칙을 적용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "도메인 모델 정리해야해", "output": "도메인 모델을 정리해야 한다."}
+{"instruction": "질문의 의도를 분류하라", "input": "싱글톤 패턴이 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "DI가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "SOLID 원칙 설명해줘", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "도메인 주도 설계가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "클린 아키텍처가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "저번에 DI 어떻게 설정했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "지난번 도메인 모델 어떻게 짰지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "예전에 싱글톤 문제 어떻게 해결했지", "output": "past_record_search"}
+{"instruction": "질문의 의도를 분류하라", "input": "도메인 모델 리팩토링 누가 담당이야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "아키텍처 설계 언제까지야", "output": "task_extraction"}
+{"instruction": "질문의 의도를 분류하라", "input": "DI 어떻게 설정해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "클린 아키텍처 어떻게 적용해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "도메인 모델 어떻게 설계해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "단위 테스트 어떻게 써", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "Mock 객체 어떻게 써", "output": "general"}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "그린필드 프로젝트야", "output": "신규 프로젝트로 처음부터 개발한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "브라운필드 프로젝트야", "output": "기존 레거시 시스템을 개선하는 프로젝트다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "피쳐 플래그 써야해", "output": "Feature Flag를 적용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "카나리 배포 해야해", "output": "Canary 배포 전략을 사용해야 한다."}
+{"instruction": "개발자 은어를 표준 용어로 변환하라", "input": "블루그린 배포로 바꿔야해", "output": "Blue-Green 배포 전략으로 전환해야 한다."}
+{"instruction": "질문의 의도를 분류하라", "input": "카나리 배포가 뭐야", "output": "term_explanation"}
+{"instruction": "질문의 의도를 분류하라", "input": "블루그린 배포 어떻게 해", "output": "general"}
+{"instruction": "질문의 의도를 분류하라", "input": "피쳐 플래그 누가 설정해야해", "output": "task_extraction"}

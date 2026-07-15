@@ -1,0 +1,58 @@
+services:
+
+  # FastAPI 백엔드
+  fastapi:
+    build: .
+    container_name: ai-agent-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # SQLite DB NAS 마운트
+      - /mnt/nas_2026_spring/dobby/shared/data/sqlite:/app/storage/sqlite
+      # 업로드 파일 NAS 마운트
+      - /mnt/nas_2026_spring/dobby/shared/data/uploads:/app/storage/uploads
+    depends_on:
+      - chromadb
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: always
+
+  # ChromaDB 벡터DB
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: ai-agent-chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      # ChromaDB 데이터 NAS 마운트 (컨테이너 내 저장 경로는 /data)
+      - /mnt/nas_2026_spring/dobby/shared/data/chroma:/data
+    restart: always
+
+  # Ollama LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-agent-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      # Ollama 모델은 NAS가 아닌 서버 로컬 디스크 사용 (교수님 지시)
+      - /srv/dobby/ollama_models:/root/.ollama
+    healthcheck:
+      # Ollama 이미지에는 curl이 없어 ollama 바이너리로 확인
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: always
