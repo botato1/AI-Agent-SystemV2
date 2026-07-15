@@ -11,7 +11,7 @@ from .core.config import (
     logger, UPLOAD_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE, WHISPER_MODEL_SIZE,
     WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN
 )
-from .routers import stt, realtime
+from .routers import stt, realtime, enroll
 from .services.speaker_id_service import load_speaker_embedding_inference
 
 
@@ -58,6 +58,10 @@ async def lifespan(app: FastAPI):
     app.state.speaker_embedding_inference = load_speaker_embedding_inference()
     logger.info("✅ 화자 임베딩 모델 로딩 완료")
 
+    # 회의 시작 전 사전 등록된 화자 프로필 임시 저장소: {session_id: {화자이름: 임베딩}}
+    # /api/enroll에서 채워지고, 실시간 WebSocket 세션 시작 시 소비됨
+    app.state.enrolled_profiles = {}
+
     yield  # 서버 동작
 
     logger.info("🛑 서버 종료, 모델 메모리 해제")
@@ -81,6 +85,7 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(stt.router, prefix="/api", tags=["Audio Processing"])
 app.include_router(realtime.router, prefix="/api", tags=["Realtime STT"])
+app.include_router(enroll.router, prefix="/api", tags=["Speaker Enrollment"])
 
 # 실시간 STT WebSocket 파이프라인 수동 검증용 테스트 페이지 (정식 프론트엔드 아님)
 _TEST_CLIENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_client")

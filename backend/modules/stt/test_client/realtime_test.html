@@ -4,8 +4,9 @@
 <meta charset="UTF-8" />
 <title>실시간 STT 테스트</title>
 <style>
-  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  body { font-family: -apple-system, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
   h1 { font-size: 18px; }
+  h3 { margin-top: 28px; }
   #status { font-weight: bold; margin-bottom: 12px; }
   #status.connected { color: #16a34a; }
   #status.disconnected { color: #dc2626; }
@@ -16,19 +17,40 @@
   .tentative { color: #999; font-style: italic; }
   .speaker-tag { font-size: 11px; color: #2563eb; font-weight: bold; margin-right: 4px; }
   #log { margin-top: 16px; font-size: 12px; color: #666; max-height: 150px; overflow-y: auto; }
-  input { padding: 6px; font-size: 13px; width: 260px; }
+  input { padding: 6px; font-size: 13px; }
+  #wsUrl, #serverUrl { width: 320px; }
+  #enrollRows { margin: 10px 0; }
+  .enroll-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .enroll-row input[type="text"] { width: 140px; }
+  .enroll-status { font-size: 12px; color: #666; min-width: 160px; }
+  .enroll-status.done { color: #16a34a; }
+  fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+  legend { font-weight: bold; font-size: 13px; padding: 0 4px; }
 </style>
 </head>
 <body>
   <h1>🎙️ 실시간 STT 파이프라인 테스트</h1>
 
-  <div>
-    <label>WebSocket 주소: </label>
-    <input id="wsUrl" value="ws://localhost:8002/api/ws/stt/test-session-1" />
-  </div>
-  <br />
+  <fieldset>
+    <legend>연결 설정</legend>
+    <div><label>서버 주소 (http/https): </label><input id="serverUrl" value="http://localhost:8001" /></div>
+    <div style="margin-top:6px;"><label>세션 ID: </label><input id="sessionId" value="test-session-1" /></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>① 화자 사전 등록 (선택 사항 — 회의 시작 전, 인원수를 미리 알 때)</legend>
+    <div>
+      <label>참석 인원수: </label>
+      <input id="speakerCount" type="number" min="1" max="10" value="2" style="width:60px;" />
+      <button id="buildEnrollRowsBtn">인원 입력칸 만들기</button>
+      <button id="clearEnrollBtn">등록 초기화</button>
+    </div>
+    <div id="enrollRows"></div>
+    <div style="font-size:12px;color:#888;">각자 이름 입력 후 "5초 녹음" 눌러서 5초간 말하면 자동 등록됨. 등록 안 하고 바로 시작하면 자동감지(열린 집합) 모드로 동작.</div>
+  </fieldset>
+
   <div id="status" class="disconnected">연결 안 됨</div>
-  <button id="startBtn">🔴 시작 (마이크 켜기)</button>
+  <button id="startBtn">🔴 ② 시작 (마이크 켜기)</button>
   <button id="stopBtn" disabled>⏹️ 종료</button>
 
   <h3>실시간 전사 결과</h3>
@@ -39,6 +61,7 @@
 
 <script>
 const REALTIME_SAMPLE_RATE = 16000; // 백엔드 config.REALTIME_SAMPLE_RATE 와 반드시 일치해야 함
+const ENROLL_DURATION_SEC = 5;
 
 let audioContext, mediaStream, sourceNode, processorNode, ws;
 let tentativeSpan = null;
@@ -48,7 +71,10 @@ const transcriptEl = document.getElementById("transcript");
 const logEl = document.getElementById("log");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
-const wsUrlInput = document.getElementById("wsUrl");
+const serverUrlInput = document.getElementById("serverUrl");
+const sessionIdInput = document.getElementById("sessionId");
+const speakerCountInput = document.getElementById("speakerCount");
+const enrollRowsEl = document.getElementById("enrollRows");
 
 function log(msg) {
   const line = document.createElement("div");
@@ -59,6 +85,14 @@ function log(msg) {
 function setStatus(connected) {
   statusEl.textContent = connected ? "연결됨" : "연결 안 됨";
   statusEl.className = connected ? "connected" : "disconnected";
+}
+
+function httpBase() {
+  return serverUrlInput.value.replace(/\/$/, "");
+}
+
+function wsUrl() {
+  return httpBase().replace(/^http/, "ws") + `/api/ws/stt/${encodeURIComponent(sessionIdInput.value)}`;
 }
 
 // 브라우저 오디오(보통 44.1k/48kHz Float32) → 서버가 기대하는 16kHz PCM16LE로 변환
@@ -83,8 +117,83 @@ function float32ToPCM16LE(float32Array) {
   return buffer;
 }
 
+// ── ① 화자 사전 등록 ──────────────────────────────────────
+document.getElementById("buildEnrollRowsBtn").onclick = () => {
+  const n = parseInt(speakerCountInput.value, 10) || 1;
+  enrollRowsEl.innerHTML = "";
+  for (let i = 1; i <= n; i++) {
+    const row = document.createElement("div");
+    row.className = "enroll-row";
+    row.innerHTML = `
+      <input type="text" placeholder="화자 ${i} 이름" value="화자${i}" />
+      <button type="button">🎙️ 5초 녹음</button>
+      <span class="enroll-status">미등록</span>
+    `;
+    const nameInput = row.querySelector("input");
+    const recordBtn = row.querySelector("button");
+    const statusSpan = row.querySelector(".enroll-status");
+    recordBtn.onclick = () => recordAndEnroll(nameInput.value, statusSpan, recordBtn);
+    enrollRowsEl.appendChild(row);
+  }
+};
+
+document.getElementById("clearEnrollBtn").onclick = async () => {
+  await fetch(`${httpBase()}/api/enroll/${encodeURIComponent(sessionIdInput.value)}`, { method: "DELETE" });
+  document.querySelectorAll(".enroll-status").forEach((el) => {
+    el.textContent = "미등록";
+    el.className = "enroll-status";
+  });
+  log("화자 등록 초기화됨");
+};
+
+async function recordAndEnroll(speakerName, statusSpan, recordBtn) {
+  recordBtn.disabled = true;
+  statusSpan.textContent = `🔴 녹음 중 (${ENROLL_DURATION_SEC}초)...`;
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const ctx = new AudioContext();
+  const source = ctx.createMediaStreamSource(stream);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+
+  processor.onaudioprocess = (e) => {
+    const downsampled = downsampleTo16k(e.inputBuffer.getChannelData(0), ctx.sampleRate);
+    chunks.push(new Float32Array(downsampled));
+  };
+  source.connect(processor);
+  processor.connect(ctx.destination);
+
+  await new Promise((resolve) => setTimeout(resolve, ENROLL_DURATION_SEC * 1000));
+
+  processor.disconnect();
+  source.disconnect();
+  stream.getTracks().forEach((t) => t.stop());
+  await ctx.close();
+
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+  const pcm16 = float32ToPCM16LE(merged);
+
+  statusSpan.textContent = "업로드 중...";
+  const url = `${httpBase()}/api/enroll/${encodeURIComponent(sessionIdInput.value)}?speaker_name=${encodeURIComponent(speakerName)}`;
+  const res = await fetch(url, { method: "POST", body: pcm16, headers: { "Content-Type": "application/octet-stream" } });
+  const data = await res.json();
+
+  if (res.ok) {
+    statusSpan.textContent = `✅ 등록됨 (총 ${data.registered_count}명)`;
+    statusSpan.className = "enroll-status done";
+    log(`📇 화자 등록 성공: ${speakerName}`);
+  } else {
+    statusSpan.textContent = "❌ 등록 실패";
+    log(`❌ 화자 등록 실패: ${JSON.stringify(data)}`);
+  }
+  recordBtn.disabled = false;
+}
+
+// ── ② 실시간 전사 ──────────────────────────────────────
 function renderPartial(data) {
-  // 잠정 텍스트는 매번 새로 갱신 (Local Agreement의 tentative 부분)
   if (!tentativeSpan) {
     tentativeSpan = document.createElement("span");
     tentativeSpan.className = "tentative";
@@ -94,7 +203,6 @@ function renderPartial(data) {
 }
 
 function renderFinal(data) {
-  // 확정본 도착 → 잠정 표시 지우고 확정 텍스트로 교체
   if (tentativeSpan) {
     tentativeSpan.remove();
     tentativeSpan = null;
@@ -118,7 +226,7 @@ function renderFinal(data) {
 }
 
 async function start() {
-  ws = new WebSocket(wsUrlInput.value);
+  ws = new WebSocket(wsUrl());
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => { setStatus(true); log("WebSocket 연결됨"); };

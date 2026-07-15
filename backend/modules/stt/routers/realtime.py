@@ -18,11 +18,18 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
 
     fast_model = websocket.app.state.stt_model_fast
     precise_model = websocket.app.state.stt_model
-    # 임베딩 모델(무거움)은 앱 전역에서 공유, 화자 프로필은 이 회의(세션)만의 것으로 새로 생성
-    speaker_identifier = LiveSpeakerIdentifier(websocket.app.state.speaker_embedding_inference)
+
+    # /api/enroll로 회의 시작 전 미리 등록해둔 화자 프로필이 있으면 이어받음
+    # (있으면 "인원수 고정" 닫힌 집합 모드, 없으면 기존 열린 집합 방식으로 자동 폴백)
+    initial_profiles = websocket.app.state.enrolled_profiles.pop(session_id, None)
+    speaker_identifier = LiveSpeakerIdentifier(
+        websocket.app.state.speaker_embedding_inference,
+        initial_profiles=initial_profiles,
+    )
     session = RealtimeSTTSession(session_id, fast_model, precise_model, speaker_identifier)
 
-    logger.info(f"🔴 실시간 STT 세션 시작: {session_id}")
+    mode = "사전등록(닫힌 집합)" if initial_profiles else "자동감지(열린 집합)"
+    logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode})")
 
     try:
         while True:

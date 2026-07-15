@@ -46,10 +46,26 @@ class LiveSpeakerIdentifier:
     회의(세션)마다 새로 만들어야 함 — 화자 프로필은 회의별로 독립적이어야 하니까.
     """
 
-    def __init__(self, inference: Inference, similarity_threshold: float = SPEAKER_SIMILARITY_THRESHOLD):
+    def __init__(
+        self,
+        inference: Inference,
+        similarity_threshold: float = SPEAKER_SIMILARITY_THRESHOLD,
+        initial_profiles: dict[str, np.ndarray] | None = None,
+    ):
+        """
+        initial_profiles를 넘기면 "사전 등록(enrollment) 모드"로 동작함:
+        - 회의 시작 전 각 참석자가 몇 초씩 말해서 미리 등록해둔 목소리 지문
+        - 인원수가 고정되어 있으므로, 매칭 실패해도 새 화자를 만들지 않고
+          가장 가까운 등록자에게 강제로 배정 (닫힌 집합 가정)
+        - 이러면 "매 청크마다 새 화자로 등록되는" 문제가 원천적으로 사라짐
+
+        initial_profiles가 없으면(사전 등록 안 하고 바로 시작한 경우) 기존처럼
+        열린 집합 방식(유사도 낮으면 새 화자 생성)으로 폴백.
+        """
         self.similarity_threshold = similarity_threshold
         self._inference = inference
-        self._profiles: dict[str, np.ndarray] = {}
+        self._profiles: dict[str, np.ndarray] = dict(initial_profiles) if initial_profiles else {}
+        self._closed_set = bool(initial_profiles)
         self._next_speaker_num = 1
 
     @staticmethod
@@ -57,20 +73,14 @@ class LiveSpeakerIdentifier:
         denom = np.linalg.norm(a) * np.linalg.norm(b) + 1e-8
         return float(np.dot(a, b) / denom)
 
-    def _extract_embedding(self, audio: np.ndarray) -> np.ndarray:
+    def extract_embedding(self, audio: np.ndarray) -> np.ndarray:
         # pyannote Inference는 numpy 배열이 아니라 torch 텐서를 기대함 (내부에서 .to(device) 호출)
         waveform_tensor = torch.from_numpy(audio.reshape(1, -1).astype(np.float32))
         waveform = {"waveform": waveform_tensor, "sample_rate": REALTIME_SAMPLE_RATE}
         embedding = self._inference(waveform)
         return np.asarray(embedding).reshape(-1)
 
-    def identify(self, audio: np.ndarray) -> str:
-        """
-        청크 오디오를 받아 화자 라벨(예: "SPEAKER_1")을 즉시 반환.
-        내부적으로 프로필을 계속 갱신(이동 평균)해서 화자 목소리 변화에도 서서히 적응.
-        """
-        embedding = self._extract_embedding(audio)
-
+    def _find_best_match(self, embedding: np.ndarray) -> tuple[str | None, float]:
         best_label = None
         best_score = -1.0
         for label, profile in self._profiles.items():
@@ -78,9 +88,32 @@ class LiveSpeakerIdentifier:
             if score > best_score:
                 best_score = score
                 best_label = label
+        return best_label, best_score
 
-        if best_label is not None and best_score >= self.similarity_threshold:
-            # 기존 화자 → 프로필을 새 임베딩 쪽으로 살짝 이동 (이동 평균)
+    def identify(self, audio: np.ndarray) -> str:
+        """
+        청크 오디오를 받아 화자 라벨(사전 등록 이름 또는 "SPEAKER_N")을 즉시 반환.
+        내부적으로 프로필을 계속 갱신(이동 평균)해서 화자 목소리 변화에도 서서히 적응.
+        """
+        embedding = self.extract_embedding(audio)
+
+        if not self._profiles:
+            # 사전 등록도 없고 첫 화자도 없음 → 무조건 첫 화자로 등록
+            new_label = f"SPEAKER_{self._next_speaker_num}"
+            self._next_speaker_num += 1
+            self._profiles[new_label] = embedding
+            logger.info(f"🆕 새 화자 등록: {new_label} (첫 화자)")
+            return new_label
+
+        best_label, best_score = self._find_best_match(embedding)
+
+        if self._closed_set:
+            # 인원수를 미리 알고 있으므로 새 화자를 만들지 않고 무조건 가장 가까운 등록자에게 배정
+            self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding
+            logger.info(f"🗣️ 화자 매칭(사전등록): {best_label} (유사도 {best_score:.2f})")
+            return best_label
+
+        if best_score >= self.similarity_threshold:
             self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding
             logger.info(f"🗣️ 화자 매칭: {best_label} (유사도 {best_score:.2f})")
             return best_label
