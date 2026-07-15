@@ -52,6 +52,31 @@ CONTEXT_TO_COLLECTION = {
 }
 
 
+# ── where 절 빌더 (공용) ──────────────────────────────────────
+#
+# [수정 사항 - 2026.07.15] 리뷰 피드백 반영: search_hybrid의 where 검증 오류
+# 문제: chromadb의 validate_where()는 top-level key가 1개인 dict만 허용한다.
+#       {"workspace_id": x, "category_id": y}처럼 키가 2개 이상이면
+#       ValueError("Expected where to have exactly one operator")가 발생함.
+#       get_documents_by_document_id/delete_document는 이미 $and로 감싸서
+#       고쳐놨는데 search_hybrid만 이 패턴이 빠져있었음 (버그).
+# 조치: 조건이 1개면 그대로, 2개 이상이면 $and로 감싸는 헬퍼를 공용으로 만들어
+#       세 함수(search_hybrid/get_documents_by_document_id/delete_document)가
+#       전부 이 함수 하나만 쓰도록 통일. 앞으로 where 조건이 늘어나도
+#       이 함수만 거치면 검증 오류가 재발하지 않음.
+def _build_where(conditions: dict) -> dict:
+    """
+    {"workspace_id": "a"} -> {"workspace_id": "a"}
+    {"workspace_id": "a", "category_id": "b"} -> {"$and": [{"workspace_id": "a"}, {"category_id": "b"}]}
+    """
+    clauses = [{k: v} for k, v in conditions.items() if v is not None]
+    if not clauses:
+        return {}
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$and": clauses}
+
+
 # ── 컬렉션 ────────────────────────────────────────────────────
 def get_or_create_collection(collection_name: str):
     ollama_ef = OllamaEmbeddingFunction(
@@ -66,20 +91,27 @@ def get_or_create_collection(collection_name: str):
 
 
 # ── BM25 인덱스 관리 ──────────────────────────────────────────
-def _bm25_path(collection_name: str) -> str:
-    return os.path.join(BM25_DIR, f"{collection_name}.pkl")
+#
+# [수정 사항 - 2026.07.14] Re:Call v2 마이그레이션: workspace_id 단위 분리
+# 기존에는 collection_name 하나로만 인덱스 파일을 나눠서, 모든 워크스페이스의
+# 문서가 같은 BM25 인덱스에 쌓였음. 이러면 (1) 스코어 정규화(max_bm25)가
+# 다른 워크스페이스 데이터에 의해 왜곡되고 (2) 워크스페이스가 늘어날수록
+# 인덱스 파일 하나가 무한정 커짐. collection_name + workspace_id 조합으로
+# 인덱스 파일을 분리해서 두 문제 모두 해결.
+def _bm25_path(collection_name: str, workspace_id: str) -> str:
+    return os.path.join(BM25_DIR, f"{collection_name}__{workspace_id}.pkl")
 
 
-def _load_bm25_index(collection_name: str) -> dict:
-    path = _bm25_path(collection_name)
+def _load_bm25_index(collection_name: str, workspace_id: str) -> dict:
+    path = _bm25_path(collection_name, workspace_id)
     if os.path.exists(path):
         with open(path, "rb") as f:
             return pickle.load(f)
     return {"doc_ids": [], "tokenized_docs": []}
 
 
-def _save_bm25_index(collection_name: str, index_data: dict):
-    path = _bm25_path(collection_name)
+def _save_bm25_index(collection_name: str, workspace_id: str, index_data: dict):
+    path = _bm25_path(collection_name, workspace_id)
     with open(path, "wb") as f:
         pickle.dump(index_data, f)
 
@@ -90,24 +122,42 @@ def _build_bm25(tokenized_docs: list) -> BM25Okapi:
     return BM25Okapi(tokenized_docs)
 
 
-def _update_bm25_index(collection_name: str, doc_id: str, document: str):
-    index_data = _load_bm25_index(collection_name)
+def _update_bm25_index(collection_name: str, workspace_id: str, doc_id: str, document: str):
+    index_data = _load_bm25_index(collection_name, workspace_id)
     index_data["doc_ids"].append(doc_id)
     index_data["tokenized_docs"].append(document.split())
-    _save_bm25_index(collection_name, index_data)
+    _save_bm25_index(collection_name, workspace_id, index_data)
 
 
-def _remove_from_bm25_index(collection_name: str, doc_id: str):
-    index_data = _load_bm25_index(collection_name)
+def _remove_from_bm25_index(collection_name: str, workspace_id: str, doc_id: str):
+    index_data = _load_bm25_index(collection_name, workspace_id)
     if doc_id in index_data["doc_ids"]:
         idx = index_data["doc_ids"].index(doc_id)
         index_data["doc_ids"].pop(idx)
         index_data["tokenized_docs"].pop(idx)
-        _save_bm25_index(collection_name, index_data)
+        _save_bm25_index(collection_name, workspace_id, index_data)
 
 
 # ── 문서 저장 ─────────────────────────────────────────────────
+#
+# [수정 사항 - 2026.07.14] Re:Call v2 마이그레이션: 테넌트 격리 추가
+# 문제: 기존에는 metadata에 workspace_id가 없어서, 여러 워크스페이스가 같은
+#       collection(meeting/document/knowledge)을 공유할 때 검색 결과가
+#       워크스페이스 경계 없이 섞일 수 있었음. BM25 인덱스도 collection_name
+#       단위로만 분리돼서 같은 문제가 있었음.
+# 조치: doc["workspace_id"]를 필수값으로 받고 metadata에 포함, BM25 인덱스도
+#       (collection_name, workspace_id) 조합으로 분리 저장.
+#       category_id는 선택값(옵션)이지만 넘기면 함께 저장 — MVP는 워크스페이스당
+#       카테고리 1개뿐이라 지금은 필터링에 큰 영향 없지만, 카테고리 여러 개로
+#       늘어날 때 마이그레이션 없이 바로 필터링 가능하게 미리 반영해둠.
 def insert_document(doc: dict):
+    workspace_id = doc.get("workspace_id")
+    if not workspace_id:
+        raise ValueError(
+            "insert_document: workspace_id는 필수입니다. "
+            "테넌트 격리 없이 저장하면 다른 워크스페이스 검색 결과와 섞일 수 있습니다."
+        )
+
     upload_context = doc.get("upload_context", "document")
     collection_name = CONTEXT_TO_COLLECTION.get(upload_context, KNOWLEDGE_COLLECTION)
     collection = get_or_create_collection(collection_name)
@@ -117,6 +167,8 @@ def insert_document(doc: dict):
         tags = ",".join(tags)
 
     metadata = {
+        "workspace_id":     workspace_id,
+        "category_id":      doc.get("category_id", ""),
         "title":            doc.get("title", ""),
         "type":             doc.get("type", "document"),
         "source":           doc.get("source", ""),
@@ -142,8 +194,8 @@ def insert_document(doc: dict):
         documents=[doc["content"]],
         metadatas=[metadata]
     )
-    _update_bm25_index(collection_name, doc["id"], doc["content"])
-    print(f"[BGE-M3] 저장 완료 → {collection_name}: {doc.get('title', doc['id'])}")
+    _update_bm25_index(collection_name, workspace_id, doc["id"], doc["content"])
+    print(f"[BGE-M3] 저장 완료 → {collection_name} (workspace={workspace_id}): {doc.get('title', doc['id'])}")
 
 
 # ── Reranker ─────────────────────────────────────────────────
@@ -212,8 +264,17 @@ def rerank_results(query_text: str, results: list[dict]) -> list[dict]:
 
 
 # ── 하이브리드 검색 ───────────────────────────────────────────
+#
+# [수정 사항 - 2026.07.14] Re:Call v2 마이그레이션: workspace_id 필수화
+# workspace_id를 필수 파라미터로 받아서 항상 where filter에 자동 병합함.
+# 호출부에서 filter={"workspace_id": ...}를 깜빡 빼먹어도 다른 워크스페이스
+# 데이터가 섞여 들어오지 않도록 함수 자체에서 강제. category_id는 선택값 —
+# MVP는 워크스페이스당 카테고리 1개뿐이라 지금은 넘기지 않아도 결과가
+# 동일하지만, 카테고리 여러 개가 되는 시점부터는 넘겨야 정확히 스코프됨.
 def search_hybrid(
     query_text: str,
+    workspace_id: str,
+    category_id: str | None = None,
     top_k: int = 60,
     filter: dict | None = None,
     collection_name: str | None = None
@@ -222,10 +283,19 @@ def search_hybrid(
         MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION
     ]
 
+    # workspace_id(+category_id, +호출부 filter)를 _build_where로 병합
+    # chromadb where 검증(top-level key 1개 제한)을 통과하도록 $and로 감쌈
+    base_conditions = {"workspace_id": workspace_id}
+    if category_id:
+        base_conditions["category_id"] = category_id
+    if filter:
+        base_conditions.update(filter)
+    merged_filter = _build_where(base_conditions)
+
     all_results = []
 
     print("[search_hybrid] query_text:", query_text)
-    print("[search_hybrid] filter:", filter)
+    print("[search_hybrid] filter:", merged_filter)
     print("[search_hybrid] target_collections:", target_collections)
 
     for col_name in target_collections:
@@ -236,9 +306,8 @@ def search_hybrid(
                 "query_texts": [query_text],
                 "n_results": top_k,
                 "include": ["documents", "metadatas", "distances"],
+                "where": merged_filter,
             }
-            if filter:
-                query_kwargs["where"] = filter
 
             dense_results = collection.query(**query_kwargs)
 
@@ -259,7 +328,9 @@ def search_hybrid(
 
         print(f"[search_hybrid] collection: {col_name}, dense count: {len(documents[0])}")
 
-        index_data = _load_bm25_index(col_name)
+        # BM25도 워크스페이스 단위 인덱스만 사용 → 다른 워크스페이스 문서가
+        # 점수 정규화(max_bm25)에 영향을 주지 않음
+        index_data = _load_bm25_index(col_name, workspace_id)
         bm25       = _build_bm25(index_data["tokenized_docs"])
         bm25_scores = bm25.get_scores(query_text.split())
 
@@ -301,14 +372,16 @@ def search_hybrid(
 
 
 # ── ChromaDB 직접 확인용 ──────────────────────────────────────
-def get_documents_by_document_id(document_id: str) -> dict:
+#
+# [수정 사항 - 2026.07.14] workspace_id 필터 추가 (테넌트 격리)
+def get_documents_by_document_id(document_id: str, workspace_id: str) -> dict:
     total_ids, total_metadatas, total_documents = [], [], []
 
     for collection_name in [MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION]:
         collection = get_or_create_collection(collection_name)
         try:
             result = collection.get(
-                where={"document_id": document_id},
+                where=_build_where({"document_id": document_id, "workspace_id": workspace_id}),
                 include=["metadatas", "documents"]
             )
             total_ids.extend(result.get("ids", []))
@@ -326,7 +399,9 @@ def get_documents_by_document_id(document_id: str) -> dict:
 
 
 # ── 문서 삭제 ─────────────────────────────────────────────────
-def delete_document(doc_id: str, collection_name: str | None = None):
+#
+# [수정 사항 - 2026.07.14] workspace_id 필터/BM25 인덱스 분리 반영
+def delete_document(doc_id: str, workspace_id: str, collection_name: str | None = None):
     targets = [collection_name] if collection_name else [
         MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION
     ]
@@ -334,14 +409,14 @@ def delete_document(doc_id: str, collection_name: str | None = None):
         try:
             collection = get_or_create_collection(col_name)
             result = collection.get(
-                where={"document_id": doc_id},
+                where=_build_where({"document_id": doc_id, "workspace_id": workspace_id}),
                 include=[],
             )
             chunk_ids = result.get("ids", [])
             if chunk_ids:
                 collection.delete(ids=chunk_ids)
                 for cid in chunk_ids:
-                    _remove_from_bm25_index(col_name, cid)
+                    _remove_from_bm25_index(col_name, workspace_id, cid)
                 print(f"[삭제 완료] {col_name}: document_id={doc_id}, 청크 {len(chunk_ids)}개 삭제")
             else:
                 print(f"[삭제 스킵] {col_name}: document_id={doc_id} 해당 청크 없음")
