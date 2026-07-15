@@ -24,6 +24,8 @@
   .enroll-row input[type="text"] { width: 140px; }
   .enroll-status { font-size: 12px; color: #666; min-width: 160px; }
   .enroll-status.done { color: #16a34a; }
+  .enroll-fallback { display: none; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: #b45309; }
+  .enroll-fallback input[type="text"] { width: 120px; }
   fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
   legend { font-weight: bold; font-size: 13px; padding: 0 4px; }
 </style>
@@ -46,7 +48,11 @@
       <button id="clearEnrollBtn">등록 초기화</button>
     </div>
     <div id="enrollRows"></div>
-    <div style="font-size:12px;color:#888;">각자 이름 입력 후 "5초 녹음" 눌러서 5초간 말하면 자동 등록됨. 등록 안 하고 바로 시작하면 자동감지(열린 집합) 모드로 동작.</div>
+    <div style="font-size:12px;color:#888;">
+      각자 버튼 누르고 <b>"안녕하세요 OOO입니다"</b>라고 말하면, 이름이 자동으로 인식되어 등록됨
+      (말이 끝나면 자동으로 녹음 종료). 이름 인식이 실패하면 직접 입력할 수 있는 칸이 나타남.
+      등록 안 하고 바로 시작하면 자동감지(열린 집합) 모드로 동작.
+    </div>
   </fieldset>
 
   <div id="status" class="disconnected">연결 안 됨</div>
@@ -117,22 +123,40 @@ function float32ToPCM16LE(float32Array) {
   return buffer;
 }
 
-// ── ① 화자 사전 등록 ──────────────────────────────────────
+// ── ① 화자 사전 등록 (말하면 자동으로 이름 인식) ──────────────
+const ENROLL_MAX_SEC = 8;          // 이 이상 말해도 강제 종료
+const ENROLL_SILENCE_MS = 800;     // 말 시작 후 이만큼 조용하면 자동 종료
+const ENROLL_SPEECH_RMS = 0.02;    // 이 이상 소리 크기여야 "말하는 중"으로 판단
+
 document.getElementById("buildEnrollRowsBtn").onclick = () => {
   const n = parseInt(speakerCountInput.value, 10) || 1;
   enrollRowsEl.innerHTML = "";
   for (let i = 1; i <= n; i++) {
     const row = document.createElement("div");
     row.className = "enroll-row";
+    row.style.flexDirection = "column";
+    row.style.alignItems = "flex-start";
     row.innerHTML = `
-      <input type="text" placeholder="화자 ${i} 이름" value="화자${i}" />
-      <button type="button">🎙️ 5초 녹음</button>
-      <span class="enroll-status">미등록</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button type="button">🎙️ ${i}번째 분 — "안녕하세요 OOO입니다" 녹음</button>
+        <span class="enroll-status">미등록</span>
+      </div>
+      <div class="enroll-fallback">
+        이름 인식 실패 (인식된 말: <span class="detected-text"></span>)
+        <input type="text" placeholder="이름 직접 입력" />
+        <button type="button" class="manual-confirm-btn">이 이름으로 등록</button>
+      </div>
     `;
-    const nameInput = row.querySelector("input");
     const recordBtn = row.querySelector("button");
     const statusSpan = row.querySelector(".enroll-status");
-    recordBtn.onclick = () => recordAndEnroll(nameInput.value, statusSpan, recordBtn);
+    const fallbackDiv = row.querySelector(".enroll-fallback");
+    const detectedTextSpan = row.querySelector(".detected-text");
+    const manualInput = row.querySelector('input[type="text"]');
+    const manualConfirmBtn = row.querySelector(".manual-confirm-btn");
+    const lastPcm16 = { value: null };  // 이름 인식 실패 시, 수동 재시도에서 같은 오디오 재사용
+
+    recordBtn.onclick = () => recordAndEnroll(null, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16);
+    manualConfirmBtn.onclick = () => recordAndEnroll(manualInput.value, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, /*isManualRetry=*/ true);
     enrollRowsEl.appendChild(row);
   }
 };
@@ -143,51 +167,102 @@ document.getElementById("clearEnrollBtn").onclick = async () => {
     el.textContent = "미등록";
     el.className = "enroll-status";
   });
+  document.querySelectorAll(".enroll-fallback").forEach((el) => (el.style.display = "none"));
   log("화자 등록 초기화됨");
 };
 
-async function recordAndEnroll(speakerName, statusSpan, recordBtn) {
+// 말이 시작되고 나서 일정 시간 조용해지면 자동으로 녹음을 멈추는 간단한 클라이언트 측 침묵 감지
+function recordUntilSilence() {
+  return new Promise(async (resolve, reject) => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+
+    let hasSpokenYet = false;
+    let silentSinceMs = 0;
+    let elapsedMs = 0;
+    let finished = false;
+
+    const finish = async () => {
+      if (finished) return;  // onaudioprocess가 disconnect 직전에 한 번 더 발화할 수 있어 중복 방지
+      finished = true;
+      processor.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach((t) => t.stop());
+      await ctx.close();
+
+      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+      const merged = new Float32Array(totalLength);
+      let offset = 0;
+      for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+      resolve(merged);
+    };
+
+    processor.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      const downsampled = downsampleTo16k(input, ctx.sampleRate);
+      chunks.push(new Float32Array(downsampled));
+
+      // RMS(음량 크기) 계산해서 "말하는 중"인지 "조용한지" 판단
+      let sumSquares = 0;
+      for (let i = 0; i < input.length; i++) sumSquares += input[i] * input[i];
+      const rms = Math.sqrt(sumSquares / input.length);
+      const chunkMs = (input.length / ctx.sampleRate) * 1000;
+      elapsedMs += chunkMs;
+
+      if (rms >= ENROLL_SPEECH_RMS) {
+        hasSpokenYet = true;
+        silentSinceMs = 0;
+      } else if (hasSpokenYet) {
+        silentSinceMs += chunkMs;
+      }
+
+      if ((hasSpokenYet && silentSinceMs >= ENROLL_SILENCE_MS) || elapsedMs >= ENROLL_MAX_SEC * 1000) {
+        finish();
+      }
+    };
+
+    source.connect(processor);
+    processor.connect(ctx.destination);
+  });
+}
+
+async function recordAndEnroll(manualName, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, isManualRetry = false) {
   recordBtn.disabled = true;
-  statusSpan.textContent = `🔴 녹음 중 (${ENROLL_DURATION_SEC}초)...`;
+  fallbackDiv.style.display = "none";
+  statusSpan.textContent = isManualRetry ? "업로드 중..." : "🔴 듣는 중... (말하면 자동으로 인식돼요)";
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const ctx = new AudioContext();
-  const source = ctx.createMediaStreamSource(stream);
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
-  const chunks = [];
+  if (!isManualRetry) {
+    const merged = await recordUntilSilence();
+    lastPcm16.value = float32ToPCM16LE(merged);
+    statusSpan.textContent = "인식 중...";
+  }
+  // 수동 재시도(isManualRetry=true)는 재녹음 없이, 직전에 녹음해둔 오디오를 그대로 재사용
+  const pcm16 = lastPcm16.value;
 
-  processor.onaudioprocess = (e) => {
-    const downsampled = downsampleTo16k(e.inputBuffer.getChannelData(0), ctx.sampleRate);
-    chunks.push(new Float32Array(downsampled));
-  };
-  source.connect(processor);
-  processor.connect(ctx.destination);
+  const sessionId = encodeURIComponent(sessionIdInput.value);
+  const nameParam = manualName ? `?speaker_name=${encodeURIComponent(manualName)}` : "";
+  const url = `${httpBase()}/api/enroll/${sessionId}${nameParam}`;
 
-  await new Promise((resolve) => setTimeout(resolve, ENROLL_DURATION_SEC * 1000));
-
-  processor.disconnect();
-  source.disconnect();
-  stream.getTracks().forEach((t) => t.stop());
-  await ctx.close();
-
-  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-  const merged = new Float32Array(totalLength);
-  let offset = 0;
-  for (const c of chunks) { merged.set(c, offset); offset += c.length; }
-  const pcm16 = float32ToPCM16LE(merged);
-
-  statusSpan.textContent = "업로드 중...";
-  const url = `${httpBase()}/api/enroll/${encodeURIComponent(sessionIdInput.value)}?speaker_name=${encodeURIComponent(speakerName)}`;
-  const res = await fetch(url, { method: "POST", body: pcm16, headers: { "Content-Type": "application/octet-stream" } });
+  const res = await fetch(url, {
+    method: "POST",
+    body: pcm16,
+    headers: { "Content-Type": "application/octet-stream" },
+  });
   const data = await res.json();
 
-  if (res.ok) {
-    statusSpan.textContent = `✅ 등록됨 (총 ${data.registered_count}명)`;
+  if (data.status === "success") {
+    statusSpan.textContent = `✅ "${data.speaker_name}" 등록됨 (인식된 말: "${data.detected_text}", 총 ${data.registered_count}명)`;
     statusSpan.className = "enroll-status done";
-    log(`📇 화자 등록 성공: ${speakerName}`);
+    log(`📇 화자 등록 성공: ${data.speaker_name}`);
   } else {
-    statusSpan.textContent = "❌ 등록 실패";
-    log(`❌ 화자 등록 실패: ${JSON.stringify(data)}`);
+    // 이름 자동 인식 실패 → 수동 입력 폴백 UI 표시
+    statusSpan.textContent = "❌ 이름 인식 실패";
+    detectedTextSpan.textContent = data.detected_text || "(인식 안 됨)";
+    fallbackDiv.style.display = "flex";
+    log(`⚠️ 이름 자동 인식 실패: "${data.detected_text}"`);
   }
   recordBtn.disabled = false;
 }
