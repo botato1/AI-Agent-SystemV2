@@ -331,9 +331,6 @@ async def upload_and_process_document(
         response.raise_for_status()
         processed_result = response.json()
 
-        # TODO: 8003의 document_id(외부 ID)를 새 스키마 어디에도 저장하지 않아서
-        # delete_processed_document에서 8003 쪽 원본을 못 찾는 문제가 있음.
-        # workspace_files에 external_ref 같은 컬럼이 필요할 수 있음 - 확인 필요.
         external_document_id = processed_result.get("document_id") or processed_result.get("id")
 
         content_markdown = processed_result.get("content_markdown") or processed_result.get("content") or ""
@@ -372,6 +369,7 @@ async def upload_and_process_document(
             sha256_hash=sha256_hash,
             version_group_id=uuid.uuid4(),  # TODO: 동일 파일 재업로드 시 버전 관리 로직 필요
             analysis_status="processing",
+            external_ref=external_document_id,
         )
 
         # 2. document_analyses 저장
@@ -494,10 +492,14 @@ def delete_processed_document(db: Session, file_id: UUID) -> dict:
         if not workspace_file:
             raise PermissionError("삭제할 문서를 찾을 수 없습니다.")
 
-        # TODO: external_document_id를 저장하는 컬럼이 없어서 8003 쪽 삭제 호출을
-        # 못 하고 있음. 우리 DB/ChromaDB 정리만 하고 8003 원본은 그대로 남는다.
         deleted_chunks_count = content_chunk_crud.delete_chunks_by_file(db, file_id)
         deleted_local_source_file = _safe_delete_local_file(workspace_file.storage_path)
+
+        document_8003_result = None
+        if workspace_file.external_ref:
+            document_8003_result = _delete_document_from_8003(workspace_file.external_ref)
+            if document_8003_result.get("status") == "error":
+                print(f"[document_service] 8003 원본 삭제 실패: {document_8003_result}")
 
         try:
             chroma_delete_document(str(file_id), str(workspace_file.workspace_id))
@@ -517,6 +519,7 @@ def delete_processed_document(db: Session, file_id: UUID) -> dict:
                 "content_chunks": deleted_chunks_count,
                 "local_source_file": deleted_local_source_file,
                 "chroma": chroma_deleted,
+                "document_8003": document_8003_result,
             },
             "error": None,
         }
