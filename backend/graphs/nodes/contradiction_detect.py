@@ -24,7 +24,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
 TOP_K_CANDIDATES = 5
-# 이 미만은 LLM이 "모순"이라고 답해도 알림까지 보내지 않는다.
+# 이 미만이면 LLM이 "모순"이라고 답해도 저장/알림 대상에서 완전히 제외한다.
 CONFIDENCE_THRESHOLD = 0.6
 
 _JUDGE_PROMPT = """당신은 팀 문서와 회의/채팅 발언 사이의 모순을 판단하는 검토자입니다.
@@ -65,20 +65,24 @@ def _judge_contradiction(statement: str, reference: str) -> dict:
         response.raise_for_status()
         raw_text = response.json().get("response", "").strip()
         parsed = json.loads(raw_text)
-    except (httpx.HTTPError, json.JSONDecodeError) as e:
+
+        if not isinstance(parsed, dict):
+            raise ValueError(f"응답이 JSON 객체가 아님: {parsed!r}")
+
+        severity = parsed.get("severity")
+        if severity not in ("low", "medium", "high"):
+            print(f"[contradiction_detect] 알 수 없는 severity 값, medium으로 대체: {severity!r}")
+            severity = "medium"
+
+        return {
+            "is_contradiction": bool(parsed.get("is_contradiction", False)),
+            "reason": str(parsed.get("reason", "")),
+            "severity": severity,
+            "confidence": float(parsed.get("confidence", 0.0)),
+        }
+    except (httpx.HTTPError, json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
         print(f"[contradiction_detect] LLM 판단 실패: {repr(e)}")
         return {"is_contradiction": False, "reason": "", "severity": "low", "confidence": 0.0}
-
-    severity = parsed.get("severity")
-    if severity not in ("low", "medium", "high"):
-        severity = "medium"
-
-    return {
-        "is_contradiction": bool(parsed.get("is_contradiction", False)),
-        "reason": str(parsed.get("reason", "")),
-        "severity": severity,
-        "confidence": float(parsed.get("confidence", 0.0)),
-    }
 
 
 def contradiction_detect_node(state: ContradictionState) -> dict:
@@ -86,10 +90,18 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
     category_id = state["category_id"]
     statement_text = state["statement_text"]
     source_type = state["source_type"]
+
+    if source_type not in ("meeting_segment", "room_message"):
+        return {"error": f"알 수 없는 source_type: {source_type!r}"}
+
     source_id = state.get("meeting_segment_id") if source_type == "meeting_segment" else state.get("room_message_id")
 
     if not source_id:
         return {"error": f"source_type={source_type}에 맞는 원본 ID가 state에 없습니다."}
+
+    workspace_uuid = uuid.UUID(workspace_id)
+    category_uuid = uuid.UUID(category_id)
+    source_uuid = uuid.UUID(source_id)
 
     try:
         candidates = search_hybrid(
@@ -130,12 +142,12 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
 
             dedup_key = contradiction_crud.make_deduplication_key(
                 source_type=source_type,
-                source_id=uuid.UUID(source_id),
+                source_id=source_uuid,
                 reference_file_id=chunk.file_id,
                 reference_id=chunk.id,
             )
 
-            if contradiction_crud.is_in_cooldown(db, uuid.UUID(workspace_id), dedup_key):
+            if contradiction_crud.is_in_cooldown(db, workspace_uuid, dedup_key):
                 continue
 
             detected.append({
@@ -155,8 +167,8 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
 
             row = contradiction_crud.create_contradiction(
                 db,
-                workspace_id=uuid.UUID(workspace_id),
-                category_id=uuid.UUID(category_id),
+                workspace_id=workspace_uuid,
+                category_id=category_uuid,
                 source_type=source_type,
                 reference_type="content_chunk",
                 reference_file_id=chunk.file_id,
@@ -167,7 +179,7 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
                 severity=judgment["severity"],
                 reason=judgment["reason"],
                 reference_chunk_id=chunk.id,
-                **{source_field: uuid.UUID(source_id)},
+                **{source_field: source_uuid},
             )
             saved_ids.append(str(row.id))
     finally:
