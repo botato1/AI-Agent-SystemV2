@@ -32,7 +32,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from backend.schemas.common_schema import (
     SoftDeleteSchema,
@@ -248,3 +248,77 @@ class DecisionSchema(TimestampSchema, SoftDeleteSchema):
     )
 
     decided_at: datetime
+
+# =============================================================================
+# Re:Call: meetings API 요청/응답
+# =============================================================================
+
+class MeetingStartRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    related_room_id: Optional[UUID] = None
+
+
+class MeetingResponse(TimestampSchema):
+    id: UUID
+    workspace_id: UUID
+    category_id: UUID
+    related_room_id: Optional[UUID] = None
+    source_file_id: Optional[UUID] = None
+
+    title: str
+    input_type: MeetingInputType
+    status: MeetingStatus
+
+    started_by: UUID
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+
+
+class MeetingStartResponse(MeetingResponse):
+    ws_ticket: str
+
+
+class MeetingListResponse(BaseModel):
+    meetings: list[MeetingResponse] = Field(default_factory=list)
+
+
+class MeetingSegmentResponse(TimestampSchema):
+    id: UUID
+    meeting_id: UUID
+    speaker_label: Optional[str] = None
+    speaker_user_id: Optional[UUID] = None
+    content: str
+    start_ms: int
+    end_ms: int
+    segment_index: int
+    is_edited: bool
+
+
+class MeetingSegmentListResponse(BaseModel):
+    segments: list[MeetingSegmentResponse] = Field(default_factory=list)
+
+
+class MeetingSummaryResponse(TimestampSchema):
+    id: UUID
+    meeting_id: UUID
+    full_summary: Optional[str] = None
+    short_summary: Optional[str] = None
+    discussion_points: Optional[Any] = None
+    generation_status: GenerationStatus
+    generated_at: Optional[datetime] = None
+
+
+class DecisionResponse(TimestampSchema):
+    id: UUID
+    workspace_id: UUID
+    meeting_id: UUID
+    title: str
+    decision_text: str
+    reason: Optional[str] = None
+    status: DecisionStatus
+    decided_at: datetime
+
+
+class DecisionListResponse(BaseModel):
+    decisions: list[DecisionResponse] = Field(default_factory=list)
