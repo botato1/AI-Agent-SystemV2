@@ -6,7 +6,7 @@ from backend.schemas.chat_schema import ChatRequest
 from backend.schemas.response_schema import ChatResponseSchema
 from backend.schemas.agent_schema import AgentState
 from backend.schemas.type_schema import DEFAULT_QUESTION_TYPE
-from backend.graphs.agent_graph import agent_graph
+# from backend.graphs.agent_graph import agent_graph
 
 
 # TODO: 아래 함수들은 legacy conversation 기반 crud로, 새 도메인(rooms/room_messages)
@@ -259,7 +259,8 @@ def build_chat_response(state: AgentState) -> ChatResponseSchema:
 
 # AgentState를 LangGraph에 전달해서 실행
 def run_agent_graph(state: AgentState) -> AgentState:
-    return agent_graph.invoke(state)
+    _not_implemented("run_agent_graph")
+    #return agent_graph.invoke(state)
 
 
 # AgentState 초기화
