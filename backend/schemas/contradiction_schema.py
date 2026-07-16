@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from backend.schemas.common_schema import (
     ORMBaseSchema,
@@ -201,3 +201,15 @@ class ChangeSummaryDraftSchema(TimestampSchema):
         default=None,
         max_length=100,
     )
+    
+# =============================================================================
+# Re:Call: contradictions API 요청/응답
+# =============================================================================
+
+class ContradictionListResponse(BaseModel):
+    contradictions: list[ContradictionSchema] = Field(default_factory=list)
+
+
+class ContradictionResolveRequest(BaseModel):
+    resolution_type: ContradictionResolutionType
+    note: Optional[str] = None

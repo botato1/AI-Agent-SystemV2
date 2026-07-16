@@ -59,6 +59,7 @@ class WorkspaceFile(Base):
     origin_type = Column(String(30), nullable=False)
     file_size_bytes = Column(BigInteger, nullable=False)
     sha256_hash = Column(String(64), nullable=False)
+    external_ref = Column(String(255), nullable=True)
 
     version_group_id = Column(UUID(as_uuid=True), nullable=False)
     version_no = Column(Integer, nullable=False, server_default="1")

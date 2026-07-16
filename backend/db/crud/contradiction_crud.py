@@ -113,6 +113,35 @@ def list_unresolved_by_category(db: Session, category_id: uuid.UUID) -> list[Con
         .all()
     )
 
+def get_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[Contradiction]:
+    return db.query(Contradiction).filter(Contradiction.id == contradiction_id).first()
+
+
+def list_contradictions(
+    db: Session, workspace_id: uuid.UUID, status: Optional[str] = None
+) -> list[Contradiction]:
+    query = db.query(Contradiction).filter(Contradiction.workspace_id == workspace_id)
+    if status:
+        query = query.filter(Contradiction.status == status)
+    return query.order_by(Contradiction.detected_at.desc()).all()
+
+
+def dismiss_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[Contradiction]:
+    row = db.get(Contradiction, contradiction_id)
+    if row:
+        row.status = "dismissed"
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Optional[ChangeSummaryDraft]:
+    return (
+        db.query(ChangeSummaryDraft)
+        .filter(ChangeSummaryDraft.contradiction_id == contradiction_id)
+        .first()
+    )
+
 
 def resolve_contradiction(
     db: Session,
