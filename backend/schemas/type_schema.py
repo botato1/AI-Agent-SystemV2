@@ -227,14 +227,14 @@ DecisionStatus = Literal[
     "cancelled",
 ]
 
-ActionItemStatus = Literal[
+TaskStatus = Literal[
     "open",
     "in_progress",
     "done",
     "cancelled",
 ]
 
-ActionItemPriority = Literal[
+TaskPriority = Literal[
     "low",
     "medium",
     "high",
