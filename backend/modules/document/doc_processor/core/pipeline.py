@@ -239,9 +239,12 @@ class DocumentPipeline:
         has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 2
         has_ocr_text  = bool(content.images)
         has_tables    = bool(content.tables)
-        if not has_real_text and not has_ocr_text and not has_tables:
+        has_pending_vl = any(task["page_no"] == page_no for task in self._vl_queue)
+        if not has_real_text and not has_ocr_text and not has_tables and not has_pending_vl:
             print(f"  [SUPPLEMENT] 내용 희박 (텍스트<3 + 이미지0 + 표0) -> 전체 페이지 OCR 보충")
             self._ocr_full_page(fitz_page, content, page_no=page_no)
+        elif has_pending_vl and not has_real_text and not has_ocr_text and not has_tables:
+            print(f"  [SUPPLEMENT] 스킵 — VL 큐에 표/차트 처리 대기 중 (page={page_no})")
 
         return content
 
