@@ -1,78 +1,139 @@
-# 업무 추출 / 업무 관리 관련 스키마
-from typing import Optional, Literal, Any
-from pydantic import BaseModel, Field
+# backend/schemas/task_schema.py
+
+"""
+할 일(tasks) 관련 Pydantic 스키마를 정의한다.
+
+카테고리 범위 설계:
+- tasks.category_id는 할 일이 속한 카테고리를 나타낸다.
+- 회의에서 추출한 할 일은 meetings.category_id를 복사하여 저장한다.
+- 사용자가 직접 생성한 할 일은 MVP에서 워크스페이스의 기본
+  category_id를 서비스 계층에서 자동 적용한다.
+- 향후 여러 카테고리를 지원할 때는 현재 화면의 카테고리를 적용하거나
+  사용자가 선택한 category_id를 사용한다.
+- meeting_id가 없는 직접 생성 할 일은 다른 테이블을 통해 category_id를
+  유도할 수 없으므로 tasks에 category_id를 직접 저장한다.
+
+서비스 계층에서 다음 관계를 검증해야 한다.
+- tasks.category_id가 tasks.workspace_id에 속하는지 확인
+- meeting_id가 있으면 tasks.workspace_id와
+  meetings.workspace_id가 일치하는지 확인
+- meeting_id가 있으면 tasks.category_id와
+  meetings.category_id가 일치하는지 확인
+- source_segment_id가 있으면 해당 세그먼트가 meeting_id의 회의에
+  속하는지 확인
+
+TODO:
+- 할 일 생성, 수정, 조회 API의 요청·응답 스키마는
+  관련 라우터 구현 시 별도로 정의
+"""
+
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import Field, model_validator, BaseModel
+
+from backend.schemas.common_schema import (
+    ORMBaseSchema,
+    SoftDeleteSchema,
+    TimestampSchema,
+)
+from backend.schemas.type_schema import (
+    TaskPriority,
+    TaskStatus,
+)
 
 
-# 업무 상태 값 (v1 호환용 — task_router.py / chat_service.py의 STATUS_MAP과 맞물려 있음)
-TaskStatus = Literal["todo", "in_progress", "done", "delayed"]
+# =============================================================================
+# Re:Call: tasks
+# =============================================================================
 
-# 업무 우선순위 값 (v1 호환용)
-TaskPriority = Literal["high", "medium", "low"]
+class TaskSchema(TimestampSchema, SoftDeleteSchema):
+    """
+    회의에서 추출되었거나 사용자가 직접 생성한 할 일 하나를 표현한다.
 
-# v2 법률 할일 전용 상태/우선순위 값 (v1 TaskStatus/TaskPriority와 값 구성이 달라 별도 선언)
-LegalActionStatus = Literal["todo", "in_progress", "done", "blocked"]
-LegalActionPriority = Literal["low", "medium", "high", "urgent"]
+    meeting_id가 NULL이면 사용자가 직접 만든 할 일이다.
+    source_segment_id는 회의 발언에서 추출된 할 일에만 사용한다.
+    """
 
+    id: UUID
+    workspace_id: UUID
+    category_id: UUID
 
-# 할 일 하나의 구조 (v1 호환용)
-class TaskItemSchema(BaseModel):
-    task_id: str
-    task: str
-    assignee: Optional[str] = None
-    deadline: Optional[str] = None
-    status: TaskStatus = "todo"
-    priority: TaskPriority = "medium"
-    room_id: Optional[str] = None
-    document_id: Optional[str] = None
-    created_at: Optional[str] = None
+    meeting_id: Optional[UUID] = None
+    source_segment_id: Optional[UUID] = None
 
+    assignee_id: Optional[UUID] = None
+    assignee_label: Optional[str] = Field(
+        default=None,
+        max_length=100,
+    )
 
-# TODO: v2 법률 할일 생성용 구조 : 추후 할일 생성 기능 추가 시 확정
-class LegalActionItemSchema(BaseModel):
-    task_id: Optional[str] = None               # 할 일 ID
-    task: str                                   # 할 일 내용
-    reason: Optional[str] = None                # 할 일 생성 이유/근거
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+    )
+    description: Optional[str] = None
 
-    status: LegalActionStatus = "todo"          # 처리 상태
-    priority: LegalActionPriority = "medium"    # 우선순위
+    priority: Optional[TaskPriority] = None
+    status: TaskStatus
 
-    room_id: Optional[str] = None               # v1 호환용 : 채팅방 ID
-    conversation_id: Optional[str] = None       # v2 : 사건방 ID
+    due_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
-    document_id: Optional[str] = None           # 연결 문서 ID
-    source_document_id: Optional[str] = None    # 이 할 일이 나온 원본 문서 ID
-    source_clause: Optional[str] = None         # 이 할 일이 나온 조항
+    created_by: Optional[UUID] = None
 
-    related_legal_refs: list[dict[str, Any]] = Field(default_factory=list)      # 관련 법령/판례/계약서 조항 근거 목록
+    @model_validator(mode="after")
+    def _validate_source_consistency(self) -> "TaskSchema":
+        if self.source_segment_id is not None and self.meeting_id is None:
+            raise ValueError(
+                "source_segment_id가 있으면 meeting_id도 필수입니다."
+            )
 
-    risk_level: Optional[LegalActionPriority] = None        # 법률 위험도
-    created_at: Optional[str] = None                        # 생성시간
-    updated_at: Optional[str] = None                        # 수정시간
+        return self
 
+# =============================================================================
+# Re:Call: tasks API 요청/응답
+# =============================================================================
 
-# 요약 + 할 일 추출 결과 구조
-class TaskResultSchema(BaseModel):
-    summary: Optional[str] = None
-    tasks: list[TaskItemSchema] = Field(default_factory=list)
-    action_items: list[LegalActionItemSchema] = Field(default_factory=list)
-
-
-# 업무 직접 생성 요청 구조 (v1 호환 — task_router.py POST /api/tasks)
 class TaskCreateRequest(BaseModel):
-    task: str = Field(..., min_length=1)
-    assignee: Optional[str] = None
-    deadline: Optional[str] = None
-    status: TaskStatus = "todo"
-    priority: TaskPriority = "medium"
-    room_id: Optional[str] = None
-    document_id: Optional[str] = None
+    """사용자가 직접 생성하는 할 일 요청. meeting_id/category_id는 서비스 계층에서 채운다."""
+
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    assignee_id: Optional[UUID] = None
+    assignee_label: Optional[str] = Field(default=None, max_length=100)
+    priority: Optional[TaskPriority] = None
+    due_at: Optional[datetime] = None
 
 
-# 업무 상태 변경 요청 구조 (v1 호환 — task_router.py PATCH /api/tasks/{task_id}/status)
 class TaskStatusUpdateRequest(BaseModel):
     status: TaskStatus
 
 
-# 업무 우선순위 변경 요청 구조 (v1 호환 — task_router.py PATCH /api/tasks/{task_id}/priority)
 class TaskPriorityUpdateRequest(BaseModel):
     priority: TaskPriority
+
+
+class TaskResponse(ORMBaseSchema):
+    id: UUID
+    workspace_id: UUID
+    meeting_id: Optional[UUID] = None
+
+    title: str
+    description: Optional[str] = None
+
+    assignee_id: Optional[UUID] = None
+    assignee_label: Optional[str] = None
+
+    priority: Optional[TaskPriority] = None
+    status: TaskStatus
+
+    due_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class TaskListResponse(BaseModel):
+    tasks: list[TaskResponse] = Field(default_factory=list)
