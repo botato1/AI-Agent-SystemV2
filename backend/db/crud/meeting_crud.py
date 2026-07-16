@@ -68,6 +68,55 @@ def create_decision(db: Session, workspace_id: uuid.UUID, meeting_id: uuid.UUID,
     db.refresh(row)
     return row
 
+def get_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
+    return (
+        db.query(Meeting)
+        .filter(Meeting.id == meeting_id, Meeting.deleted_at.is_(None))
+        .first()
+    )
+
+
+def list_meetings(db: Session, workspace_id: uuid.UUID) -> list[Meeting]:
+    return (
+        db.query(Meeting)
+        .filter(Meeting.workspace_id == workspace_id, Meeting.deleted_at.is_(None))
+        .order_by(Meeting.created_at.desc())
+        .all()
+    )
+
+
+def update_meeting_status(db: Session, meeting_id: uuid.UUID, status: str, **fields) -> Optional[Meeting]:
+    row = get_meeting(db, meeting_id)
+    if row:
+        row.status = status
+        for k, v in fields.items():
+            setattr(row, k, v)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def delete_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
+    row = get_meeting(db, meeting_id)
+    if row:
+        row.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def get_meeting_summary(db: Session, meeting_id: uuid.UUID) -> Optional[MeetingSummary]:
+    return db.query(MeetingSummary).filter(MeetingSummary.meeting_id == meeting_id).first()
+
+
+def list_decisions_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Decision]:
+    return (
+        db.query(Decision)
+        .filter(Decision.meeting_id == meeting_id, Decision.deleted_at.is_(None))
+        .order_by(Decision.decided_at.desc())
+        .all()
+    )
+
 
 def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, **fields) -> Task:
     row = Task(workspace_id=workspace_id, category_id=category_id, title=title, **fields)
