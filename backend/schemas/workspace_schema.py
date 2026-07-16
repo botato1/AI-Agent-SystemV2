@@ -46,6 +46,27 @@ class WorkspaceSchema(TimestampSchema, SoftDeleteSchema):
     description: Optional[str] = None
     owner_id: UUID
 
+class WorkspaceCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+class WorkspaceResponse(ORMBaseSchema):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    owner_id: UUID
+    created_at: datetime
+
+
+class WorkspaceListResponse(BaseModel):
+    workspaces: list[WorkspaceResponse] = Field(default_factory=list)
+
 
 # =============================================================================
 # Re:Call: workspace_members
@@ -72,6 +93,26 @@ class WorkspaceMemberSchema(ORMBaseSchema):
     joined_at: datetime
     removed_at: Optional[datetime] = None
 
+class WorkspaceMemberAddRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+    role: WorkspaceRole = "member"
+
+
+class WorkspaceMemberRoleUpdateRequest(BaseModel):
+    role: WorkspaceRole
+
+
+class WorkspaceMemberResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    username: str
+    display_name: str
+    role: WorkspaceRole
+    joined_at: datetime
+
+
+class WorkspaceMemberListResponse(BaseModel):
+    members: list[WorkspaceMemberResponse] = Field(default_factory=list)
 
 # =============================================================================
 # Re:Call: categories
