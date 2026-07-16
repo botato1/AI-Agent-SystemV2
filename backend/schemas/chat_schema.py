@@ -35,6 +35,8 @@ from backend.schemas.common_schema import (
 from backend.schemas.type_schema import (
     AIChatRole,
     AIMessageSourceType,
+    FileAnalysisStatus,
+    FileKind,
     RoomMessageType,
 )
 
@@ -211,6 +213,32 @@ class RoomFileLinkSchema(ORMBaseSchema):
 
     linked_by: UUID
     created_at: datetime
+
+# =============================================================================
+# Re:Call: room_messages / room_file_links API 요청/응답
+# =============================================================================
+
+class RoomMessageCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    reply_to_id: Optional[UUID] = None
+
+
+class RoomFileLinkRequest(BaseModel):
+    file_id: UUID
+
+
+class RoomFileResponse(ORMBaseSchema):
+    """room에 연결된 파일 정보. 저장 경로 등 내부 정보는 제외하고 노출 가능한 필드만 포함."""
+
+    id: UUID
+    original_filename: str
+    file_kind: FileKind
+    analysis_status: FileAnalysisStatus
+    created_at: datetime
+
+
+class RoomFileListResponse(BaseModel):
+    files: list[RoomFileResponse] = Field(default_factory=list)
 
 
 # =============================================================================
