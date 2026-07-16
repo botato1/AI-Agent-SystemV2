@@ -12,9 +12,9 @@ import uuid as uuid_lib
 
 from backend.core.config import settings
 
-WS_TICKET_EXPIRE_SECONDS = 60
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+WS_TICKET_EXPIRE_SECONDS = 180
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 ALGORITHM = "HS256"
