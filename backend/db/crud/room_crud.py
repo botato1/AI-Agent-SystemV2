@@ -80,10 +80,10 @@ def delete_room(db: Session, room_id: uuid.UUID) -> Optional[Room]:
     return row
 
 
-def add_message(db: Session, room_id: uuid.UUID, message_type: str, content: str, sender_user_id: Optional[uuid.UUID] = None) -> RoomMessage:
+def add_message(db: Session, room_id: uuid.UUID, message_type: str, content: str, sender_user_id: Optional[uuid.UUID] = None, **fields) -> RoomMessage:
     """message_type='ai_summary'/'system'이면 sender_user_id=None 허용."""
     row = RoomMessage(
-        room_id=room_id, message_type=message_type, content=content, sender_user_id=sender_user_id
+        room_id=room_id, message_type=message_type, content=content, sender_user_id=sender_user_id, **fields
     )
     db.add(row)
     db.commit()
