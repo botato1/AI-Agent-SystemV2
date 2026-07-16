@@ -86,6 +86,25 @@ class Settings:
     # 파일 저장 경로 (NAS 연결 시 활성화)
     # STORAGE_PATH: str = os.getenv("STORAGE_PATH", "storage/uploads")
 
+    # SMTP 서버 설정 (비밀번호 재설정 이메일 발송용)
+    SMTP_HOST: str | None = os.getenv("SMTP_HOST")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USERNAME: str | None = os.getenv("SMTP_USERNAME")
+    SMTP_PASSWORD: str | None = os.getenv("SMTP_PASSWORD")
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "noreply@recall.app")
+    SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+
+    # 비밀번호 재설정 토큰 만료 시간 (분)
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = int(
+        os.getenv("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES", "30")
+    )
+
+    # 프론트엔드 비밀번호 재설정 페이지 URL (이메일 링크에 포함)
+    FRONTEND_PASSWORD_RESET_URL: str = os.getenv(
+        "FRONTEND_PASSWORD_RESET_URL",
+        "http://localhost:5173/reset-password"
+    )
+
 
 # 다른 파일에서 settings.SQLITE_DB_PATH 이런 식으로 쓰기 위한 객체
 settings = Settings()

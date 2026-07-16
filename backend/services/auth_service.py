@@ -22,6 +22,13 @@ from backend.schemas.auth_schema import (
     TokenResponse,
     UserPublicSchema,
     CheckUserIdResponse,
+    EmailCheckResponse,
+    PasswordResetRequestRequest,
+    PasswordResetRequestResponse,
+    PasswordResetConfirmRequest,
+    PasswordResetConfirmResponse,
+    AccountDeleteRequest,
+    AccountDeleteResponse,
 )
 
 from backend.db.crud import auth_crud
@@ -35,10 +42,13 @@ from backend.core.security import (
     get_user_id_from_refresh_token,
     hash_token,
     REFRESH_TOKEN_EXPIRE_DAYS,
+    create_password_reset_token,
+    verify_password_reset_token,
+    password_fingerprint,
 )
 
 from backend.core.config import settings
-
+from backend.core.email import send_password_reset_email
 
 def _create_token_response(db: Session, user_id: UUID) -> TokenResponse:
     access_token = create_access_token(user_id=str(user_id))
@@ -346,5 +356,103 @@ def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest
         status="success",
         user=UserPublicSchema.model_validate(updated_user),
         message="사용자 정보가 수정되었습니다.",
+        error=None,
+    )
+
+# 이메일 중복 확인
+def check_email_available(db: Session, email: str) -> EmailCheckResponse:
+    exists = auth_crud.get_user_by_email(db, email) is not None
+
+    return EmailCheckResponse(
+        status="success",
+        email=email,
+        available=not exists,
+        message="이미 사용 중인 이메일입니다." if exists else "사용 가능한 이메일입니다.",
+        error=None,
+    )
+
+
+# 비밀번호 재설정 요청 - 계정 존재 여부와 무관하게 항상 동일한 응답
+def request_password_reset(db: Session, request: PasswordResetRequestRequest) -> PasswordResetRequestResponse:
+    user = auth_crud.get_user_by_email(db, request.email)
+
+    if user:
+        reset_token = create_password_reset_token(str(user.id), user.password_hash)
+        send_password_reset_email(user.email, reset_token)
+
+    return PasswordResetRequestResponse(
+        status="success",
+        message="입력하신 이메일로 비밀번호 재설정 링크를 발송했습니다. (계정이 존재하는 경우)",
+        error=None,
+    )
+
+
+# 비밀번호 재설정 확인 - 지문 비교로 재사용 차단, 성공 시 기존 세션 전부 로그아웃
+def confirm_password_reset(db: Session, request: PasswordResetConfirmRequest) -> PasswordResetConfirmResponse:
+    try:
+        payload = verify_password_reset_token(request.reset_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않거나 만료된 재설정 링크입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(payload["sub"]))
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    # 토큰 발급 이후 비밀번호가 이미 바뀌었다면(=이미 이 토큰으로 재설정했다면) 재사용 차단
+    if payload.get("pwd_fp") != password_fingerprint(user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="이미 사용되었거나 만료된 재설정 링크입니다.",
+        )
+
+    _validate_password_format(request.new_password)
+
+    auth_crud.update_user_password(db, user.id, hash_password(request.new_password))
+    auth_crud.revoke_all_refresh_tokens_for_user(db, user.id)
+
+    return PasswordResetConfirmResponse(
+        status="success",
+        message="비밀번호가 재설정되었습니다. 다시 로그인해주세요.",
+        error=None,
+    )
+
+
+# 회원 탈퇴 - 소프트 삭제 + 기존 세션 전부 로그아웃
+def delete_account(db: Session, access_token: str, request: AccountDeleteRequest) -> AccountDeleteResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    if not verify_password(request.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="비밀번호가 올바르지 않습니다.",
+        )
+
+    auth_crud.revoke_all_refresh_tokens_for_user(db, user.id)
+    auth_crud.soft_delete_user(db, user.id)
+
+    return AccountDeleteResponse(
+        status="success",
+        message="회원 탈퇴가 완료되었습니다.",
         error=None,
     )
