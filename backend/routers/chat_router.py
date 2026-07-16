@@ -16,7 +16,6 @@ from backend.schemas.chat_schema import (
     RoomFileResponse,
     RoomFileListResponse,
 )
-from backend.schemas.chat_schema import RoomMessageSchema
 from backend.schemas.workspace_schema import RoomResponse, RoomListResponse
 
 
