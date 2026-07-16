@@ -33,7 +33,11 @@ def list_workspaces_for_user(db: Session, user_id: uuid.UUID) -> list[Workspace]
     return (
         db.query(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-        .filter(WorkspaceMember.user_id == user_id, WorkspaceMember.removed_at.is_(None))
+        .filter(
+            WorkspaceMember.user_id == user_id,
+            WorkspaceMember.removed_at.is_(None),
+            Workspace.deleted_at.is_(None),
+        )
         .all()
     )
 
