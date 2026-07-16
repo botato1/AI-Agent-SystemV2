@@ -5,10 +5,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
 pip install paddlepaddle==3.0.0
 
-pip install surya-ocr==0.20.0 --no-deps
-
 pip install -r requirements.txt
-
 
 # ----------------------------------------
 # Linux 서버 설치 순서 (CUDA 13.x)
@@ -17,7 +14,5 @@ pip install -r requirements.txt
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 pip install paddlepaddle-gpu -i https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
-
-pip install surya-ocr==0.20.0 --no-deps
 
 pip install -r requirements.txt
