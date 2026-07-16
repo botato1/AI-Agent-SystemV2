@@ -8,10 +8,13 @@ import hashlib
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
+import uuid as uuid_lib
+
 from backend.core.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+WS_TICKET_EXPIRE_SECONDS = 180
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 ALGORITHM = "HS256"
@@ -168,3 +171,32 @@ def verify_password_reset_token(token: str) -> dict[str, Any]:
 def get_user_id_from_password_reset_token(token: str) -> str:
     payload = verify_password_reset_token(token)
     return payload["sub"]
+
+# WebSocket 연결용 일회용 티켓 발급 (기본 만료 60초 — 발급 직후 바로 연결한다는 전제)
+def create_ws_ticket(user_id: str, meeting_id: str, expires_delta: Optional[timedelta] = None) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "meeting_id": meeting_id,
+        "type": "ws_ticket",
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+# WebSocket 티켓 검증 (type/meeting_id/jti 확인 후 payload 반환)
+def verify_ws_ticket(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "ws_ticket":
+        raise JWTError("WebSocket 티켓이 아닙니다.")
+
+    if not payload.get("sub") or not payload.get("meeting_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+
+    return payload

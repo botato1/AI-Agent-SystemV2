@@ -10,6 +10,8 @@ from backend.routers.task_router import router as task_router
 from backend.routers.stt_router import router as stt_router
 from backend.routers.auth_router import router as auth_router
 from backend.routers.workspace_router import router as workspace_router
+from backend.routers.meeting_router import router as meeting_router
+from backend.routers.meeting_ws_router import router as meeting_ws_router
 from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -40,6 +42,8 @@ app.include_router(document_router)
 app.include_router(task_router)
 app.include_router(stt_router)
 app.include_router(workspace_router)
+app.include_router(meeting_router)
+app.include_router(meeting_ws_router)
 
 @app.get("/")
 def root():
