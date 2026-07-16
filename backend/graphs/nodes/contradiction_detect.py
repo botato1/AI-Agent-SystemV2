@@ -7,6 +7,7 @@
 # (v2 스펙 10.1 처리 흐름과 동일)
 
 import json
+import math
 import os
 import uuid
 
@@ -74,11 +75,20 @@ def _judge_contradiction(statement: str, reference: str) -> dict:
             print(f"[contradiction_detect] 알 수 없는 severity 값, medium으로 대체: {severity!r}")
             severity = "medium"
 
+        is_contradiction = parsed.get("is_contradiction")
+        if not isinstance(is_contradiction, bool):
+            # bool("false")는 True라서, 문자열로 온 경우 그대로 신뢰하면 안 됨
+            raise ValueError(f"is_contradiction이 boolean이 아님: {is_contradiction!r}")
+
+        confidence = float(parsed.get("confidence", 0.0))
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"confidence 범위가 올바르지 않음: {confidence!r}")
+
         return {
-            "is_contradiction": bool(parsed.get("is_contradiction", False)),
+            "is_contradiction": is_contradiction,
             "reason": str(parsed.get("reason", "")),
             "severity": severity,
-            "confidence": float(parsed.get("confidence", 0.0)),
+            "confidence": confidence,
         }
     except (httpx.HTTPError, json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
         print(f"[contradiction_detect] LLM 판단 실패: {repr(e)}")
