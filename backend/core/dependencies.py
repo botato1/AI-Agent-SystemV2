@@ -49,20 +49,9 @@ def require_workspace_member(db: Session, workspace_id: UUID, user_id: str):
     return workspace
 
 def require_workspace_owner(db: Session, workspace_id: UUID, user_id: str):
-    workspace = workspace_crud.get_workspace(db, workspace_id)
-    if not workspace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="워크스페이스를 찾을 수 없습니다.",
-        )
+    workspace = require_workspace_member(db, workspace_id, user_id)
 
     membership = workspace_crud.get_membership(db, workspace_id, UUID(user_id))
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="워크스페이스 접근 권한이 없습니다.",
-        )
-
     if membership.role != "owner":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
