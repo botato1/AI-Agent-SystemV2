@@ -325,7 +325,7 @@ def run_table_ocr(
     if not tsr_results:
         return {
             "text": "", "confidence": 0.0, "quality_score": 0.0,
-            "sources": ["tsr"], "paddle_lines": [],
+            "sources": ["tsr"], "paddle_lines": [], "surya_lines": [],
             "structure_score": 0.0, "cell_count": 0,
             "voting_path": "tsr_paddle", "html": "",
         }
@@ -380,6 +380,7 @@ def run_table_ocr(
         "quality_score":    round(structure_score, 4),
         "sources":          sources,
         "paddle_lines":     [],   # TSR 경로는 paddle_lines 없음
+        "surya_lines":      [],
         # TSR 전용 메타
         "structure_score":  round(structure_score, 4),
         "cell_count":       len(bboxes),

@@ -2,27 +2,9 @@ from __future__ import annotations
 
 from doc_processor.core.models import TextBlock
 
-_STYLE_PREFIX: dict[str, str] = {
-    "title": "# ",
-    "heading": "## ",
-    "body": "",
-    "caption": "_",
-}
-_STYLE_SUFFIX: dict[str, str] = {
-    "caption": "_",
-}
-
 # body 블록을 병합할 때 세로 간격 허용 기준 (pt)
 # 이 값보다 y 간격이 크면 다른 문단으로 판단
 _PARA_GAP_THRESHOLD = 5.0
-
-
-def _bbox_bottom(block: TextBlock) -> float:
-    return block.bbox[3] if len(block.bbox) >= 4 else 0.0
-
-
-def _bbox_top(block: TextBlock) -> float:
-    return block.bbox[1] if len(block.bbox) >= 4 else 0.0
 
 
 def restore_hierarchy(blocks: list[TextBlock]) -> list[TextBlock]:
@@ -70,8 +52,8 @@ def restore_hierarchy(blocks: list[TextBlock]) -> list[TextBlock]:
             continue
 
         same_style = (style == buffer_style)
-        prev_bottom = _bbox_bottom(buffer[-1])
-        curr_top = _bbox_top(block)
+        prev_bottom = buffer[-1].bbox[3] if len(buffer[-1].bbox) >= 4 else 0.0
+        curr_top = block.bbox[1] if len(block.bbox) >= 4 else 0.0
         gap = curr_top - prev_bottom
 
         if same_style and gap <= _PARA_GAP_THRESHOLD:
@@ -85,10 +67,3 @@ def restore_hierarchy(blocks: list[TextBlock]) -> list[TextBlock]:
     return merged
 
 
-def to_markdown_document(blocks: list[TextBlock]) -> str:
-    lines: list[str] = []
-    for block in blocks:
-        prefix = _STYLE_PREFIX.get(block.style, "")
-        suffix = _STYLE_SUFFIX.get(block.style, "")
-        lines.append(f"{prefix}{block.text}{suffix}")
-    return "\n\n".join(lines)

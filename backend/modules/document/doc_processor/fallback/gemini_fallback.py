@@ -100,6 +100,7 @@ def _parse_gemini_response(response_text: str, original: PageContent) -> PageCon
                 voting_confidence=orig_img.voting_confidence,
                 source_engines=orig_img.source_engines + ["gemini"],
                 paddle_lines=orig_img.paddle_lines,
+                surya_lines=orig_img.surya_lines,
             ))
     else:
         patched.images = original.images
