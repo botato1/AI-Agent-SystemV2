@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
-from backend.schemas.task_schema import TaskItemSchema
+from backend.schemas.legacy_task_schema import TaskItemSchema
 
 
 class SourceSchema(BaseModel):
