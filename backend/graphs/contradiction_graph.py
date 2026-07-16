@@ -39,6 +39,20 @@ def run_contradiction_detection(
     source_type='meeting_segment'이면 meeting_segment_id를,
     source_type='room_message'이면 room_message_id를 채워서 호출할 것.
     """
+    if source_type not in ("meeting_segment", "room_message"):
+        raise ValueError(f"알 수 없는 source_type: {source_type!r}")
+
+    if source_type == "meeting_segment":
+        if not meeting_segment_id or room_message_id:
+            raise ValueError(
+                "source_type='meeting_segment'이면 meeting_segment_id만 전달해야 합니다."
+            )
+    else:
+        if not room_message_id or meeting_segment_id:
+            raise ValueError(
+                "source_type='room_message'이면 room_message_id만 전달해야 합니다."
+            )
+
     initial_state: ContradictionState = {
         "workspace_id": workspace_id,
         "category_id": category_id,
