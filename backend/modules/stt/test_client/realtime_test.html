@@ -43,7 +43,28 @@
   </fieldset>
 
   <fieldset>
-    <legend>① 화자 사전 등록 (선택 사항 — 회의 시작 전, 인원수를 미리 알 때)</legend>
+    <legend>👤 전역 목소리 프로필 — 최초 1회 등록하면 매 회의에서 재사용</legend>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="registerProfileBtn" type="button">🎙️ 내 목소리 등록 — "안녕하세요 OOO입니다"</button>
+      <span id="profileStatus" class="enroll-status">미등록</span>
+    </div>
+    <div id="profileFallback" class="enroll-fallback">
+      이름 인식 실패 (인식된 말: <span id="profileDetected"></span>)
+      <input type="text" id="profileManualName" placeholder="이름 직접 입력" />
+      <button type="button" id="profileManualBtn">이 이름으로 등록</button>
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <button id="loadProfilesBtn" type="button">참석자 목록 불러오기</button>
+      <span id="attendeeChecks" style="font-size:13px;"></span>
+    </div>
+    <div style="font-size:12px;color:#888;">
+      오늘 회의 참석자를 체크한 뒤 시작하면, 매번 목소리 등록 없이 체크한 사람들로 화자를 인식함.
+      아무도 체크 안 하면 아래 ①(세션 등록) 또는 자동감지로 동작.
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>① 이번 회의 한정 화자 등록 (전역 프로필이 없는 게스트용)</legend>
     <div>
       <label>참석 인원수: </label>
       <input id="speakerCount" type="number" min="1" max="10" value="2" style="width:60px;" />
@@ -101,7 +122,10 @@ function httpBase() {
 }
 
 function wsUrl() {
-  return httpBase().replace(/^http/, "ws") + `/api/ws/stt/${encodeURIComponent(sessionIdInput.value)}`;
+  // 전역 프로필 참석자가 체크돼 있으면 attendees 파라미터로 전달 (매 회의 재등록 불필요)
+  const checked = [...document.querySelectorAll(".attendee-cb:checked")].map((c) => c.value);
+  const query = checked.length ? `?attendees=${encodeURIComponent(checked.join(","))}` : "";
+  return httpBase().replace(/^http/, "ws") + `/api/ws/stt/${encodeURIComponent(sessionIdInput.value)}` + query;
 }
 
 // 브라우저 오디오(보통 44.1k/48kHz Float32) → 서버가 기대하는 16kHz PCM16LE로 변환
@@ -125,6 +149,80 @@ function float32ToPCM16LE(float32Array) {
   }
   return buffer;
 }
+
+// ── 👤 전역 목소리 프로필 (최초 1회 등록, 매 회의 재사용) ──────────
+const profileStatus = document.getElementById("profileStatus");
+const profileFallback = document.getElementById("profileFallback");
+const profileDetected = document.getElementById("profileDetected");
+const attendeeChecksEl = document.getElementById("attendeeChecks");
+let lastProfilePcm16 = null;
+
+async function registerGlobalProfile(manualName) {
+  const btn = document.getElementById("registerProfileBtn");
+  btn.disabled = true;
+  profileFallback.style.display = "none";
+
+  if (!manualName) {
+    profileStatus.textContent = "🔴 듣는 중... (말하면 자동으로 인식돼요)";
+    const merged = await recordUntilSilence();
+    lastProfilePcm16 = float32ToPCM16LE(merged);
+    profileStatus.textContent = "인식 중...";
+  } else {
+    profileStatus.textContent = "업로드 중...";
+  }
+
+  const nameParam = manualName ? `?speaker_name=${encodeURIComponent(manualName)}` : "";
+  const res = await fetch(`${httpBase()}/api/profiles${nameParam}`, {
+    method: "POST",
+    body: lastProfilePcm16,
+    headers: { "Content-Type": "application/octet-stream" },
+  });
+  const data = await res.json();
+
+  if (data.status === "success") {
+    profileStatus.textContent = `✅ "${data.speaker_name}" 영구 등록됨 (인식된 말: "${data.detected_text}")`;
+    profileStatus.className = "enroll-status done";
+    log(`👤 전역 프로필 등록: ${data.speaker_name}`);
+    renderAttendeeChecks(data.registered_names);
+  } else if (data.name_extraction_failed) {
+    profileStatus.textContent = "❌ 이름 인식 실패";
+    profileDetected.textContent = data.detected_text || "(인식 안 됨)";
+    profileFallback.style.display = "flex";
+    log(`⚠️ 전역 프로필 이름 인식 실패: "${data.detected_text}"`);
+  } else {
+    profileStatus.textContent = "❌ 등록 실패";
+    log(`❌ 전역 프로필 등록 실패: ${data.message}`);
+  }
+  btn.disabled = false;
+}
+
+function renderAttendeeChecks(names) {
+  attendeeChecksEl.innerHTML = "";
+  if (!names.length) {
+    attendeeChecksEl.textContent = "(등록된 사람 없음)";
+    return;
+  }
+  names.forEach((name) => {
+    const label = document.createElement("label");
+    label.style.marginRight = "10px";
+    label.innerHTML = `<input type="checkbox" class="attendee-cb" value="${name}" /> ${name}`;
+    attendeeChecksEl.appendChild(label);
+  });
+}
+
+async function loadGlobalProfiles() {
+  const res = await fetch(`${httpBase()}/api/profiles`);
+  const data = await res.json();
+  renderAttendeeChecks(data.names || []);
+  log(`👤 전역 프로필 ${data.names.length}명 불러옴`);
+}
+
+document.getElementById("registerProfileBtn").onclick = () =>
+  registerGlobalProfile(null).catch((e) => log("전역 등록 실패: " + e.message));
+document.getElementById("profileManualBtn").onclick = () =>
+  registerGlobalProfile(document.getElementById("profileManualName").value).catch((e) => log("전역 등록 실패: " + e.message));
+document.getElementById("loadProfilesBtn").onclick = () =>
+  loadGlobalProfiles().catch((e) => log("목록 불러오기 실패: " + e.message));
 
 // ── ① 화자 사전 등록 (말하면 자동으로 이름 인식) ──────────────
 const ENROLL_MAX_SEC = 8;          // 이 이상 말해도 강제 종료

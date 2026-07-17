@@ -1,16 +1,13 @@
-import asyncio
 import time
-import numpy as np
 from fastapi import APIRouter, Request
 from typing import Optional
 
-from ..core.config import logger, REALTIME_SAMPLE_RATE, WHISPER_LANGUAGE, FAST_BEAM_SIZE
-from ..services.speaker_id_service import LiveSpeakerIdentifier
+from ..core.config import logger
+from ..services.voice_ingest import ingest_voice_sample
 from ..utils.name_extractor import extract_name_from_greeting
 
 router = APIRouter()
 
-MIN_ENROLL_SEC = 0.5      # 이보다 짧은 오디오는 목소리 지문을 뽑기엔 정보가 부족함
 ENROLL_TTL_SEC = 2 * 3600  # 등록만 하고 회의를 시작 안 한 세션은 이 시간 뒤 자동 정리
 
 
@@ -37,48 +34,20 @@ def _dedupe_name(name: str, existing: dict) -> str:
 @router.post("/enroll/{session_id}")
 async def enroll_speaker(session_id: str, request: Request, speaker_name: Optional[str] = None):
     """
-    회의 시작 전, 참석자가 "안녕하세요 OOO입니다"라고 말한 PCM16LE(16kHz, mono)
-    오디오를 요청 바디로 받아:
-      1. STT로 텍스트를 뽑고, 그 안에서 이름을 자동 추출
-      2. 같은 오디오에서 화자 임베딩("목소리 지문")도 함께 추출
-      3. 추출된 이름으로 화자 프로필을 등록
-    이름 자동 추출이 실패하면(발음이 뭉개지는 등) speaker_name 쿼리 파라미터로
-    수동 지정한 값을 대신 쓴다 (프론트의 "직접 입력" 폴백 UI용).
+    이번 회의(session_id) 한정 화자 등록 — 전역 프로필(POST /api/profiles)을 아직 안 만든
+    사람이나 일회성 참석자(게스트)용. 참석자 전원이 전역 프로필을 갖고 있다면
+    이 절차 없이 WebSocket의 attendees 파라미터만으로 회의를 시작할 수 있다.
 
-    같은 session_id로 여러 명을 순서대로 등록할 수 있고, 이후 실시간
-    WebSocket(/api/ws/stt/{session_id})이 같은 session_id로 연결되면
-    이 등록 정보를 그대로 이어받아 "닫힌 집합(인원수 고정)" 모드로 동작한다.
+    "안녕하세요 OOO입니다" 발화를 받아 이름 자동 추출 + 목소리 지문 등록.
+    이름 추출 실패 시 speaker_name 쿼리 파라미터로 직접 지정 (폴백 UI용).
+    이후 같은 session_id로 WebSocket이 연결되면 이 등록 정보를 이어받아
+    "닫힌 집합(인원수 고정)" 모드로 동작한다.
     """
     pcm16_bytes = await request.body()
-
-    # 입력 검증: PCM16은 샘플당 2바이트라 홀수 길이는 깨진 데이터,
-    # 너무 짧은 오디오는 임베딩 품질이 나빠 등록 의미가 없음
-    if len(pcm16_bytes) % 2 != 0:
-        return {"status": "error", "session_id": session_id,
-                "message": "오디오 데이터가 손상됨 (PCM16은 짝수 바이트여야 함)"}
-    samples = np.frombuffer(pcm16_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-    duration_sec = round(len(samples) / REALTIME_SAMPLE_RATE, 2)
-    if duration_sec < MIN_ENROLL_SEC:
-        return {"status": "error", "session_id": session_id,
-                "message": f"오디오가 너무 짧음 ({duration_sec}s < {MIN_ENROLL_SEC}s). 다시 녹음해줘."}
-
-    loop = asyncio.get_event_loop()
-
-    # GPU 작업(STT, 임베딩)을 executor로 — async 핸들러에서 직접 호출하면
-    # 몇 초간 이벤트 루프 전체가 멈춰서 진행 중인 다른 회의의 실시간 스트리밍까지 얼어붙음
-    fast_model = request.app.state.stt_model_fast
-
-    def _run_stt() -> str:
-        segments, _info = fast_model.transcribe(
-            samples,
-            language=WHISPER_LANGUAGE,
-            beam_size=FAST_BEAM_SIZE,
-            vad_filter=True,
-            condition_on_previous_text=False,
-        )
-        return " ".join(seg.text.strip() for seg in segments).strip()
-
-    detected_text = await loop.run_in_executor(None, _run_stt)
+    try:
+        detected_text, embedding = await ingest_voice_sample(request.app.state, pcm16_bytes)
+    except ValueError as e:
+        return {"status": "error", "session_id": session_id, "message": str(e)}
 
     # 텍스트에서 이름 자동 추출, 실패하면 수동 입력값으로 폴백
     extracted_name = extract_name_from_greeting(detected_text)
@@ -94,10 +63,6 @@ async def enroll_speaker(session_id: str, request: Request, speaker_name: Option
             "message": "이름 자동 인식 실패. speaker_name 파라미터로 직접 지정해서 다시 요청해줘.",
         }
 
-    inference = request.app.state.speaker_embedding_inference
-    identifier = LiveSpeakerIdentifier(inference)  # 프로필 상태 없이 임베딩 추출 기능만 재사용
-    embedding = await loop.run_in_executor(None, identifier.extract_embedding, samples)
-
     _prune_stale_enrollments(request.app)
     profiles = request.app.state.enrolled_profiles.setdefault(session_id, {})
     request.app.state.enrolled_at[session_id] = time.time()
@@ -107,7 +72,7 @@ async def enroll_speaker(session_id: str, request: Request, speaker_name: Option
     logger.info(
         f"📇 화자 사전 등록: session={session_id}, name={final_name} "
         f"(인식된 문장: \"{detected_text}\", 자동추출={'실패→수동' if name_extraction_failed else '성공'}), "
-        f"오디오 길이={duration_sec}s, 현재 등록 인원={len(profiles)}"
+        f"현재 등록 인원={len(profiles)}"
     )
     return {
         "status": "success",

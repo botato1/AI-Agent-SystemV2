@@ -15,6 +15,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MEETINGS_DIR = os.path.join(BASE_DIR, "meetings")
 os.makedirs(MEETINGS_DIR, exist_ok=True)
 
+# 전역 목소리 프로필 저장소 — 최초 1회 등록한 목소리 지문을 영구 보관,
+# 이후 회의에선 참석자 선택만으로 재사용 (매 회의 재등록 불필요)
+VOICE_PROFILES_DIR = os.path.join(BASE_DIR, "voice_profiles")
+os.makedirs(VOICE_PROFILES_DIR, exist_ok=True)
+
 # ──────────────────────────────────────────
 # 디바이스 자동 감지 (RTX 5090 서버 / 맥북 / CPU 폴백)
 # ──────────────────────────────────────────

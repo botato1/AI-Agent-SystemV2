@@ -11,6 +11,7 @@ whisper.cpp/models/
 # 업로드된 오디오 및 JSON 찌꺼기
 uploads/
 meetings/
+voice_profiles/
 *.wav
 *.m4a
 *.json
