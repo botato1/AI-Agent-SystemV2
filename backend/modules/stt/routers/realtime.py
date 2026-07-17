@@ -38,36 +38,45 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str, attendees: str 
     - 회의를 끝낼 땐 텍스트 프레임 "end"를 보내면, 잔여 버퍼를 마지막 청크로
       처리한 결과와 "session_end" 메시지를 받은 뒤 정상 종료된다
 
-    화자 프로필 우선순위:
-    1. 세션 등록 (/api/enroll — 이번 회의 한정, 게스트 포함 시 사용)
-    2. 전역 프로필 (attendees 쿼리 파라미터 — "이준오,가동현"처럼 콤마 구분.
-       최초 1회 등록해둔 목소리로 매 회의 재등록 없이 시작하는 방식)
-    3. 둘 다 없으면 자동감지(열린 집합) 폴백
+    화자 프로필 구성 — 두 소스를 병합해 "이번 회의의 전체 참석 인원"을 만든다:
+    - 전역 프로필 (attendees 쿼리 파라미터 — "이준오,가동현"처럼 콤마 구분.
+      최초 1회 등록해둔 목소리를 매 회의 재등록 없이 재사용)
+    - 세션 등록 (/api/enroll — 전역 프로필이 없는 게스트용, 이번 회의 한정)
+    둘 다 있으면 합쳐서 닫힌 집합을 구성 (같은 이름 충돌 시 세션 등록이 우선 —
+    오늘 이 자리에서 등록한 목소리가 현재 마이크/환경을 더 잘 반영하므로).
+    둘 다 없으면 자동감지(열린 집합) 폴백.
     """
     await websocket.accept()
 
     fast_model = websocket.app.state.stt_model_fast
     precise_model = websocket.app.state.stt_model
 
-    # 1순위: /api/enroll로 이번 회의용으로 등록해둔 프로필.
+    merged_profiles: dict = {}
+    global_count = session_count = 0
+
+    # 전역 프로필에서 참석자 로딩
+    if attendees:
+        names = [n.strip() for n in attendees.split(",") if n.strip()]
+        global_profiles = websocket.app.state.voice_profiles.load(names)
+        missing = set(names) - set(global_profiles.keys())
+        if missing:
+            logger.warning(f"⚠️ [{session_id}] 전역 프로필 미등록 참석자 무시됨: {', '.join(missing)}")
+        merged_profiles.update(global_profiles)
+        global_count = len(global_profiles)
+
+    # 세션 등록(게스트) 병합 — 이름 충돌 시 세션 등록이 덮어씀.
     # pop이 아니라 get인 이유: 네트워크 문제로 연결이 끊겨 같은 session_id로
     # 재접속할 때 등록 정보가 사라져 있으면 조용히 자동감지 모드로 떨어져버림.
     # 등록 정보 삭제는 명시적 종료(end) 시점 또는 DELETE /api/enroll에서만 수행.
-    initial_profiles = websocket.app.state.enrolled_profiles.get(session_id)
-    mode = "세션 등록(닫힌 집합)"
+    session_profiles = websocket.app.state.enrolled_profiles.get(session_id)
+    if session_profiles:
+        merged_profiles.update(session_profiles)
+        session_count = len(session_profiles)
 
-    # 2순위: 전역 프로필에서 참석자 선택 — 인원이 확정되므로 닫힌 집합 유지
-    if not initial_profiles and attendees:
-        names = [n.strip() for n in attendees.split(",") if n.strip()]
-        initial_profiles = websocket.app.state.voice_profiles.load(names)
-        missing = set(names) - set(initial_profiles.keys())
-        if missing:
-            logger.warning(f"⚠️ [{session_id}] 전역 프로필 미등록 참석자 무시됨: {', '.join(missing)}")
-        if not initial_profiles:
-            initial_profiles = None
-        mode = f"전역 프로필(닫힌 집합, {len(initial_profiles or {})}명)"
-
-    if not initial_profiles:
+    initial_profiles = merged_profiles or None
+    if initial_profiles:
+        mode = f"닫힌 집합 {len(initial_profiles)}명 (전역 {global_count} + 세션 {session_count})"
+    else:
         mode = "자동감지(열린 집합)"
 
     speaker_identifier = LiveSpeakerIdentifier(

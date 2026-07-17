@@ -44,8 +44,11 @@
 
   <fieldset>
     <legend>👤 전역 목소리 프로필 — 최초 1회 등록하면 매 회의에서 재사용</legend>
+    <div id="enrollScript" style="font-size:13px;background:#f5f5f4;border-radius:8px;padding:10px 12px;margin-bottom:8px;line-height:1.6;">
+      (서버에서 등록 문장을 불러오는 중...)
+    </div>
     <div style="display:flex;align-items:center;gap:8px;">
-      <button id="registerProfileBtn" type="button">🎙️ 내 목소리 등록 — "안녕하세요 OOO입니다"</button>
+      <button id="registerProfileBtn" type="button">🎙️ 위 문장을 읽으며 내 목소리 등록</button>
       <span id="profileStatus" class="enroll-status">미등록</span>
     </div>
     <div id="profileFallback" class="enroll-fallback">
@@ -157,14 +160,26 @@ const profileDetected = document.getElementById("profileDetected");
 const attendeeChecksEl = document.getElementById("attendeeChecks");
 let lastProfilePcm16 = null;
 
+// 등록 문장은 세션 등록("안녕하세요 OOO입니다" 한 마디)보다 길어서(10~12초),
+// 문장 중간의 쉼표 호흡에 자동 종료가 걸리지 않게 침묵 판정을 길게, 최대 시간도 넉넉하게
+const PROFILE_MAX_SEC = 25;
+const PROFILE_SILENCE_MS = 1500;
+
+async function loadEnrollScript() {
+  const res = await fetch(`${httpBase()}/api/profiles/script`);
+  const data = await res.json();
+  document.getElementById("enrollScript").textContent =
+    "📖 읽을 문장: " + data.script.replace("OOO", "(본인 이름)");
+}
+
 async function registerGlobalProfile(manualName) {
   const btn = document.getElementById("registerProfileBtn");
   btn.disabled = true;
   profileFallback.style.display = "none";
 
   if (!manualName) {
-    profileStatus.textContent = "🔴 듣는 중... (말하면 자동으로 인식돼요)";
-    const merged = await recordUntilSilence();
+    profileStatus.textContent = "🔴 듣는 중... 위 문장을 끝까지 읽어주세요";
+    const merged = await recordUntilSilence(PROFILE_MAX_SEC, PROFILE_SILENCE_MS);
     lastProfilePcm16 = float32ToPCM16LE(merged);
     profileStatus.textContent = "인식 중...";
   } else {
@@ -223,6 +238,12 @@ document.getElementById("profileManualBtn").onclick = () =>
   registerGlobalProfile(document.getElementById("profileManualName").value).catch((e) => log("전역 등록 실패: " + e.message));
 document.getElementById("loadProfilesBtn").onclick = () =>
   loadGlobalProfiles().catch((e) => log("목록 불러오기 실패: " + e.message));
+
+// 페이지 열리면 등록 문장과 기존 프로필 목록을 자동으로 불러옴
+loadEnrollScript().catch(() => {
+  document.getElementById("enrollScript").textContent = "(서버 연결 후 새로고침하면 등록 문장이 표시됩니다)";
+});
+loadGlobalProfiles().catch(() => {});
 
 // ── ① 화자 사전 등록 (말하면 자동으로 이름 인식) ──────────────
 const ENROLL_MAX_SEC = 8;          // 이 이상 말해도 강제 종료
@@ -307,8 +328,9 @@ document.getElementById("clearEnrollBtn").onclick = async () => {
   log("화자 등록 초기화됨");
 };
 
-// 말이 시작되고 나서 일정 시간 조용해지면 자동으로 녹음을 멈추는 간단한 클라이언트 측 침묵 감지
-function recordUntilSilence() {
+// 말이 시작되고 나서 일정 시간 조용해지면 자동으로 녹음을 멈추는 간단한 클라이언트 측 침묵 감지.
+// maxSec/silenceMs를 조절해 짧은 한 마디(세션 등록)와 긴 문단(전역 프로필) 둘 다 지원.
+function recordUntilSilence(maxSec = ENROLL_MAX_SEC, silenceMs = ENROLL_SILENCE_MS) {
   return new Promise(async (resolve, reject) => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const ctx = new AudioContext();
@@ -355,7 +377,7 @@ function recordUntilSilence() {
         silentSinceMs += chunkMs;
       }
 
-      if ((hasSpokenYet && silentSinceMs >= ENROLL_SILENCE_MS) || elapsedMs >= ENROLL_MAX_SEC * 1000) {
+      if ((hasSpokenYet && silentSinceMs >= silenceMs) || elapsedMs >= maxSec * 1000) {
         finish();
       }
     };

@@ -7,6 +7,23 @@ from ..utils.name_extractor import extract_name_from_greeting
 
 router = APIRouter()
 
+# 전역 프로필 등록 시 읽는 표준 문장.
+# "안녕하세요 OOO입니다"만으로는 4~5음절의 임베딩이라 발음 정보가 부족해서,
+# 한국어의 다양한 모음(아/에/이/오/우/어/으)과 자음, 받침이 고르게 섞인 문장을
+# 이어 읽게 해 목소리 지문의 안정성을 높인다 (약 10~12초 분량).
+# 문장 첫머리의 자기소개 패턴은 이름 자동 추출(name_extractor)이 그대로 사용.
+ENROLLMENT_SCRIPT = (
+    "안녕하세요, OOO입니다. "
+    "저는 오늘 회의에서 프로젝트 진행 상황과 다음 계획을 함께 검토하고, "
+    "궁금한 점이 있으면 바로 질문하면서 적극적으로 참여하겠습니다."
+)
+
+
+@router.get("/profiles/script")
+async def get_enrollment_script():
+    """등록 시 읽을 표준 문장 — 프론트가 하드코딩하지 않고 이걸 표시하면 됨."""
+    return {"script": ENROLLMENT_SCRIPT}
+
 
 @router.post("/profiles")
 async def register_global_profile(request: Request, speaker_name: Optional[str] = None):
