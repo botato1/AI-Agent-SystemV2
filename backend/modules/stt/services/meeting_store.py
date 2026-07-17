@@ -1,11 +1,18 @@
 import json
 import os
+import shutil
 import wave
 from datetime import datetime, timezone
 
 import numpy as np
 
 from ..core.config import logger, MEETINGS_DIR, REALTIME_SAMPLE_RATE
+
+# transcript.json은 매 청크가 아니라 N청크마다 갱신 — 세그먼트가 쌓일수록 파일 전체를
+# 다시 쓰는 비용이 커지고(누적 O(n²)), 저장소가 NAS(네트워크 마운트)라 더 느리기 때문.
+# 서버가 도중에 죽으면 최대 N-1청크 분량의 JSON이 유실될 수 있지만, WAV에는 오디오가
+# 남아있어 재분석으로 복구 가능하므로 허용 가능한 트레이드오프.
+_JSON_SAVE_EVERY_N_CHUNKS = 5
 
 
 class MeetingRecord:
@@ -49,8 +56,14 @@ class MeetingRecord:
         self._wav.setsampwidth(2)
         self._wav.setframerate(REALTIME_SAMPLE_RATE)
         self._finalized = False
+        self._chunks_since_json_save = 0
         self._save_json()
         logger.info(f"💾 회의 기록 시작: {self.meeting_id}")
+
+    @property
+    def has_content(self) -> bool:
+        """발화가 하나라도 기록됐는지 — 빈 세션엔 재분석을 걸지 않기 위한 판단용."""
+        return len(self._meta["segments"]) > 0
 
     def save_profiles(self, profiles: dict) -> None:
         """
@@ -64,13 +77,16 @@ class MeetingRecord:
         np.savez(os.path.join(self.dir, "profiles.npz"), **profiles)
 
     def add_chunk(self, audio: np.ndarray, segments: list[dict]) -> None:
-        """확정된 청크 하나의 오디오와 세그먼트들을 저장."""
+        """확정된 청크 하나의 오디오와 세그먼트들을 저장. (블로킹 I/O — executor에서 호출할 것)"""
         if self._finalized:
             return
         pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
         self._wav.writeframes(pcm16.tobytes())
         self._meta["segments"].extend(segments)
-        self._save_json()
+        self._chunks_since_json_save += 1
+        if self._chunks_since_json_save >= _JSON_SAVE_EVERY_N_CHUNKS:
+            self._save_json()
+            self._chunks_since_json_save = 0
 
     def finalize(self, status: str) -> None:
         """회의 종료 처리. 여러 번 불려도 첫 호출만 유효 (정상 종료 후 finally 중복 호출 대비)."""
@@ -78,6 +94,13 @@ class MeetingRecord:
             return
         self._finalized = True
         self._wav.close()
+
+        if not self._meta["segments"]:
+            # 접속만 하고 발화 없이 끝난 세션 — 빈 회의 폴더가 계속 쌓이지 않게 정리
+            shutil.rmtree(self.dir, ignore_errors=True)
+            logger.info(f"🧹 발화 없는 회의 기록 폐기: {self.meeting_id}")
+            return
+
         self._meta["status"] = status
         self._meta["ended_at"] = datetime.now(timezone.utc).isoformat()
         self._save_json()

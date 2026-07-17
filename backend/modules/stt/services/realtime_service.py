@@ -153,10 +153,14 @@ class RealtimeSTTSession:
         )
 
     def _apply_offset_and_confidence(self, segments: list[dict], offset_sec: float) -> None:
+        # 공통 세그먼트 계약: {start, end, text, speaker, confident, user_edited}
+        # — 정밀 재분석(refine_service) 결과와 같은 모양을 유지해야
+        #   모순 감지 엔진이 refined 여부와 무관하게 동일한 필드를 참조할 수 있음
         for seg in segments:
             seg["start"] = round(seg["start"] + offset_sec, 2)
             seg["end"] = round(seg["end"] + offset_sec, 2)
             seg["confident"] = self._is_confident(seg)
+            seg["user_edited"] = False
 
     async def process_chunk(self, audio: np.ndarray, offset_sec: float) -> dict:
         """
@@ -183,7 +187,8 @@ class RealtimeSTTSession:
                 seg["speaker"] = speaker_label
 
         if self.recorder is not None:
-            self.recorder.add_chunk(audio, precise_segments)
+            # NAS 위 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로
+            await loop.run_in_executor(None, self.recorder.add_chunk, audio, precise_segments)
 
         logger.info(
             f"🎙️ [{self.session_id}] 청크 처리 완료 "

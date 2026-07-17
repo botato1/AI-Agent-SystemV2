@@ -95,8 +95,8 @@ REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정
 # ──────────────────────────────────────────
 HF_TOKEN = os.getenv("HF_TOKEN")
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
-MIN_SPEAKERS = 2
-MAX_SPEAKERS = 5
+MIN_SPEAKERS = 1  # 2로 강제하면 혼자 말하는 테스트/회의에서 한 목소리를 억지로 둘로 쪼갬
+MAX_SPEAKERS = 6  # 팀 인원(6명)에 맞춤
 
 # 실시간 화자 식별(임베딩 캐싱 방식) 설정
 # 매 청크마다 전체 화자분리를 다시 도는 대신, 임베딩 유사도로 즉시 매칭

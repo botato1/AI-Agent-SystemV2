@@ -11,6 +11,23 @@ from ..services.refine_service import refine_meeting
 router = APIRouter()
 
 
+async def _finalize_abnormal(session, recorder, app_state, session_id: str, cause: str) -> None:
+    """
+    비정상 종료(end 신호 없는 끊김/에러) 공통 처리.
+    끊김이 감지되는 경로가 두 갈래(receive의 disconnect 메시지 / send 중 WebSocketDisconnect
+    예외)라서, 어느 쪽이든 동일하게 잔여 버퍼 처리 → 회의록 확정 → 재분석 예약이 되게 묶음.
+    """
+    try:
+        # 클라이언트에 보낼 순 없지만, 회의록에는 마지막 발언까지 남긴다
+        await session.flush_remaining()
+    except Exception:
+        logger.exception(f"⚠️ [{session_id}] 종료 시 잔여 버퍼 처리 실패 — 기존 기록까지만 저장됨")
+    recorder.finalize("disconnected")
+    if recorder.has_content:
+        asyncio.create_task(refine_meeting(recorder.meeting_id, app_state))
+    logger.info(f"⚪ 실시간 STT 세션 종료({cause}): {session_id}")
+
+
 @router.websocket("/ws/stt/{session_id}")
 async def realtime_stt_ws(websocket: WebSocket, session_id: str):
     """
@@ -49,13 +66,7 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
             message = await websocket.receive()
 
             if message["type"] == "websocket.disconnect":
-                # 명시적 end 없이 끊긴 경우 — 클라이언트에 보낼 순 없지만,
-                # 잔여 버퍼를 처리해서 회의록에는 마지막 발언까지 남긴다
-                await session.flush_remaining()
-                recorder.finalize("disconnected")
-                # 끊긴 회의도 저장된 부분까지는 정밀 재분석 (백그라운드)
-                asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
-                logger.info(f"⚪ 실시간 STT 세션 종료(연결 끊김): {session_id}")
+                await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "연결 끊김")
                 return
 
             if message.get("text") is not None:
@@ -72,7 +83,8 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
                     # 회의가 정상 종료됐으므로 이 세션의 사전 등록 정보도 정리
                     websocket.app.state.enrolled_profiles.pop(session_id, None)
                     # 회의 후 정밀 재분석(C-4) 백그라운드 실행 — 화자 오배정/청크 경계 오류 보정
-                    asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
+                    if recorder.has_content:
+                        asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
                     logger.info(f"⚪ 실시간 STT 세션 정상 종료(end): {session_id}")
                     break
                 continue  # end 외의 텍스트 프레임은 무시
@@ -93,12 +105,12 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str):
                 await websocket.send_json(result)
 
     except WebSocketDisconnect:
-        recorder.finalize("disconnected")
-        logger.info(f"⚪ 실시간 STT 세션 종료: {session_id}")
+        # 결과 전송(send) 도중 클라이언트가 끊긴 경우 — receive 경로와 동일하게 처리
+        await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "전송 중 끊김")
         return
     except Exception:
-        recorder.finalize("disconnected")
         logger.exception(f"❌ 실시간 STT 세션 에러 [{session_id}]")
+        await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "에러")
 
     try:
         await websocket.close()

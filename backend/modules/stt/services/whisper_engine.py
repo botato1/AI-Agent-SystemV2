@@ -164,7 +164,9 @@ class TransformersWhisperEngine:
             # 애매한 오디오(노이즈 섞인 짧은 구간 등)에서 같은 구절을 계속 반복 생성하는
             # 환각 루프에 빠지는 걸 막는 안전장치. VAD로 순수 침묵은 이미 걸러내지만,
             # "약한 발화음+노이즈" 같은 경계 상황에 대한 2차 방어선.
-            no_repeat_ngram_size=3,
+            # 3으로 두면 "네, 네" 같은 정상적인 반복 표현까지 강제로 바뀔 수 있어 5로 완화
+            # (환각 루프는 보통 훨씬 긴 구절이 통째로 반복되므로 5로도 충분히 잡힘).
+            no_repeat_ngram_size=5,
         )
         # 주의: return_timestamps=True를 return_dict_in_generate=True와 같이 쓰면
         # transformers가 장문(long-form) 모드로 전환되면서 반환 구조가 dict로 바뀌어

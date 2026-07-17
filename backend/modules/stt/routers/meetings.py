@@ -18,7 +18,7 @@ _SUMMARY_FIELDS = (
 async def list_meetings():
     """저장된 회의 목록 조회 (최신순). 회의록 아카이브(D-3) UI가 그대로 사용 가능."""
     items = []
-    for meeting_id in sorted(os.listdir(MEETINGS_DIR), reverse=True):
+    for meeting_id in os.listdir(MEETINGS_DIR):
         path = os.path.join(MEETINGS_DIR, meeting_id, "transcript.json")
         if not os.path.isfile(path):
             continue
@@ -30,6 +30,10 @@ async def list_meetings():
         summary = {k: meta.get(k) for k in _SUMMARY_FIELDS}
         summary["segment_count"] = len(meta.get("segments", []))
         items.append(summary)
+
+    # meeting_id는 "세션ID_시각" 형태라 문자열 정렬하면 세션ID 알파벳순이 먼저 적용됨
+    # → 실제 시작 시각 기준으로 정렬해야 진짜 최신순이 됨
+    items.sort(key=lambda m: m.get("started_at") or "", reverse=True)
     return {"count": len(items), "meetings": items}
 
 

@@ -7,8 +7,9 @@ async def run_whisper_stt(model: WhisperModel, wav_path: str, topic: str = "") -
     """
     faster-whisper로 STT를 수행하고 [{start, end, text}] 리스트를 반환합니다.
     동기 함수(model.transcribe)를 쓰레드풀에서 돌려서 asyncio.gather와 병행 실행이 가능하게 합니다.
+    (initial_prompt는 hotwords 제거 결정(2026-07-15)에 맞춰 실시간 경로와 함께 제거함 —
+     전문용어 인식 개선은 파인튜닝으로 대체. topic 파라미터는 호출부 호환용으로만 유지.)
     """
-    initial_prompt = f"비고 프로젝트, {topic}".strip()
 
     def _transcribe():
         segments, info = model.transcribe(
@@ -16,7 +17,6 @@ async def run_whisper_stt(model: WhisperModel, wav_path: str, topic: str = "") -
             language=WHISPER_LANGUAGE,
             beam_size=WHISPER_BEAM_SIZE,
             vad_filter=True,                 # Silero VAD로 무음 구간 자동 스킵
-            initial_prompt=initial_prompt,    # 고유명사(비고 프로젝트, 팀원 이름 등) 인식률 보강
             condition_on_previous_text=False, # 환각으로 인한 텍스트 무한 반복 방지
         )
         results = []
