@@ -95,4 +95,8 @@ async def rename_global_profile(name: str, new_name: str, request: Request):
         return {"status": "error", "message": str(e)}
     if not renamed:
         return {"status": "error", "message": f"'{name}'은(는) 등록되어 있지 않음"}
-    return {"status": "success", "registered_names": request.app.state.voice_profiles.list_names()}
+    return {
+        "status": "success",
+        "speaker_name": new_name,
+        "registered_names": request.app.state.voice_profiles.list_names(),
+    }

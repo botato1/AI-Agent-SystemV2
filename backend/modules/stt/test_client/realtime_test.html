@@ -50,11 +50,16 @@
     <div style="display:flex;align-items:center;gap:8px;">
       <button id="registerProfileBtn" type="button">🎙️ 위 문장을 읽으며 내 목소리 등록</button>
       <span id="profileStatus" class="enroll-status">미등록</span>
+      <button id="profileRenameToggleBtn" type="button" class="rename-toggle-btn" style="display:none;">✏️ 이름 수정</button>
     </div>
     <div id="profileFallback" class="enroll-fallback">
       이름 인식 실패 (인식된 말: <span id="profileDetected"></span>)
       <input type="text" id="profileManualName" placeholder="이름 직접 입력" />
       <button type="button" id="profileManualBtn">이 이름으로 등록</button>
+    </div>
+    <div id="profileRenameBox" class="rename-box" style="display:none;">
+      <input type="text" id="profileRenameInput" placeholder="올바른 이름 입력" />
+      <button type="button" id="profileRenameConfirmBtn">수정 완료</button>
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <button id="loadProfilesBtn" type="button">참석자 목록 불러오기</button>
@@ -159,6 +164,7 @@ const profileFallback = document.getElementById("profileFallback");
 const profileDetected = document.getElementById("profileDetected");
 const attendeeChecksEl = document.getElementById("attendeeChecks");
 let lastProfilePcm16 = null;
+let currentProfileName = null;  // 이름 수정(rename) 시 old_name으로 필요
 
 // 등록 문장은 세션 등록("안녕하세요 OOO입니다" 한 마디)보다 길어서(10~12초),
 // 문장 중간의 쉼표 호흡에 자동 종료가 걸리지 않게 침묵 판정을 길게, 최대 시간도 넉넉하게
@@ -197,6 +203,10 @@ async function registerGlobalProfile(manualName) {
   if (data.status === "success") {
     profileStatus.textContent = `✅ "${data.speaker_name}" 영구 등록됨 (인식된 말: "${data.detected_text}")`;
     profileStatus.className = "enroll-status done";
+    currentProfileName = data.speaker_name;
+    // 발음이 비슷한 이름(예: 이준오→이준호)은 인식 "성공"으로 나와도 틀릴 수 있어
+    // 등록 성공 여부와 무관하게 항상 수정 버튼을 노출
+    document.getElementById("profileRenameToggleBtn").style.display = "inline-block";
     log(`👤 전역 프로필 등록: ${data.speaker_name}`);
     renderAttendeeChecks(data.registered_names);
   } else if (data.name_extraction_failed) {
@@ -238,6 +248,30 @@ document.getElementById("profileManualBtn").onclick = () =>
   registerGlobalProfile(document.getElementById("profileManualName").value).catch((e) => log("전역 등록 실패: " + e.message));
 document.getElementById("loadProfilesBtn").onclick = () =>
   loadGlobalProfiles().catch((e) => log("목록 불러오기 실패: " + e.message));
+
+document.getElementById("profileRenameToggleBtn").onclick = () => {
+  const box = document.getElementById("profileRenameBox");
+  document.getElementById("profileRenameInput").value = currentProfileName || "";
+  box.style.display = box.style.display === "none" ? "flex" : "none";
+};
+
+document.getElementById("profileRenameConfirmBtn").onclick = async () => {
+  const newName = document.getElementById("profileRenameInput").value.trim();
+  if (!newName || !currentProfileName) return;
+  const url = `${httpBase()}/api/profiles/${encodeURIComponent(currentProfileName)}/rename?new_name=${encodeURIComponent(newName)}`;
+  const res = await fetch(url, { method: "PATCH" });
+  const data = await res.json();
+  if (data.status === "success") {
+    currentProfileName = data.speaker_name;
+    profileStatus.textContent = `✅ "${data.speaker_name}" 영구 등록됨 (수정됨)`;
+    profileStatus.className = "enroll-status done";
+    document.getElementById("profileRenameBox").style.display = "none";
+    renderAttendeeChecks(data.registered_names);
+    log(`✏️ 전역 프로필 이름 수정 완료: ${data.speaker_name}`);
+  } else {
+    log(`❌ 전역 프로필 이름 수정 실패: ${data.message}`);
+  }
+};
 
 // 페이지 열리면 등록 문장과 기존 프로필 목록을 자동으로 불러옴
 loadEnrollScript().catch(() => {

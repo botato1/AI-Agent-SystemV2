@@ -75,6 +75,10 @@ class GlobalProfileStore:
         old_path = self._path(old_name)
         if not os.path.isfile(old_path):
             return False
-        os.replace(old_path, self._path(new_name))
+        new_path = self._path(new_name)
+        if os.path.isfile(new_path):
+            # 다른 사람의 기존 프로필을 조용히 덮어쓰는 사고 방지
+            raise ValueError(f"'{new_name}'은(는) 이미 등록된 이름이라 사용할 수 없음")
+        os.replace(old_path, new_path)
         logger.info(f"✏️ 전역 목소리 프로필 이름 수정: {old_name} → {new_name}")
         return True
