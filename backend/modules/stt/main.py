@@ -69,6 +69,10 @@ async def lifespan(app: FastAPI):
     # WebSocket attendees 파라미터로 회의마다 재사용
     app.state.voice_profiles = GlobalProfileStore()
 
+    # 진행 중인 실시간 세션 레지스트리: {session_id: RealtimeSTTSession}
+    # rename API가 저장소뿐 아니라 살아있는 회의에도 이름 수정을 전파하기 위해 필요
+    app.state.active_sessions = {}
+
     yield  # 서버 동작
 
     logger.info("🛑 서버 종료, 모델 메모리 해제")

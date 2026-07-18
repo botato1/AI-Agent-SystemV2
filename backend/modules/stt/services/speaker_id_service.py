@@ -80,10 +80,24 @@ class LiveSpeakerIdentifier:
         embedding = self._inference(waveform)
         return np.asarray(embedding).reshape(-1)
 
+    def rename_speaker(self, old_name: str, new_name: str) -> bool:
+        """
+        진행 중인 세션의 화자 라벨 교체 — rename API가 저장소만 고치고 살아있는
+        세션은 못 고쳐서 "회의 시작 후 이름을 수정하면 자막엔 옛 이름이 계속 나오는"
+        문제를 해결하기 위한 전파 지점. 이후 청크부터 새 이름으로 라벨링됨.
+        """
+        if old_name not in self._profiles or new_name in self._profiles:
+            return False
+        self._profiles[new_name] = self._profiles.pop(old_name)
+        logger.info(f"✏️ 세션 화자 라벨 교체: {old_name} → {new_name}")
+        return True
+
     def _find_best_match(self, embedding: np.ndarray) -> tuple[str | None, float]:
         best_label = None
         best_score = -1.0
-        for label, profile in self._profiles.items():
+        # identify()는 executor 스레드에서 돌고 rename_speaker()는 이벤트 루프에서 불릴 수
+        # 있어서, 순회 중 dict 크기 변경 예외가 나지 않게 스냅샷을 순회
+        for label, profile in list(self._profiles.items()):
             score = self._cosine_similarity(embedding, profile)
             if score > best_score:
                 best_score = score

@@ -88,6 +88,37 @@ class MeetingRecord:
             self._save_json()
             self._chunks_since_json_save = 0
 
+    def rename_speaker(self, old_name: str, new_name: str) -> bool:
+        """
+        회의 도중 화자 이름이 수정됐을 때, 이미 저장된 과거 세그먼트와
+        C-4 재분석용 프로필 스냅샷(profiles.npz)까지 새 이름으로 갱신.
+        이게 없으면 rename 이후의 자막만 새 이름이고, 회의록 앞부분과
+        정밀 재분석 결과는 옛 이름으로 남아 한 회의 안에서 이름이 섞임.
+        (블로킹 I/O — executor에서 호출할 것)
+        """
+        if self._finalized:
+            return False
+        changed = False
+
+        for seg in self._meta["segments"]:
+            if seg.get("speaker") == old_name:
+                seg["speaker"] = new_name
+                changed = True
+
+        npz_path = os.path.join(self.dir, "profiles.npz")
+        if os.path.isfile(npz_path):
+            npz = np.load(npz_path)
+            data = {name: npz[name] for name in npz.files}
+            if old_name in data and new_name not in data:
+                data[new_name] = data.pop(old_name)
+                np.savez(npz_path, **data)
+                changed = True
+
+        if changed:
+            self._save_json()
+            logger.info(f"✏️ 회의록 화자 이름 갱신: {self.meeting_id}, {old_name} → {new_name}")
+        return changed
+
     def finalize(self, status: str) -> None:
         """회의 종료 처리. 여러 번 불려도 첫 호출만 유효 (정상 종료 후 finally 중복 호출 대비)."""
         if self._finalized:

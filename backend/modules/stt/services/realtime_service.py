@@ -204,6 +204,20 @@ class RealtimeSTTSession:
             "final": {"segments": precise_segments},
         }
 
+    def rename_speaker(self, old_name: str, new_name: str) -> bool:
+        """
+        진행 중인 회의의 화자 이름 교체 — rename API에서 호출됨.
+        살아있는 식별기(이후 청크의 라벨)와 회의록(과거 세그먼트 + C-4용 프로필
+        스냅샷)을 함께 갱신해서 한 회의 안에서 이름이 섞이지 않게 함.
+        (recorder 쪽은 블로킹 I/O — executor에서 호출할 것)
+        """
+        renamed = False
+        if self.speaker_identifier is not None:
+            renamed = self.speaker_identifier.rename_speaker(old_name, new_name) or renamed
+        if self.recorder is not None:
+            renamed = self.recorder.rename_speaker(old_name, new_name) or renamed
+        return renamed
+
     async def flush_remaining(self) -> dict | None:
         """
         회의 종료(또는 연결 종료 직전) 시 아직 청크로 확정 안 된 잔여 버퍼를 마지막

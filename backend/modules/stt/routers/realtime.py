@@ -89,6 +89,9 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str, attendees: str 
         recorder.save_profiles(initial_profiles)
     session = RealtimeSTTSession(session_id, fast_model, precise_model, speaker_identifier, recorder)
 
+    # rename API가 진행 중인 회의에도 이름 수정을 전파할 수 있게 레지스트리에 등록
+    websocket.app.state.active_sessions[session_id] = session
+
     logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
 
     try:
@@ -141,6 +144,11 @@ async def realtime_stt_ws(websocket: WebSocket, session_id: str, attendees: str 
     except Exception:
         logger.exception(f"❌ 실시간 STT 세션 에러 [{session_id}]")
         await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "에러")
+    finally:
+        # 어떤 경로로 끝나든(정상/끊김/에러) 레지스트리에서 제거.
+        # 같은 session_id로 새 연결이 이미 등록됐을 수 있으므로 내 세션일 때만 제거.
+        if websocket.app.state.active_sessions.get(session_id) is session:
+            websocket.app.state.active_sessions.pop(session_id, None)
 
     try:
         await websocket.close()

@@ -1,3 +1,4 @@
+import asyncio
 import time
 from fastapi import APIRouter, Request
 from typing import Optional
@@ -115,6 +116,13 @@ async def rename_enrolled_speaker(session_id: str, request: Request, old_name: s
     embedding = profiles.pop(old_name)
     new_name = _dedupe_name(new_name, profiles)
     profiles[new_name] = embedding
+
+    # 이미 회의가 진행 중이면 살아있는 세션(이후 자막 라벨)과 회의록(과거 세그먼트,
+    # C-4용 프로필 스냅샷)에도 전파 — 안 하면 회의 시작 후 수정 시 옛 이름이 계속 남음
+    active_session = request.app.state.active_sessions.get(session_id)
+    if active_session is not None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, active_session.rename_speaker, old_name, new_name)
 
     logger.info(f"✏️ 화자 이름 수정: session={session_id}, {old_name} → {new_name}")
     return {

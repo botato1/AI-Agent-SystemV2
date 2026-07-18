@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Request
 from typing import Optional
 
@@ -95,6 +97,13 @@ async def rename_global_profile(name: str, new_name: str, request: Request):
         return {"status": "error", "message": str(e)}
     if not renamed:
         return {"status": "error", "message": f"'{name}'은(는) 등록되어 있지 않음"}
+
+    # 이 사람이 참석 중인 진행 중 회의가 있으면 전부 전파 (전역 프로필은 어느 회의에서든
+    # attendees로 쓰일 수 있으므로 모든 활성 세션을 확인)
+    loop = asyncio.get_event_loop()
+    for active_session in list(request.app.state.active_sessions.values()):
+        await loop.run_in_executor(None, active_session.rename_speaker, name, new_name)
+
     return {
         "status": "success",
         "speaker_name": new_name,
