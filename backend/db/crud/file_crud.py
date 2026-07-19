@@ -114,3 +114,12 @@ def unlink_file_from_room(db: Session, room_id: uuid.UUID, file_id: uuid.UUID) -
     db.delete(row)
     db.commit()
     return True
+
+def increment_retry_count(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
+    row = get_file(db, file_id)
+    if row:
+        row.retry_count += 1
+        row.last_attempt_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row

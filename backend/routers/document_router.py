@@ -10,6 +10,7 @@ from backend.services.document_service import (
     upload_and_process_document,
     delete_processed_document,
     get_document_detail,
+    retry_document_analysis,
 )
 from backend.db.crud import file_crud
 from backend.db.session import get_db
@@ -148,6 +149,32 @@ def get_document_detail_api(
             detail="문서 상세 조회 중 오류가 발생했습니다.",
         )
 
+# 문서 재분석 요청
+@router.post("/{document_id}/retry")
+async def retry_document_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    try:
+        return await retry_document_analysis(db=db, file_id=document_id)
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="재분석할 문서를 찾을 수 없습니다.",
+        )
+    except Exception as e:
+        print(f"[document_router] 문서 재분석 실패: {repr(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="문서 재분석 중 오류가 발생했습니다.",
+        )
 
 # 문서 삭제
 @router.delete("/{document_id}")

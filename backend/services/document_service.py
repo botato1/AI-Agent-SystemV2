@@ -428,6 +428,100 @@ async def upload_and_process_document(
     except Exception as e:
         return _build_error_response(room_id, filename, document_type, "문서 업로드 또는 처리 중 오류가 발생했습니다.", repr(e))
 
+# 문서 재분석 (기존 저장 파일로 8003 재호출, 청크 재생성)
+async def retry_document_analysis(db: Session, file_id: UUID) -> dict:
+    workspace_file = file_crud.get_file(db, file_id)
+    if not workspace_file:
+        raise PermissionError("재분석할 문서를 찾을 수 없습니다.")
+
+    filename = workspace_file.original_filename
+
+    try:
+        file_crud.increment_retry_count(db, file_id)
+        file_crud.update_analysis_status(db, file_id, "processing")
+
+        try:
+            with open(workspace_file.storage_path, "rb") as f:
+                file_content = f.read()
+        except OSError as e:
+            file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
+            return _build_error_response(
+                None, filename, workspace_file.origin_type,
+                "원본 파일을 찾을 수 없어 재분석할 수 없습니다.", "source_file_missing",
+            )
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                DOCUMENT_PROCESS_URL,
+                files={"file": (filename, file_content, workspace_file.mime_type or "application/octet-stream")},
+                data={"type": "document"},
+            )
+        response.raise_for_status()
+        processed_result = response.json()
+
+        content_markdown = processed_result.get("content_markdown") or processed_result.get("content") or ""
+        raw_chunks = processed_result.get("chunks") or []
+
+        if not content_markdown.strip() and not (isinstance(raw_chunks, list) and raw_chunks):
+            file_crud.update_analysis_status(db, file_id, "failed", error="document_content_missing")
+            return _build_error_response(
+                None, filename, workspace_file.origin_type,
+                "8003 문서 처리 결과에 content 또는 chunks가 없습니다.", "document_content_missing",
+            )
+
+        chunks = _extract_chunks(processed_result)
+        tables, charts = _extract_tables_and_charts(processed_result)
+        analysis_metadata = _extract_analysis_metadata(processed_result)
+        summary = processed_result.get("summary") or _make_fallback_summary(content_markdown)
+        page_count = analysis_metadata.get("page_count") or 0
+
+        analysis_fields = {
+            "extracted_text": content_markdown,
+            "summary": summary,
+            "page_count": page_count,
+            "ocr_avg_confidence": analysis_metadata.get("confidence_score"),
+            "ocr_required_pages": page_count,
+            "ocr_success_pages": page_count,
+            "table_count": len(tables),
+            "graph_count": len(charts),
+            "diagram_count": 0,
+            "analysis_status": "completed",
+        }
+
+        if document_crud.get_document_analysis(db, file_id):
+            document_crud.update_document_analysis(db, file_id, **analysis_fields)
+        else:
+            document_crud.create_document_analysis(db, file_id=file_id, **analysis_fields)
+
+        content_chunk_crud.delete_chunks_by_file(db, file_id)
+        try:
+            load_document(db, file_id, chunks=chunks)
+            file_crud.update_analysis_status(db, file_id, "completed")
+        except Exception as e:
+            file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
+            print(f"[document_service] 재분석 ChromaDB 적재 실패: {repr(e)}")
+
+        return {
+            "status": "success",
+            "document_id": str(file_id),
+            "filename": filename,
+            "summary": summary,
+            "message": "문서 재분석이 완료되었습니다.",
+            "error": None,
+        }
+
+    except PermissionError:
+        raise
+    except httpx.HTTPStatusError as e:
+        file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
+        return _build_error_response(None, filename, workspace_file.origin_type, "외부 처리 서버 응답 오류가 발생했습니다.", repr(e))
+    except httpx.RequestError as e:
+        file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
+        return _build_error_response(None, filename, workspace_file.origin_type, "외부 처리 서버에 연결할 수 없습니다.", repr(e))
+    except Exception as e:
+        file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
+        return _build_error_response(None, filename, workspace_file.origin_type, "문서 재분석 중 오류가 발생했습니다.", repr(e))
+
 
 # 문서 상세 조회
 # 참고: 기존과 달리 tables/charts/keywords/organized_items(연결된 업무 목록)는
