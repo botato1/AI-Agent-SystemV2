@@ -13,6 +13,8 @@ from backend.core.security import verify_ws_ticket
 from backend.core.ws_ticket_store import consume_ticket
 from backend.db.crud import meeting_crud
 from backend.db.session import get_db
+from backend.graphs.contradiction_graph import run_contradiction_detection
+from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.services.stt_stream_client import SttStreamClient
 
 router = APIRouter(tags=["Meetings (Realtime)"])
@@ -42,6 +44,17 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
         db, meeting_id, status="processing", ended_at=ended_at, duration_ms=duration_ms,
     )
 
+    # 요약/결정사항/할 일 생성(LLM 호출 포함)은 오래 걸릴 수 있어 백그라운드로 돌린다.
+    # run_meeting_postprocess는 동기 함수라 to_thread로 감싸서 이벤트 루프를 막지 않게 한다.
+    # meeting_postprocess_node 자체가 status='processing'이 아니면 거부하므로,
+    # /end REST 호출과 겹쳐도 한쪽만 실제로 실행된다.
+    asyncio.create_task(asyncio.to_thread(
+        run_meeting_postprocess,
+        meeting_id=str(meeting_id),
+        workspace_id=str(meeting.workspace_id),
+        category_id=str(meeting.category_id),
+    ))
+
 
 async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClient, recording_file) -> None:
     while True:
@@ -62,7 +75,7 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
-    meeting_id: uuid.UUID, next_index: int,
+    meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID, next_index: int,
 ) -> None:
     async for data in stt_client.receive():
         msg_type = data.get("type")
@@ -72,7 +85,7 @@ async def _relay_stt_to_frontend(
 
         elif msg_type == "final":
             for seg in data.get("final", {}).get("segments", []):
-                meeting_crud.add_segment(
+                segment_row = meeting_crud.add_segment(
                     db,
                     meeting_id=meeting_id,
                     content=seg.get("text", ""),
@@ -82,7 +95,19 @@ async def _relay_stt_to_frontend(
                     speaker_label=seg.get("speaker"),
                 )
                 next_index += 1
-                # TODO(승주): final 세그먼트 저장 직후 모순 탐지 파이프라인 호출 지점
+
+                # 발화 하나 저장될 때마다 모순 탐지를 백그라운드로 실행.
+                # run_contradiction_detection도 동기 함수라 to_thread로 감싼다.
+                statement_text = (segment_row.content or "").strip()
+                if statement_text:
+                    asyncio.create_task(asyncio.to_thread(
+                        run_contradiction_detection,
+                        workspace_id=str(workspace_id),
+                        category_id=str(category_id),
+                        source_type="meeting_segment",
+                        statement_text=statement_text,
+                        meeting_segment_id=str(segment_row.id),
+                    ))
             await websocket.send_json(data)
 
         elif msg_type == "session_end":
@@ -136,7 +161,10 @@ async def meeting_stream_ws(
         _relay_frontend_to_stt(websocket, stt_client, recording_file)
     )
     stt_task = asyncio.create_task(
-        _relay_stt_to_frontend(websocket, stt_client, db, meeting_id, next_index)
+        _relay_stt_to_frontend(
+            websocket, stt_client, db, meeting_id,
+            meeting.workspace_id, meeting.category_id, next_index,
+        )
     )
 
     try:
