@@ -22,10 +22,10 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
-from backend.schemas.common_schema import TimestampSchema
-from backend.schemas.type_schema import WorktreeStatus
+from backend.schemas.common_schema import ORMBaseSchema, TimestampSchema
+from backend.schemas.type_schema import FileAnalysisStatus, FileKind, WorktreeStatus
 
 
 # =============================================================================
@@ -74,3 +74,24 @@ class WorktreeSchema(TimestampSchema):
 
     status: WorktreeStatus
     completed_at: Optional[datetime] = None
+
+# =============================================================================
+# Re:Call: worktrees API 요청/응답
+# =============================================================================
+
+class WorktreeListResponse(BaseModel):
+    worktrees: list[WorktreeSchema] = Field(default_factory=list)
+
+
+class WorktreeFileResponse(ORMBaseSchema):
+    id: UUID
+    original_filename: str
+    relative_path: Optional[str] = None
+    file_kind: FileKind
+    analysis_status: FileAnalysisStatus
+    file_size_bytes: int
+    created_at: datetime
+
+
+class WorktreeFileListResponse(BaseModel):
+    files: list[WorktreeFileResponse] = Field(default_factory=list)
