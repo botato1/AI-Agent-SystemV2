@@ -108,3 +108,14 @@ def get_message_sources(db: Session, ai_message_id: uuid.UUID) -> list[AiMessage
         .order_by(AiMessageSource.display_order)
         .all()
     )
+
+# 메시지와 그 페시지가 속한 세션을 함께 조회(소유권 검증용)
+def get_message_with_session(
+    db: Session, ai_message_id: uuid.UUID
+) -> Optional[tuple[AiChatMessage, AiChatSession]]:
+    return (
+        db.query(AiChatMessage, AiChatSession)
+        .join(AiChatSession, AiChatSession.id == AiChatMessage.session_id)
+        .filter(AiChatMessage.id == ai_message_id)
+        .first()
+    )

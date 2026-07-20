@@ -116,6 +116,24 @@ def get_ai_chat_message_sources(
     require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
 
+    result = ai_chat_crud.get_message_with_session(db, message_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="메시지를 찾을 수 없습니다.",
+        )
+
+    _, session = result
+    if (
+        session.workspace_id != workspace_id
+        or session.room_id != room_id
+        or session.user_id != UUID(current_user_id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="메시지를 찾을 수 없습니다.",
+        )
+
     sources = ai_chat_crud.get_message_sources(db, message_id)
     return AIMessageSourceListResponse(
         sources=[AIMessageSourceSchema.model_validate(s) for s in sources]
