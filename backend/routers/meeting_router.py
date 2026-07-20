@@ -1,5 +1,6 @@
 # backend/routers/meeting_router.py
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,7 +136,7 @@ async def upload_meeting_api(
 
     file_content = await file.read()
     storage_path, stored_filename = _save_audio_to_local_storage(file_content, file.filename)
-
+    
     workspace_file = file_crud.create_workspace_file(
         db,
         workspace_id=workspace_id,
@@ -149,6 +150,7 @@ async def upload_meeting_api(
         file_kind="audio",
         origin_type="meeting_upload",
         file_size_bytes=len(file_content),
+        sha256_hash=hashlib.sha256(file_content).hexdigest(),
         version_group_id=uuid.uuid4(),
         analysis_status="pending",
     )
