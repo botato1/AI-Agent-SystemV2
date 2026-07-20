@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 from backend.db.modules import RoomFileLink, Worktree, WorkspaceFile
 
 
-def create_worktree(db: Session, workspace_id: uuid.UUID, root_folder_name: str, uploaded_by: uuid.UUID, total_file_count: int) -> Worktree:
+def create_worktree(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, root_folder_name: str, uploaded_by: uuid.UUID, total_file_count: int) -> Worktree:
     row = Worktree(
         workspace_id=workspace_id,
+        category_id=category_id,
         root_folder_name=root_folder_name,
         uploaded_by=uploaded_by,
         total_file_count=total_file_count,
@@ -123,3 +124,36 @@ def increment_retry_count(db: Session, file_id: uuid.UUID) -> Optional[Workspace
         db.commit()
         db.refresh(row)
     return row
+
+def get_worktree(db: Session, worktree_id: uuid.UUID) -> Optional[Worktree]:
+    return db.query(Worktree).filter(Worktree.id == worktree_id).first()
+
+
+def list_worktrees(db: Session, workspace_id: uuid.UUID) -> list[Worktree]:
+    return (
+        db.query(Worktree)
+        .filter(Worktree.workspace_id == workspace_id)
+        .order_by(Worktree.created_at.desc())
+        .all()
+    )
+
+
+def update_worktree_counts(db: Session, worktree_id: uuid.UUID, **fields) -> Optional[Worktree]:
+    row = get_worktree(db, worktree_id)
+    if row:
+        for k, v in fields.items():
+            setattr(row, k, v)
+        if fields.get("status") in ("completed", "partially_completed", "failed"):
+            row.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def list_files_by_worktree(db: Session, worktree_id: uuid.UUID) -> list[WorkspaceFile]:
+    return (
+        db.query(WorkspaceFile)
+        .filter(WorkspaceFile.worktree_id == worktree_id, WorkspaceFile.deleted_at.is_(None))
+        .order_by(WorkspaceFile.relative_path)
+        .all()
+    )
