@@ -13,12 +13,26 @@ from backend.core.security import verify_ws_ticket
 from backend.core.ws_ticket_store import consume_ticket
 from backend.db.crud import meeting_crud
 from backend.db.session import get_db
+from backend.graphs.contradiction_graph import run_contradiction_detection
+from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.services.stt_stream_client import SttStreamClient
 
 router = APIRouter(tags=["Meetings (Realtime)"])
 
 # TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
 MEETING_RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
+
+# asyncio 이벤트 루프는 진행 중인 태스크를 약한 참조로만 들고 있어서, 반환값을 아무 데도
+# 저장하지 않으면 참조가 없어져 완료 전에 GC될 수 있다(asyncio 공식 문서 경고).
+# 여기 담아두고 완료 시 스스로 discard하게 해서 방지한다.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
 
 
 def _open_recording_file(meeting_id: uuid.UUID):
@@ -38,9 +52,24 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
         int((ended_at - meeting.started_at).total_seconds() * 1000)
         if meeting.started_at else None
     )
-    meeting_crud.update_meeting_status(
-        db, meeting_id, status="processing", ended_at=ended_at, duration_ms=duration_ms,
+
+    # recording -> processing 전이를 원자적으로 시도한다. /end REST 호출(end_meeting_api)이
+    # 근접한 시점에 같은 전이를 시도할 수 있으므로, 실제로 이긴 쪽만 후처리를 예약해야 중복 실행을 막는다.
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="recording", to_status="processing",
+        ended_at=ended_at, duration_ms=duration_ms,
     )
+    if transitioned is None:
+        return
+
+    # 요약/결정사항/할 일 생성(LLM 호출 포함)은 오래 걸릴 수 있어 백그라운드로 돌린다.
+    # run_meeting_postprocess는 동기 함수라 to_thread로 감싸서 이벤트 루프를 막지 않게 한다.
+    _spawn_background_task(asyncio.to_thread(
+        run_meeting_postprocess,
+        meeting_id=str(meeting_id),
+        workspace_id=str(meeting.workspace_id),
+        category_id=str(meeting.category_id),
+    ))
 
 
 async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClient, recording_file) -> None:
@@ -62,7 +91,7 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
-    meeting_id: uuid.UUID, next_index: int,
+    meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID, next_index: int,
 ) -> None:
     async for data in stt_client.receive():
         msg_type = data.get("type")
@@ -72,7 +101,7 @@ async def _relay_stt_to_frontend(
 
         elif msg_type == "final":
             for seg in data.get("final", {}).get("segments", []):
-                meeting_crud.add_segment(
+                segment_row = meeting_crud.add_segment(
                     db,
                     meeting_id=meeting_id,
                     content=seg.get("text", ""),
@@ -82,7 +111,19 @@ async def _relay_stt_to_frontend(
                     speaker_label=seg.get("speaker"),
                 )
                 next_index += 1
-                # TODO(승주): final 세그먼트 저장 직후 모순 탐지 파이프라인 호출 지점
+
+                # 발화 하나 저장될 때마다 모순 탐지를 백그라운드로 실행.
+                # run_contradiction_detection도 동기 함수라 to_thread로 감싼다.
+                statement_text = (segment_row.content or "").strip()
+                if statement_text:
+                    _spawn_background_task(asyncio.to_thread(
+                        run_contradiction_detection,
+                        workspace_id=str(workspace_id),
+                        category_id=str(category_id),
+                        source_type="meeting_segment",
+                        statement_text=statement_text,
+                        meeting_segment_id=str(segment_row.id),
+                    ))
             await websocket.send_json(data)
 
         elif msg_type == "session_end":
@@ -136,7 +177,10 @@ async def meeting_stream_ws(
         _relay_frontend_to_stt(websocket, stt_client, recording_file)
     )
     stt_task = asyncio.create_task(
-        _relay_stt_to_frontend(websocket, stt_client, db, meeting_id, next_index)
+        _relay_stt_to_frontend(
+            websocket, stt_client, db, meeting_id,
+            meeting.workspace_id, meeting.category_id, next_index,
+        )
     )
 
     try:

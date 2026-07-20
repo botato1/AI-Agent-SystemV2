@@ -4,13 +4,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from backend.core.security import create_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud
+from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
     MeetingResponse,
@@ -171,6 +172,7 @@ async def upload_meeting_api(
 def end_meeting_api(
     workspace_id: uuid.UUID,
     meeting_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -194,9 +196,27 @@ def end_meeting_api(
         if meeting.started_at else None
     )
 
-    meeting = meeting_crud.update_meeting_status(
-        db, meeting_id, status="processing", ended_at=ended_at, duration_ms=duration_ms,
+    # recording -> processing 전이를 원자적으로 시도한다. WS 종료(_finalize_meeting_if_recording)가
+    # 근접한 시점에 같은 전이를 시도할 수 있으므로, 실제로 이긴 쪽만 후처리를 예약해야 중복 실행을 막는다.
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="recording", to_status="processing",
+        ended_at=ended_at, duration_ms=duration_ms,
     )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+    meeting = transitioned
+
+    # 응답은 바로 내려주고, 요약/결정사항/할 일 생성(LLM 호출 포함)은 백그라운드에서 처리.
+    background_tasks.add_task(
+        run_meeting_postprocess,
+        meeting_id=str(meeting_id),
+        workspace_id=str(workspace_id),
+        category_id=str(meeting.category_id),
+    )
+
     return MeetingResponse.model_validate(meeting)
 
 
