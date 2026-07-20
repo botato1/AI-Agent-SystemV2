@@ -358,3 +358,18 @@ class AIMessageSourceSchema(ORMBaseSchema):
                 )
 
         return self
+    
+# =============================================================================
+# Re:Call: ai_chat API 요청/응답
+# =============================================================================
+
+class AIChatMessageCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+
+
+class AIChatMessageListResponse(BaseModel):
+    messages: list[AIChatMessageSchema] = Field(default_factory=list)
+
+
+class AIMessageSourceListResponse(BaseModel):
+    sources: list[AIMessageSourceSchema] = Field(default_factory=list)
