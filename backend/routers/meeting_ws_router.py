@@ -98,19 +98,24 @@ async def _relay_stt_to_frontend(
 
         if msg_type == "partial":
             await websocket.send_json(data)
-
+            
         elif msg_type == "final":
             for seg in data.get("final", {}).get("segments", []):
-                segment_row = meeting_crud.add_segment(
-                    db,
-                    meeting_id=meeting_id,
-                    content=seg.get("text", ""),
-                    start_ms=int(seg["start"] * 1000),
-                    end_ms=int(seg["end"] * 1000),
-                    segment_index=next_index,
-                    speaker_label=seg.get("speaker"),
-                )
-                next_index += 1
+                try:
+                    segment_row = meeting_crud.add_segment(
+                        db,
+                        meeting_id=meeting_id,
+                        content=seg.get("text", ""),
+                        start_ms=int(seg["start"] * 1000),
+                        end_ms=int(seg["end"] * 1000),
+                        segment_index=next_index,
+                        speaker_label=seg.get("speaker"),
+                    )
+                    next_index += 1
+                except Exception as e:
+                    db.rollback()
+                    print(f"[meeting_ws_router] 세그먼트 저장 실패: {repr(e)}")
+                    continue
 
                 # 발화 하나 저장될 때마다 모순 탐지를 백그라운드로 실행.
                 # run_contradiction_detection도 동기 함수라 to_thread로 감싼다.

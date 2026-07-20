@@ -86,7 +86,7 @@ class WorkspaceFile(Base):
         ),
         CheckConstraint(
             "origin_type IN ('worktree','document_analysis','room_upload',"
-            "'meeting_upload','live_recording')",
+            "'meeting_upload','live_recording','meeting_summary')",
             name="chk_workspace_files_origin",
         ),
         CheckConstraint(
