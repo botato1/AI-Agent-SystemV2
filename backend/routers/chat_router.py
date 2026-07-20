@@ -2,13 +2,14 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import file_crud, room_crud, workspace_crud
+from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.schemas.chat_schema import (
     RoomMessageSchema,
     RoomMessageCreateRequest,
@@ -132,11 +133,12 @@ def send_room_message(
     workspace_id: UUID,
     room_id: UUID,
     request: RoomMessageCreateRequest,
+    background_tasks: BackgroundTasks,
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    _get_room_or_404(db, room_id, workspace_id)
+    room = _get_room_or_404(db, room_id, workspace_id)
 
     message = room_crud.add_message(
         db,
@@ -146,6 +148,21 @@ def send_room_message(
         sender_user_id=UUID(current_user_id),
         reply_to_id=request.reply_to_id,
     )
+
+    # 메시지 저장 후 모순 탐지를 백그라운드로 실행.
+    # (RAG 토글 여부와 무관하게 모든 텍스트 메시지 대상 — RAG 토글은 검색 포함 범위이지
+    # 모순 탐지 대상 범위는 아니라고 판단. 필요하면 room.rag_enabled 체크 추가)
+    statement_text = (request.content or "").strip()
+    if statement_text:
+        background_tasks.add_task(
+            run_contradiction_detection,
+            workspace_id=str(workspace_id),
+            category_id=str(room.category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=str(message.id),
+        )
+
     return RoomMessageSchema.model_validate(message)
 
 # 채팅방 메시지 조회
