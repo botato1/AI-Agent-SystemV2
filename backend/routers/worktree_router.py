@@ -122,6 +122,7 @@ async def upload_worktree(
             )
             completed_count += 1
         except Exception as e:
+            db.rollback()
             failed_count += 1
             print(f"[worktree_router] 파일 저장 실패: {f.filename} / {repr(e)}")
 
