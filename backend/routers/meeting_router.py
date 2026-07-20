@@ -196,13 +196,20 @@ def end_meeting_api(
         if meeting.started_at else None
     )
 
-    meeting = meeting_crud.update_meeting_status(
-        db, meeting_id, status="processing", ended_at=ended_at, duration_ms=duration_ms,
+    # recording -> processing 전이를 원자적으로 시도한다. WS 종료(_finalize_meeting_if_recording)가
+    # 근접한 시점에 같은 전이를 시도할 수 있으므로, 실제로 이긴 쪽만 후처리를 예약해야 중복 실행을 막는다.
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="recording", to_status="processing",
+        ended_at=ended_at, duration_ms=duration_ms,
     )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+    meeting = transitioned
 
     # 응답은 바로 내려주고, 요약/결정사항/할 일 생성(LLM 호출 포함)은 백그라운드에서 처리.
-    # meeting_postprocess_node 자체가 status='processing'이 아니면 거부하므로,
-    # WS 종료 트리거와 겹쳐도 한쪽만 실제로 실행된다.
     background_tasks.add_task(
         run_meeting_postprocess,
         meeting_id=str(meeting_id),

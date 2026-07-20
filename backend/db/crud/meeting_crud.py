@@ -96,6 +96,30 @@ def update_meeting_status(db: Session, meeting_id: uuid.UUID, status: str, **fie
     return row
 
 
+def try_transition_meeting_status(
+    db: Session, meeting_id: uuid.UUID, from_status: str, to_status: str, **fields,
+) -> Optional[Meeting]:
+    """from_status일 때만 to_status로 전이하는 원자적 업데이트.
+
+    REST /end와 WS 종료가 동시에 들어와도 둘 다 read-then-write를 하면
+    양쪽 다 전이에 성공했다고 착각해 후처리가 중복 실행될 수 있다.
+    UPDATE ... WHERE status=from_status로 실제 전이한 쪽만 True(row 반환)가 되게 한다.
+    """
+    updated_rows = (
+        db.query(Meeting)
+        .filter(
+            Meeting.id == meeting_id,
+            Meeting.deleted_at.is_(None),
+            Meeting.status == from_status,
+        )
+        .update({"status": to_status, **fields}, synchronize_session=False)
+    )
+    db.commit()
+    if updated_rows == 0:
+        return None
+    return get_meeting(db, meeting_id)
+
+
 def delete_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
     row = get_meeting(db, meeting_id)
     if row:
