@@ -41,6 +41,32 @@ def get_file(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
     )
 
 
+def get_latest_file_by_filename(
+    db: Session, workspace_id: uuid.UUID, original_filename: str
+) -> Optional[WorkspaceFile]:
+    """같은 워크스페이스에 같은 이름의 파일이 이미 있으면 그 최신 버전을 반환 (버전 연결용)."""
+    return (
+        db.query(WorkspaceFile)
+        .filter(
+            WorkspaceFile.workspace_id == workspace_id,
+            WorkspaceFile.original_filename == original_filename,
+            WorkspaceFile.is_latest.is_(True),
+            WorkspaceFile.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+
+def supersede_file_version(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
+    """새 버전이 생성될 때 기존 최신 버전의 is_latest를 내린다."""
+    row = get_file(db, file_id)
+    if row:
+        row.is_latest = False
+        db.commit()
+        db.refresh(row)
+    return row
+
+
 def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str) -> list[WorkspaceFile]:
     return (
         db.query(WorkspaceFile)

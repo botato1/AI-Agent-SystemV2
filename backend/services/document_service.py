@@ -352,6 +352,18 @@ async def upload_and_process_document(
         if not category:
             raise RuntimeError("워크스페이스의 기본 카테고리를 찾을 수 없습니다.")
 
+        # 같은 이름의 파일이 이미 있으면 새 버전으로 연결, 없으면 새 버전 그룹 시작
+        previous_version = file_crud.get_latest_file_by_filename(db, workspace_id, filename)
+        if previous_version:
+            file_crud.supersede_file_version(db, previous_version.id)
+            version_group_id = previous_version.version_group_id
+            version_no = previous_version.version_no + 1
+            previous_version_id = previous_version.id
+        else:
+            version_group_id = uuid.uuid4()
+            version_no = 1
+            previous_version_id = None
+
         # 1. workspace_files 저장
         workspace_file = file_crud.create_workspace_file(
             db,
@@ -367,7 +379,9 @@ async def upload_and_process_document(
             origin_type="room_upload" if room_id else "document_analysis",
             file_size_bytes=len(file_content),
             sha256_hash=sha256_hash,
-            version_group_id=uuid.uuid4(),  # TODO: 동일 파일 재업로드 시 버전 관리 로직 필요
+            version_group_id=version_group_id,
+            version_no=version_no,
+            previous_version_id=previous_version_id,
             analysis_status="processing",
             external_ref=external_document_id,
         )
