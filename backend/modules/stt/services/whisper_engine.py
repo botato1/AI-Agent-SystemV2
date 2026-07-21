@@ -11,6 +11,12 @@ from ..core.config import logger, REALTIME_SAMPLE_RATE
 _WINDOW_SEC = 30
 _WINDOW_SAMPLES = _WINDOW_SEC * REALTIME_SAMPLE_RATE
 
+# 창 경계(30초)가 단어/문장 중간을 자르는 걸 완화하기 위한 설정 — realtime_service.py의
+# 강제 컷 완화 로직과 동일한 전략. 단, 여기는 30초가 모델의 하드 리밋이라 "넘어서" 자를 수
+# 없고, 30초 안에서 최대한 늦게(=최근 구간에서) 자연스러운 지점을 찾아 "덜" 채워서 자름.
+_FORCE_CUT_LOOKBACK_SEC = 3.0
+_FORCE_CUT_MIN_SILENCE_MS = 100
+
 
 class Segment:
     """faster_whisper의 Segment와 동일한 속성명을 가진 경량 대체 객체.
@@ -89,6 +95,26 @@ class TransformersWhisperEngine:
             )
         return data
 
+    def _find_window_cutoff(self, window: np.ndarray) -> int:
+        """
+        30초 꽉 찬 창에서만 의미 있음 — 창이 30초 미만이면 뒤에 이어지는 오디오가 없다는
+        뜻이므로 그대로 전부 씀. 30초 꽉 찬 경우, 마지막 몇 초 안에서 짧은 틈(≥100ms)을
+        찾아 그 지점까지만 쓰고 나머지는 다음 창으로 넘김. 못 찾으면 기존처럼 30초 꽉 채워 자름.
+        """
+        if len(window) < _WINDOW_SAMPLES:
+            return len(window)
+
+        lookback_samples = int(_FORCE_CUT_LOOKBACK_SEC * REALTIME_SAMPLE_RATE)
+        tail_start = max(0, len(window) - lookback_samples)
+        tail = window[tail_start:]
+        speech_spans = get_speech_timestamps(
+            tail, VadOptions(min_silence_duration_ms=_FORCE_CUT_MIN_SILENCE_MS),
+            sampling_rate=REALTIME_SAMPLE_RATE,
+        )
+        if len(speech_spans) >= 2:
+            return tail_start + speech_spans[-2]["end"]
+        return len(window)
+
     def _trim_silence(self, audio: np.ndarray) -> tuple[np.ndarray, bool, float]:
         """
         무음/노이즈 구간을 모델에 그대로 넣으면 Whisper가 그럴듯한 문장을 지어내는
@@ -137,14 +163,16 @@ class TransformersWhisperEngine:
             prompt_ids = self.processor.get_prompt_ids(initial_prompt, return_tensors="pt").to(self.device)
 
         # 30초 초과 오디오는 창 단위로 쪼개서 순차 전사 (processor의 조용한 truncate 방지).
-        # 창 경계에서 단어가 잘릴 수 있는 건 알려진 한계 — 배치 경로의 정밀도가 더 중요해지면
-        # VAD 경계 기반 분할로 개선할 것.
+        # 창이 정확히 30초씩 꽉 차면 단어/문장 중간이 잘릴 수 있어, 마지막 몇 초 안에서
+        # 짧은 틈을 찾아 그 지점까지만 쓰고 나머지는 다음 창으로 넘김(_find_window_cutoff).
         segments = []
         window_start = 0
         while window_start < len(audio):
-            window = audio[window_start: window_start + _WINDOW_SAMPLES]
-            if len(window) < REALTIME_SAMPLE_RATE // 20:
+            raw_window = audio[window_start: window_start + _WINDOW_SAMPLES]
+            if len(raw_window) < REALTIME_SAMPLE_RATE // 20:
                 break
+            cutoff = self._find_window_cutoff(raw_window)
+            window = raw_window[:cutoff]
             text, avg_logprob, no_speech_prob = self._generate_window(window, language, beam_size, prompt_ids)
             if text:
                 segments.append(Segment(
@@ -155,7 +183,7 @@ class TransformersWhisperEngine:
                     avg_logprob=avg_logprob,
                     no_speech_prob=no_speech_prob,
                 ))
-            window_start += _WINDOW_SAMPLES
+            window_start += cutoff
 
         return segments, info
 
