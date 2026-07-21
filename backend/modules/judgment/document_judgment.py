@@ -15,8 +15,8 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.db.crud import contradiction_crud, file_crud, history_crud
-from backend.modules.llm.ollama_client import _call_ollama
+from backend.db.crud import content_chunk_crud, contradiction_crud, file_crud, history_crud
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, OLLAMA_MODEL_LIGHT, _call_ollama
 from backend.modules.rag import chroma_client
 
 CONTRADICTION_MATCH_THRESHOLD = 0.65  # TBD - 실험 후 조정. 이 아래는 모순 검토할 가치도 없을 만큼 무관.
@@ -53,7 +53,19 @@ def _judge_document_contradiction(document_content: str, filename: str, statemen
     prompt = JUDGMENT_PROMPT_TEMPLATE.format(
         document_content=document_content, filename=filename, statement=statement
     )
-    raw = _call_ollama(prompt, timeout=60.0)
+    # Model1(경량)로 1차 판단
+    raw = _call_ollama(prompt, timeout=60.0, model=OLLAMA_MODEL_LIGHT)
+    judgment = _parse_document_judgment(raw)
+
+    # [추가 - 2026.07.16] confidence 낮으면 Model2로 재판단 (decision_judgment와 동일 패턴)
+    if judgment["is_contradiction"] and judgment["confidence"] < CONTRADICTION_POPUP_THRESHOLD:
+        heavy_raw = _call_ollama(prompt, timeout=150.0, model=OLLAMA_MODEL_HEAVY)
+        judgment = _parse_document_judgment(heavy_raw)
+
+    return judgment
+
+
+def _parse_document_judgment(raw: str) -> dict:
     try:
         start, end = raw.find("{"), raw.rfind("}")
         parsed = json.loads(raw[start : end + 1])
@@ -111,6 +123,14 @@ def judge(
     if not file_row:
         return {"case": "none", "popup": None}
 
+    # [추가 - 리뷰 반영] top["id"]는 ChromaDB 문서ID(=content_chunks.chroma_id)이지,
+    # Contradiction.reference_chunk_id가 가리키는 Postgres content_chunks.id(별개 UUID)가
+    # 아니다. 실제 청크 row를 찾아서 그 id를 넘겨야 CHECK 제약(reference_type='content_chunk'
+    # → reference_chunk_id 필수)을 만족한다. 못 찾으면 이 매칭은 신뢰할 수 없으므로 스킵.
+    chunk_row = content_chunk_crud.get_chunk_by_chroma_id(db, top["id"])
+    if not chunk_row:
+        return {"case": "none", "popup": None}
+
     # threshold 미만이면 관련도 자체가 낮아 모순 검토할 가치도 없음
     if top["score"] < CONTRADICTION_MATCH_THRESHOLD:
         return {"case": "none", "popup": None}
@@ -136,6 +156,7 @@ def judge(
                 workspace_id=workspace_id, category_id=category_id,
                 source_type=source_type, reference_type="content_chunk",
                 reference_file_id=file_id,
+                reference_chunk_id=chunk_row.id,
                 statement_text_snapshot=statement,
                 reference_text_snapshot=top["content"],
                 confidence_score=judgment["confidence"],

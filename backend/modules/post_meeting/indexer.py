@@ -17,27 +17,15 @@ from backend.modules.rag.document_loader import load_document
 def index_transcript(
     db: Session,
     file_id: uuid.UUID,
-    transcript: str,
+    transcription: list[dict],
 ) -> dict:
     """
-    회의 원문을 청킹해서 content_chunks + MEETING_COLLECTION에 저장한다.
-    document_loader.load_document()를 transcription 인자로 호출 -
-    이미 화자 라벨이 붙은 [SPEAKER]: 형태 텍스트를 다시 파싱하지 않고,
-    발화 단위 리스트로 넘기기 위해 transcript를 줄 단위로 되돌린다.
+    [수정 - 리뷰 반영] 기존에는 평문 텍스트를 받아서 줄 단위로 다시 쪼개며
+    start=end=0.0으로 채웠는데, 이러면 MeetingSegment의 실제 타임스탬프가
+    사라진다. 이제 text_assembler.get_segments_for_indexing()이 만든
+    구조화된 리스트(실제 초 단위 타임스탬프 포함)를 그대로 받아서
+    document_loader에 넘긴다 - 재파싱 자체가 필요 없어짐.
     """
-    lines = transcript.split("\n")
-    transcription = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("[") and "]:" in line:
-            speaker, text = line.split("]:", 1)
-            speaker = speaker.lstrip("[")
-            transcription.append({"speaker": speaker, "text": text.strip(), "start": 0.0, "end": 0.0})
-        else:
-            transcription.append({"speaker": "SPEAKER_00", "text": line, "start": 0.0, "end": 0.0})
-
     return load_document(db, file_id, transcription=transcription)
 
 
@@ -76,6 +64,7 @@ def tag_chunks_with_decisions(
     db: Session,
     file_id: uuid.UUID,
     decisions: list[Decision],
+    commit: bool = True,
 ) -> None:
     """
     AI Chat 근거 제공용 관례: 이 회의의 content_chunks에
@@ -84,6 +73,8 @@ def tag_chunks_with_decisions(
     모순 감지에는 쓰지 않는다 (모순 감지는 DECISION_COLLECTION을 직접 검색).
     "왜 그렇게 결정됐어?" 같은 AI Chat 질문에서 decision_text 한 줄로 부족할 때,
     관련 원문 청크까지 같이 찾아서 보여주는 용도.
+
+    [수정 - 리뷰 반영 9번] commit 옵션 추가 (post_meeting 파이프라인 단일 트랜잭션용).
     """
     from backend.db.crud import content_chunk_crud
 
@@ -97,4 +88,7 @@ def tag_chunks_with_decisions(
         existing_meta["related_decision_ids"] = decision_ids
         chunk.metadata_json = existing_meta
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()

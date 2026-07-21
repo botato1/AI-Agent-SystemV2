@@ -8,10 +8,22 @@
 4. Action Items 저장
 5. 검색용 인덱싱         (indexer)
 6. 완료 처리
+
+[수정 - 2026.07.21 리뷰 반영]
+- (8번) 타임스탬프 소실: indexer.index_transcript()에 평문을 재파싱해서 넘기던 것을
+  text_assembler.get_segments_for_indexing()이 만든 구조화 리스트(실제 초 단위
+  타임스탬프 포함)를 그대로 넘기도록 변경. document_loader.load_document는 그대로 씀.
+- (9번) rollback 무효화: 각 CRUD 호출이 내부적으로 즉시 commit()해서 except 블록의
+  db.rollback()이 실제로는 아무것도 되돌리지 못했음. 관련 CRUD 함수들에 commit
+  옵션을 추가하고, 여기서는 전부 commit=False로 호출한 뒤 성공 시에만 마지막에
+  한 번 commit, 실패 시 rollback 한 번으로 이번 파이프라인 실행분 전체를 되돌림.
+  (단, document_loader.load_document 내부의 content_chunk 저장은 자체적으로 이미
+  commit+실패시 보정삭제 로직을 갖고 있는 독립 단위라 이 범위 밖 - 설계상 허용된
+  예외로 남겨둠. indexer.index_transcript가 이 함수를 그대로 호출함)
 """
 
-from datetime import datetime
 import uuid
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -55,13 +67,16 @@ def run(
         return {"status": "error", "meeting_id": str(meeting_id), "error": "meeting_not_found"}
 
     try:
-        # 1. 텍스트 확보
+        # 1. 텍스트 확보 - LLM 프롬프트용(평문)과 인덱싱용(타임스탬프 보존)을 따로 확보
         transcript = text_assembler.assemble_transcript(db, meeting, uploaded_text=uploaded_text)
+        segments_for_indexing = text_assembler.get_segments_for_indexing(
+            db, meeting, uploaded_text=uploaded_text
+        )
 
         # 2. 구조화 LLM 호출 (통합 1회)
         extracted = llm_extractor.extract(transcript)
 
-        # meeting_summaries 저장 (full_transcript 포함)
+        # meeting_summaries 저장 (full_transcript 포함) - commit=False, 마지막에 일괄 커밋
         meeting_crud.upsert_summary(
             db,
             meeting_id=meeting.id,
@@ -70,6 +85,7 @@ def run(
             discussion_points=extracted["discussion_points"],
             full_transcript=transcript,
             generation_status="completed",
+            commit=False,
         )
 
         # 3. Decision 상태 전이
@@ -79,12 +95,14 @@ def run(
             category_id=meeting.category_id,
             meeting_id=meeting.id,
             topics=extracted["topics"],
+            commit=False,
         )
 
         # 4. Action Items 저장 (2-2 결과 그대로 - 별도 LLM 호출 없음)
+        # [수정 - 리뷰 반영 5번] action_items -> tasks 명명 변경, 팀 CRUD에 맞춤
         action_item_count = 0
         for item in extracted["action_items"]:
-            meeting_crud.create_action_item(
+            meeting_crud.create_task(
                 db,
                 workspace_id=meeting.workspace_id,
                 category_id=meeting.category_id,
@@ -94,17 +112,17 @@ def run(
                 description=item.get("description"),
                 due_at=_parse_due_date(item.get("due_date")),
                 status="open",
+                commit=False,
             )
             action_item_count += 1
 
         # 5. 검색용 인덱싱 (이중 저장)
-        transcript_index_result = indexer.index_transcript(db, file_id, transcript)
+        # index_transcript는 document_loader.load_document를 그대로 호출하는데,
+        # 이 함수는 자체적으로 commit + 실패시 ChromaDB 보정삭제 로직을 갖고 있는
+        # 독립 단위라 여기 트랜잭션 범위 밖임 (설계상 허용된 예외, 주석 상단 참조)
+        transcript_index_result = indexer.index_transcript(db, file_id, segments_for_indexing)
         indexer.index_decisions(db, meeting.workspace_id, meeting.category_id, new_decisions)
-        indexer.tag_chunks_with_decisions(db, file_id, new_decisions)
-
-        # 6. 완료 처리
-        meeting.status = "completed"
-        db.commit()
+        indexer.tag_chunks_with_decisions(db, file_id, new_decisions, commit=False)
 
         notification_crud.create_notification(
             db,
@@ -115,7 +133,12 @@ def run(
             message=extracted["short_summary"],
             ref_type="meeting",
             ref_id=meeting.id,
+            commit=False,
         )
+
+        # 6. 완료 처리 - 여기서 전체를 한 번에 커밋 (여기까지 온 것 자체가 전부 성공했다는 뜻)
+        meeting.status = "completed"
+        db.commit()
 
         return {
             "status": "success",
@@ -127,6 +150,8 @@ def run(
         }
 
     except Exception as e:
+        # 여기까지 오면 위 단계들은 전부 flush만 됐지 commit 안 된 상태이므로
+        # rollback이 실제로 이번 실행분 전체(요약/결정/할일/청크태깅/알림)를 되돌린다.
         db.rollback()
         meeting.status = "failed"
         db.commit()

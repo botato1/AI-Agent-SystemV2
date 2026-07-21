@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import history_crud
 from backend.db.modules import Decision
-from backend.modules.llm.ollama_client import _call_ollama
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
 from backend.modules.rag import chroma_client
 
 DECISION_MATCH_THRESHOLD = 0.75  # TBD - 실험 후 조정 (설계 문서 5장 열린 질문과 동일 축)
@@ -35,7 +35,8 @@ COMPARE_PROMPT_TEMPLATE = """아래는 같은 주제에 대한 기존 결정과 
 def _values_are_same(old_text: str, new_text: str) -> bool:
     """기존 decision과 새 topic의 값이 실질적으로 같은지 LLM으로 판단."""
     prompt = COMPARE_PROMPT_TEMPLATE.format(old_text=old_text, new_text=new_text)
-    result = _call_ollama(prompt, timeout=60.0).strip().upper()
+    # [수정 - 2026.07.16] post-meeting은 비동기 처리라 레이턴시 제약 없음 -> 처음부터 Model2
+    result = _call_ollama(prompt, timeout=60.0, model=OLLAMA_MODEL_HEAVY).strip().upper()
     return "SAME" in result and "DIFFERENT" not in result
 
 
@@ -69,9 +70,12 @@ def process_topics(
     category_id: uuid.UUID,
     meeting_id: uuid.UUID,
     topics: list[dict],
+    commit: bool = True,
 ) -> list[Decision]:
     """
     llm_extractor.extract()가 뽑은 topics[]를 순회하며 decisions 테이블을 전이시킨다.
+
+    [수정 - 리뷰 반영 9번] commit 옵션 추가 (post_meeting 파이프라인 단일 트랜잭션용).
 
     Returns:
         새로 생성되거나 active 상태가 된 decision 목록 (2-5 인덱싱 대상)
@@ -97,6 +101,7 @@ def process_topics(
                     source_type="meeting_segment",
                     match_type="decision_reminder",
                     session_meeting_id=meeting_id,
+                    commit=commit,
                     reference_decision_id=existing.id,
                 )
             continue
@@ -140,8 +145,11 @@ def process_topics(
         db.add(new_decision)
         newly_active_decisions.append(new_decision)
 
-    db.commit()
-    for d in newly_active_decisions:
-        db.refresh(d)
+    if commit:
+        db.commit()
+        for d in newly_active_decisions:
+            db.refresh(d)
+    else:
+        db.flush()
 
     return newly_active_decisions

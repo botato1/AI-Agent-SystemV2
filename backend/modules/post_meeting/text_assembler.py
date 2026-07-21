@@ -42,3 +42,47 @@ def assemble_transcript(db: Session, meeting: Meeting, uploaded_text: str | None
         lines.append(f"[{speaker}]: {seg.content}")
 
     return "\n".join(lines)
+
+
+def get_segments_for_indexing(
+    db: Session, meeting: Meeting, uploaded_text: str | None = None
+) -> list[dict]:
+    """
+    [추가 - 리뷰 반영] 검색용 인덱싱(indexer.index_transcript)에 넘길 구조화된
+    발화 리스트를 만든다. assemble_transcript()는 LLM 프롬프트/full_transcript
+    저장용으로 발화를 평문 텍스트 하나로 합치면서 타임스탬프를 버리는데, 이걸
+    indexer가 다시 줄 단위로 쪼개 start=end=0.0으로 채우면 MeetingSegment의
+    실제 start_ms/end_ms가 완전히 유실되는 문제가 있었다 (회의 원문 위치 이동,
+    타임스탬프 기반 근거 표시가 불가능해짐).
+
+    이 함수는 평문으로 합치지 않고, MeetingSegment에서 곧바로 구조화된
+    리스트(초 단위 타임스탬프 포함)를 만들어 document_loader.load_document()에
+    바로 넘길 수 있게 한다.
+    """
+    if meeting.input_type == "document_upload":
+        if not uploaded_text:
+            raise ValueError(
+                "input_type='document_upload'인 회의는 uploaded_text가 필수입니다."
+            )
+        # 원본 자체에 타임스탬프가 없으므로 0.0으로 둘 수밖에 없음 (정보 손실이 아니라
+        # 애초에 존재하지 않는 정보) - live_recording/audio_upload와는 성격이 다름
+        return [{"speaker": "SPEAKER_00", "text": uploaded_text.strip(), "start": 0.0, "end": 0.0}]
+
+    segments = (
+        db.query(MeetingSegment)
+        .filter(MeetingSegment.meeting_id == meeting.id)
+        .order_by(MeetingSegment.segment_index)
+        .all()
+    )
+    if not segments:
+        raise ValueError(f"meeting_id={meeting.id}에 저장된 발화가 없습니다.")
+
+    return [
+        {
+            "speaker": seg.speaker_label or "SPEAKER_00",
+            "text": seg.content,
+            "start": seg.start_ms / 1000.0,  # ms -> s, document_loader 기존 규격에 맞춤
+            "end": seg.end_ms / 1000.0,
+        }
+        for seg in segments
+    ]
