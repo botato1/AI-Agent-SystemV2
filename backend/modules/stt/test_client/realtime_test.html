@@ -66,29 +66,32 @@
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <button id="loadProfilesBtn" type="button">참석자 목록 불러오기</button>
-      <span id="attendeeChecks" style="font-size:13px;"></span>
     </div>
-    <div style="font-size:12px;color:#888;">
+    <div id="attendeeChecks" style="font-size:13px;margin-top:6px;"></div>
+    <div id="attendeeSelectedSummary" style="font-size:12px;color:#2563eb;margin-top:4px;">선택된 참석자: (없음)</div>
+    <div style="font-size:12px;color:#888;margin-top:4px;">
       오늘 회의 참석자를 체크한 뒤 시작하면, 매번 목소리 등록 없이 체크한 사람들로 화자를 인식함.
-      아무도 체크 안 하면 아래 ①(세션 등록) 또는 자동감지로 동작.
+      아무도 체크 안 하면 아래(세션 등록) 또는 자동감지로 동작.
     </div>
   </fieldset>
 
-  <fieldset>
-    <legend>① 이번 회의 한정 화자 등록 (전역 프로필이 없는 게스트용)</legend>
-    <div>
-      <label>참석 인원수: </label>
-      <input id="speakerCount" type="number" min="1" max="10" value="2" style="width:60px;" />
-      <button id="buildEnrollRowsBtn">인원 입력칸 만들기</button>
-      <button id="clearEnrollBtn">등록 초기화</button>
-    </div>
-    <div id="enrollRows"></div>
-    <div style="font-size:12px;color:#888;">
-      각자 버튼 누르고 <b>"안녕하세요 OOO입니다"</b>라고 말하면, 이름이 자동으로 인식되어 등록됨
-      (말이 끝나면 자동으로 녹음 종료). 이름 인식이 실패하면 직접 입력할 수 있는 칸이 나타남.
-      등록 안 하고 바로 시작하면 자동감지(열린 집합) 모드로 동작.
-    </div>
-  </fieldset>
+  <details style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:13px;color:#555;">① 이번 회의 한정 화자 등록 (전역 프로필이 없는 게스트용, 펼쳐서 사용)</summary>
+    <fieldset style="border-top:none;border-top-left-radius:0;border-top-right-radius:0;">
+      <div>
+        <label>참석 인원수: </label>
+        <input id="speakerCount" type="number" min="1" max="10" value="2" style="width:60px;" />
+        <button id="buildEnrollRowsBtn">인원 입력칸 만들기</button>
+        <button id="clearEnrollBtn">등록 초기화</button>
+      </div>
+      <div id="enrollRows"></div>
+      <div style="font-size:12px;color:#888;">
+        각자 버튼 누르고 <b>"안녕하세요 OOO입니다"</b>라고 말하면, 이름이 자동으로 인식되어 등록됨
+        (말이 끝나면 자동으로 녹음 종료). 이름 인식이 실패하면 직접 입력할 수 있는 칸이 나타남.
+        등록 안 하고 바로 시작하면 자동감지(열린 집합) 모드로 동작.
+      </div>
+    </fieldset>
+  </details>
 
   <div id="status" class="disconnected">연결 안 됨</div>
   <button id="startBtn">🔴 ② 시작 (마이크 켜기)</button>
@@ -224,18 +227,48 @@ async function registerGlobalProfile(manualName) {
   btn.disabled = false;
 }
 
+function updateAttendeeSelectedSummary() {
+  const checked = [...attendeeChecksEl.querySelectorAll(".attendee-cb:checked")].map((c) => c.value);
+  document.getElementById("attendeeSelectedSummary").textContent =
+    "선택된 참석자: " + (checked.length ? checked.join(", ") : "(없음)");
+}
+
 function renderAttendeeChecks(names) {
   attendeeChecksEl.innerHTML = "";
   if (!names.length) {
     attendeeChecksEl.textContent = "(등록된 사람 없음)";
+    updateAttendeeSelectedSummary();
     return;
   }
   names.forEach((name) => {
-    const label = document.createElement("label");
-    label.style.marginRight = "10px";
-    label.innerHTML = `<input type="checkbox" class="attendee-cb" value="${name}" /> ${name}`;
-    attendeeChecksEl.appendChild(label);
+    const row = document.createElement("div");
+    row.style.marginBottom = "4px";
+    row.innerHTML = `
+      <label style="margin-right:6px;"><input type="checkbox" class="attendee-cb" value="${name}" /> ${name}</label>
+      <button type="button" class="rename-toggle-btn attendee-rename-btn" data-name="${name}">✏️ 수정</button>
+    `;
+    attendeeChecksEl.appendChild(row);
   });
+  attendeeChecksEl.querySelectorAll(".attendee-cb").forEach((cb) => {
+    cb.addEventListener("change", updateAttendeeSelectedSummary);
+  });
+  attendeeChecksEl.querySelectorAll(".attendee-rename-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const oldName = btn.dataset.name;
+      const newName = prompt(`"${oldName}"의 새 이름을 입력하세요:`, oldName);
+      if (!newName || !newName.trim() || newName === oldName) return;
+      const url = `${httpBase()}/api/profiles/${encodeURIComponent(oldName)}/rename?new_name=${encodeURIComponent(newName.trim())}`;
+      const res = await fetch(url, { method: "PATCH" });
+      const data = await res.json();
+      if (data.status === "success") {
+        log(`✏️ 전역 프로필 이름 수정 완료: ${oldName} → ${data.speaker_name}`);
+        renderAttendeeChecks(data.registered_names);
+      } else {
+        log(`❌ 전역 프로필 이름 수정 실패: ${data.message}`);
+      }
+    });
+  });
+  updateAttendeeSelectedSummary();
 }
 
 async function loadGlobalProfiles() {
