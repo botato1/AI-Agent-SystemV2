@@ -78,17 +78,38 @@ async def upload_document(
     workspace_id: UUID,
     file: UploadFile = File(...),
     room_id: str | None = Form(None),
-    document_type: Literal["document", "meeting"] = Form("document", alias="type"),
+    document_type: Literal["document", "meeting"] = Form(
+        "document",
+        alias="type",
+    ),
+    previous_file_id: UUID | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    require_workspace_member(db, workspace_id, current_user_id)
+    require_workspace_member(
+        db,
+        workspace_id,
+        current_user_id,
+    )
 
     if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="업로드할 파일이 없습니다.",
         )
+
+    if previous_file_id is not None:
+        previous_file = _get_workspace_file_or_404(
+            db,
+            previous_file_id,
+            workspace_id,
+        )
+
+        if previous_file.file_kind != "document":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="문서 파일만 이전 버전으로 지정할 수 있습니다.",
+            )
 
     try:
         return await upload_and_process_document(
@@ -98,23 +119,27 @@ async def upload_document(
             room_id=room_id,
             document_type=document_type,
             user_id=current_user_id,
+            previous_file_id=previous_file_id,
         )
 
     except HTTPException:
         raise
-    except ValueError as e:
-        print(f"[document_router] 문서 업로드 요청 값 오류: {repr(e)}")
+
+    except file_crud.FileVersionError as e:
+        print(f"[document_router] 문서 업로드 요청 값 오류: {e!r}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="문서 업로드 요청 값이 올바르지 않습니다.",
+            detail=str(e),
         )
+
     except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="채팅방 또는 문서를 찾을 수 없습니다.",
         )
+
     except Exception as e:
-        print(f"[document_router] 문서 업로드 처리 실패: {repr(e)}")
+        print(f"[document_router] 문서 업로드 처리 실패: {e!r}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="문서 업로드 처리 중 오류가 발생했습니다.",

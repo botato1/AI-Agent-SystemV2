@@ -284,6 +284,7 @@ async def upload_and_process_document(
     room_id: str | None = None,
     document_type: str = "document",
     user_id: str | None = None,
+    previous_file_id: UUID | None = None,
 ) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
@@ -357,6 +358,7 @@ async def upload_and_process_document(
             db,
             workspace_id=workspace_id,
             original_filename=filename,
+            previous_file_id=previous_file_id,
             category_id=category.id,
             uploaded_by=UUID(user_id),
             stored_filename=stored_filename,
@@ -419,6 +421,8 @@ async def upload_and_process_document(
         }
 
     except PermissionError:
+        raise
+    except file_crud.FileVersionError:
         raise
     except httpx.HTTPStatusError as e:
         return _build_error_response(room_id, filename, document_type, "외부 처리 서버 응답 오류가 발생했습니다.", repr(e))
