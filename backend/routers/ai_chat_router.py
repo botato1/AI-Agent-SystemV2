@@ -17,8 +17,6 @@ from backend.schemas.chat_schema import (
     AIMessageSourceListResponse,
 )
 
-
-
 router = APIRouter(
     prefix="/api/workspaces/{workspace_id}/rooms/{room_id}/ai-chat",
     tags=["AI Chat"],
@@ -69,8 +67,9 @@ def send_ai_chat_message(
     _get_room_or_404(db, room_id, workspace_id)
 
     session = ai_chat_crud.get_or_create_session(db, workspace_id, room_id, UUID(current_user_id))
-    ai_chat_crud.add_message(db, session_id=session.id, role="user", content=request.content)
 
+    # 답변 생성을 먼저 시도하고 성공했을 때만 메시지를 저장한다.
+    # (실패 시 대화기록에 "답변 없는 질문"만 남는 것을 방지)
     try:
         answer, sources = _generate_ai_response(session.id, request.content)
     except NotImplementedError:
@@ -79,10 +78,13 @@ def send_ai_chat_message(
             detail="AI 답변 생성 기능은 아직 사용할 수 없습니다.",
         )
 
-    assistant_message = ai_chat_crud.add_message(db, session_id=session.id, role="assistant", content=answer)
-    if sources:
-        ai_chat_crud.add_sources(db, assistant_message.id, sources)
-
+    assistant_message = ai_chat_crud.add_ai_exchange(
+        db,
+        session_id=session.id,
+        user_content=request.content,
+        assistant_content=answer,
+        sources=sources,
+    )
     return AIChatMessageSchema.model_validate(assistant_message)
 
 

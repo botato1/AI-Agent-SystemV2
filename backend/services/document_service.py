@@ -284,6 +284,7 @@ async def upload_and_process_document(
     room_id: str | None = None,
     document_type: str = "document",
     user_id: str | None = None,
+    previous_file_id: UUID | None = None,
 ) -> dict:
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
@@ -353,12 +354,13 @@ async def upload_and_process_document(
             raise RuntimeError("워크스페이스의 기본 카테고리를 찾을 수 없습니다.")
 
         # 1. workspace_files 저장
-        workspace_file = file_crud.create_workspace_file(
+        workspace_file = file_crud.create_versioned_workspace_file(
             db,
             workspace_id=workspace_id,
+            original_filename=filename,
+            previous_file_id=previous_file_id,
             category_id=category.id,
             uploaded_by=UUID(user_id),
-            original_filename=filename,
             stored_filename=stored_filename,
             storage_path=storage_path,
             mime_type=file.content_type,
@@ -367,7 +369,6 @@ async def upload_and_process_document(
             origin_type="room_upload" if room_id else "document_analysis",
             file_size_bytes=len(file_content),
             sha256_hash=sha256_hash,
-            version_group_id=uuid.uuid4(),  # TODO: 동일 파일 재업로드 시 버전 관리 로직 필요
             analysis_status="processing",
             external_ref=external_document_id,
         )
@@ -420,6 +421,8 @@ async def upload_and_process_document(
         }
 
     except PermissionError:
+        raise
+    except file_crud.FileVersionError:
         raise
     except httpx.HTTPStatusError as e:
         return _build_error_response(room_id, filename, document_type, "외부 처리 서버 응답 오류가 발생했습니다.", repr(e))

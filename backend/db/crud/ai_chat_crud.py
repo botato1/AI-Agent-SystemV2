@@ -4,6 +4,7 @@ room 단위 세션, 사용자별 비공개.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -91,12 +92,90 @@ def add_sources(
         db.refresh(r)
     return rows
 
+def add_ai_exchange(
+    db: Session,
+    *,
+    session_id: uuid.UUID,
+    user_content: str,
+    assistant_content: str,
+    sources: Optional[list[dict]] = None,
+    model_name: Optional[str] = None,
+) -> AiChatMessage:
+    """
+    사용자 질문, AI 답변, 답변 근거를 하나의 트랜잭션으로 저장한다.
+
+    사용자 메시지와 AI 답변에 서로 다른 created_at을 명시해
+    조회 시 질문이 답변보다 먼저 정렬되도록 한다.
+    """
+
+    try:
+        user_created_at = datetime.now(timezone.utc)
+        assistant_created_at = user_created_at + timedelta(
+            microseconds=1
+        )
+
+        user_message = AiChatMessage(
+            session_id=session_id,
+            role="user",
+            content=user_content,
+            created_at=user_created_at,
+        )
+
+        assistant_message = AiChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=assistant_content,
+            model_name=model_name,
+            created_at=assistant_created_at,
+        )
+
+        db.add_all(
+            [
+                user_message,
+                assistant_message,
+            ]
+        )
+
+        # assistant_message.id를 출처 FK에 사용하기 위해 flush한다.
+        # 아직 commit은 하지 않는다.
+        db.flush()
+
+        if sources:
+            source_rows = []
+
+            for source in sources:
+                source_fields = dict(source)
+                source_fields.pop(
+                    "ai_message_id",
+                    None,
+                )
+
+                source_rows.append(
+                    AiMessageSource(
+                        ai_message_id=assistant_message.id,
+                        **source_fields,
+                    )
+                )
+
+            db.add_all(source_rows)
+
+        db.commit()
+        db.refresh(assistant_message)
+
+        return assistant_message
+
+    except Exception:
+        db.rollback()
+        raise
 
 def get_session_history(db: Session, session_id: uuid.UUID) -> list[AiChatMessage]:
     return (
         db.query(AiChatMessage)
         .filter(AiChatMessage.session_id == session_id)
-        .order_by(AiChatMessage.created_at)
+        .order_by(
+            AiChatMessage.created_at.asc(),
+            AiChatMessage.id.asc(),
+        )
         .all()
     )
 
