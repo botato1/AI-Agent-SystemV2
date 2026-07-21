@@ -51,7 +51,7 @@ class TransformersWhisperEngine:
       설치 없이도 PyTorch 내장 고속 어텐션 커널을 활용함.
     """
 
-    def __init__(self, model_id: str, device: str = "cuda"):
+    def __init__(self, model_id: str, device: str = "cuda", adapter_path: str | None = None):
         self.device = device
         self.torch_dtype = torch.float16 if device == "cuda" else torch.float32
         self._warned_no_scores = False
@@ -63,6 +63,15 @@ class TransformersWhisperEngine:
             torch_dtype=self.torch_dtype,
             attn_implementation="sdpa",
         ).to(device)
+
+        # LoRA 파인튜닝 어댑터(finetune/stt/train_lora.py 결과물)를 얹어서 로드.
+        # 임시 검증용 — 정식으로 채택되기 전까지는 환경변수로만 켜지도록 해서 기본 동작엔 영향 없음.
+        if adapter_path:
+            from peft import PeftModel
+            logger.info(f"🧩 LoRA 어댑터 로딩 중... ({adapter_path})")
+            self.model = PeftModel.from_pretrained(self.model, adapter_path)
+            logger.info("✅ LoRA 어댑터 로딩 완료")
+
         self.model.eval()
         logger.info(f"✅ transformers Whisper 로딩 완료 ({model_id})")
 

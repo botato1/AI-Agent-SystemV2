@@ -9,23 +9,24 @@ from pyannote.audio import Pipeline
 
 from .core.config import (
     logger, UPLOAD_DIR, MEETINGS_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE, WHISPER_MODEL_SIZE,
-    WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN
+    WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN, LORA_ADAPTER_PATH
 )
 from .routers import stt, realtime, enroll, meetings, profiles
 from .services.speaker_id_service import load_speaker_embedding_inference
 from .services.profile_store import GlobalProfileStore
 
 
-def _load_whisper_model(model_id: str):
+def _load_whisper_model(model_id: str, adapter_path: str | None = None):
     """
     STT_ENGINE에 따라 엔진을 분기 로딩.
     - faster_whisper(ctranslate2): x86_64 GPU 서버 (기존 방식, 제일 빠름)
     - transformers: aarch64+CUDA 서버 (ctranslate2가 GPU CUDA wheel을 안 만들어서 대체)
     두 엔진 모두 동일한 .transcribe() 인터페이스를 제공하므로 호출부 코드는 그대로 재사용됨.
+    adapter_path는 transformers 엔진에서만 의미 있음 (LoRA 검증용, 평소엔 None).
     """
     if STT_ENGINE == "transformers":
         from .services.whisper_engine import TransformersWhisperEngine
-        return TransformersWhisperEngine(model_id, device=DEVICE)
+        return TransformersWhisperEngine(model_id, device=DEVICE, adapter_path=adapter_path)
 
     from faster_whisper import WhisperModel
     return WhisperModel(model_id, device=DEVICE, compute_type=COMPUTE_TYPE)
@@ -38,7 +39,7 @@ async def lifespan(app: FastAPI):
     요청마다 모델을 새로 로드하던 기존 subprocess 방식 대비 핵심 성능 개선 지점.
     """
     logger.info(f"🧠 STT 모델 로딩 중... 엔진={STT_ENGINE} / 모델={WHISPER_MODEL_PRECISE} / {DEVICE}")
-    app.state.stt_model = _load_whisper_model(WHISPER_MODEL_PRECISE)
+    app.state.stt_model = _load_whisper_model(WHISPER_MODEL_PRECISE, adapter_path=LORA_ADAPTER_PATH)
     logger.info("✅ STT (정밀/확정용) 모델 로딩 완료")
 
     # 실시간 회의 STT용 Fast Pass 모델 (2-pass 구조, 저지연 초안 전사 담당)
