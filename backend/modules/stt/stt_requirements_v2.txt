@@ -13,3 +13,7 @@ huggingface_hub==1.21.0
 # 설치해둬도 무해하므로 공통 requirements에 포함
 transformers>=4.57.0
 accelerate>=0.34.0
+torchaudio>=2.2.0
+
+# LoRA 파인튜닝 (finetune/stt/train_lora.py)
+peft>=0.19.0

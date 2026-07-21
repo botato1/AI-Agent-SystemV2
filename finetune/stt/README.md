@@ -70,6 +70,31 @@ python evaluate_wer.py --manifest manifest.jsonl --terms terms.txt --output base
 - 테스트셋(전체의 20%)은 학습에 절대 사용 금지, 한 번 정하면 변경 금지
 - 파인튜닝 후 같은 명령으로 재측정 → 두 리포트 비교가 곧 성과 지표 (논문 재료)
 
+## ④ LoRA 파인튜닝 실행
+
+### 1. AI Hub 매니페스트 생성 (zip을 재압축 해제하지 않고 경로만 인덱싱)
+```bash
+cd finetune/stt
+python make_manifest_aihub.py --data-dir /path/to/Training --output manifest_aihub.jsonl
+```
+
+### 2. 학습 실행 (GPU 서버, stt_venv 활성화 후)
+```bash
+python train_lora.py \
+  --manifests manifest.jsonl manifest_aihub.jsonl \
+  --output-dir ./lora_checkpoints \
+  --epochs 3 --batch-size 4
+```
+- `manifest.jsonl`(팀원 녹음)과 `manifest_aihub.jsonl`(AI Hub)을 함께 넣으면 두 소스를 합쳐서 학습함
+- `evaluate_wer.py`에 쓰는 테스트셋(20%)은 절대 이 매니페스트에 섞지 말 것
+- 완료되면 `lora_checkpoints/final_adapter/`에 어댑터 저장됨 (베이스 모델 전체가 아니라 LoRA 가중치만, 용량 작음)
+
+### 3. 파인튜닝 후 재평가
+```bash
+python evaluate_wer.py --manifest manifest.jsonl --terms terms.txt --output finetuned_report.json
+```
+`baseline_report.json`과 비교해서 WER/CER/용어 재현율 개선폭 확인.
+
 ## 파일 목록
 
 | 파일 | 설명 |
@@ -77,5 +102,7 @@ python evaluate_wer.py --manifest manifest.jsonl --terms terms.txt --output base
 | `recording_script.txt` | 낭독용 40문장 (사람이 읽는 용도) |
 | `script_sentences.json` | 같은 문장의 기계용 버전 (매니페스트 생성에 사용) |
 | `terms.txt` | 용어 재현율 평가 대상 핵심 용어 목록 |
-| `make_manifest.py` | 녹음 파일명 → 정답 텍스트 매핑 생성 |
+| `make_manifest.py` | 팀원 녹음 파일명 → 정답 텍스트 매핑 생성 |
+| `make_manifest_aihub.py` | AI Hub 라벨/오디오 zip → 매니페스트 생성 (압축 해제 없이 경로만 인덱싱) |
 | `evaluate_wer.py` | WER/CER/용어 재현율 측정 |
+| `train_lora.py` | Whisper large-v3 LoRA 파인튜닝 실행 |
