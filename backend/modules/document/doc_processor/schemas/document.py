@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from doc_processor.schemas.metadata import DocumentMetadata, PageResultSchema
+from doc_processor.schemas.metadata import DocumentMetadata
 
 # 팀 공통 status 값
 DocumentStatus = Literal["uploaded", "processing", "processed", "error"]
@@ -20,7 +20,6 @@ class DocumentSchema(BaseModel):
     type: Literal["document"] = "document"
     source: Literal["pdf"] = "pdf"          # 출처 유형 고정값
     content: str                             # plain text 전체 (PyMuPDF + OCR + 표)
-    content_markdown: str = ""              # Markdown 전체
     summary: str = ""                       # 향후 LLM 요약 결과
     language: str = "ko"
     created_at: str = Field(
@@ -36,6 +35,6 @@ class DocumentSchema(BaseModel):
     # ── 문서 처리 전용 키 ────────────────────────────────
     tables: list[dict] = Field(default_factory=list)   # VL 추출 표 [{page, markdown}]
     charts: list[dict] = Field(default_factory=list)   # VL 추출 차트 [{page, raw_text, data}]
-    chunks: list[dict] = Field(default_factory=list)   # 전체 텍스트 청크 (caption 제외, title/body만)
-    page_results: list[PageResultSchema] = Field(default_factory=list)
+    diagrams: list[dict] = Field(default_factory=list)  # VL 추출 다이어그램/인포그래픽 [{page, raw_text}]
+    chunks: list[dict] = Field(default_factory=list)   # 청킹용 텍스트 블록 (caption 제외)
     metadata: DocumentMetadata

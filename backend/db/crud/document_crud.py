@@ -25,3 +25,12 @@ def ocr_success_rate(analysis: DocumentAnalysis) -> Optional[float]:
     if not analysis.ocr_required_pages:
         return None
     return round(analysis.ocr_success_pages / analysis.ocr_required_pages * 100, 2)
+
+def update_document_analysis(db: Session, file_id: uuid.UUID, **fields) -> Optional[DocumentAnalysis]:
+    row = get_document_analysis(db, file_id)
+    if row:
+        for k, v in fields.items():
+            setattr(row, k, v)
+        db.commit()
+        db.refresh(row)
+    return row

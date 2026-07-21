@@ -17,6 +17,15 @@ router = APIRouter(
 )
 
 
+# TODO: stt_upload_service.py가 새 도메인(meetings/meeting_segments)으로
+# 마이그레이션되면 아래 함수와 각 엔드포인트의 호출부를 제거할 것.
+def _stt_temporarily_unavailable():
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="STT 기능은 이번 마이그레이션에서 일시적으로 사용할 수 없습니다.",
+    )
+
+
 # STT 업로드 API
 @router.post("/upload")
 async def upload_stt_file(
@@ -25,6 +34,8 @@ async def upload_stt_file(
     room_id: str | None = Form(None),  # TODO: v1 호환용, 추후 제거 예정
     current_user_id: str = Depends(get_current_user_id),
 ):
+    _stt_temporarily_unavailable()
+
     if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -65,6 +76,8 @@ async def upload_stt_file(
 def get_stt_file_list(
     current_user_id: str = Depends(get_current_user_id),
 ):
+    _stt_temporarily_unavailable()
+
     try:
         return get_stt_list(
             user_id=current_user_id,
@@ -86,6 +99,8 @@ def get_stt_file_detail(
     document_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
+    _stt_temporarily_unavailable()
+
     try:
         result = get_stt_detail(
             document_id=document_id,
@@ -121,6 +136,8 @@ async def delete_stt_file(
     document_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
+    _stt_temporarily_unavailable()
+
     try:
         result = await delete_stt_document(
             document_id=document_id,

@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .DS_Store
 frontend/node_modules/
+frontend(2)/node_modules/
 
 # 테스트 파일
 test_file/

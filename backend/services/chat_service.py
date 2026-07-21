@@ -6,14 +6,38 @@ from backend.schemas.chat_schema import ChatRequest
 from backend.schemas.response_schema import ChatResponseSchema
 from backend.schemas.agent_schema import AgentState
 from backend.schemas.type_schema import DEFAULT_QUESTION_TYPE
-from backend.db.crud import (
-    insert_message,
-    get_messages,
-    get_documents,
-    get_conversation_by_id,
-    create_conversation,
-)
-from backend.graphs.agent_graph import agent_graph
+# from backend.graphs.agent_graph import agent_graph
+
+
+# TODO: 아래 함수들은 legacy conversation 기반 crud로, 새 도메인(rooms/room_messages)
+# 으로 마이그레이션되지 않았다. AI Chat 그래프(ai_chat_state.py) 노드 구현 시
+# room_crud/content_chunk_crud 기반 실제 로직으로 교체해야 한다.
+# 지금은 import 에러만 막아두는 임시 스텁이며 호출 시 의도적으로 실패한다.
+# 참고: 현재 이 파일(handle_chat)을 호출하는 곳이 없어 당장 서버 실행에는
+# 영향을 주지 않는다.
+
+def _not_implemented(name: str):
+    raise NotImplementedError(f"{name}은 아직 새 도메인으로 마이그레이션되지 않았습니다.")
+
+
+def insert_message(*args, **kwargs):
+    _not_implemented("insert_message")
+
+
+def get_messages(*args, **kwargs):
+    _not_implemented("get_messages")
+
+
+def get_documents(*args, **kwargs):
+    _not_implemented("get_documents")
+
+
+def get_conversation_by_id(*args, **kwargs):
+    _not_implemented("get_conversation_by_id")
+
+
+def create_conversation(*args, **kwargs):
+    _not_implemented("create_conversation")
 
 
 # 상수
@@ -235,7 +259,8 @@ def build_chat_response(state: AgentState) -> ChatResponseSchema:
 
 # AgentState를 LangGraph에 전달해서 실행
 def run_agent_graph(state: AgentState) -> AgentState:
-    return agent_graph.invoke(state)
+    _not_implemented("run_agent_graph")
+    #return agent_graph.invoke(state)
 
 
 # AgentState 초기화

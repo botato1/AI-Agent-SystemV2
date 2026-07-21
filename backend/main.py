@@ -6,10 +6,15 @@ from backend.db.base import init_db
 from backend.routers.chat_router import router as chat_router
 from backend.routers.rag_router import router as rag_router
 from backend.routers.document_router import router as document_router
-from backend.routers.agent_router import router as agent_router
 from backend.routers.task_router import router as task_router
 from backend.routers.stt_router import router as stt_router
 from backend.routers.auth_router import router as auth_router
+from backend.routers.workspace_router import router as workspace_router
+from backend.routers.meeting_router import router as meeting_router
+from backend.routers.meeting_ws_router import router as meeting_ws_router
+from backend.routers.contradiction_router import router as contradiction_router
+from backend.routers.worktree_router import router as worktree_router
+from backend.routers.ai_chat_router import router as ai_chat_router
 from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -37,9 +42,14 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(rag_router)
 app.include_router(document_router)
-app.include_router(agent_router)
 app.include_router(task_router)
 app.include_router(stt_router)
+app.include_router(workspace_router)
+app.include_router(meeting_router)
+app.include_router(meeting_ws_router)
+app.include_router(contradiction_router)
+app.include_router(worktree_router)
+app.include_router(ai_chat_router)
 
 @app.get("/")
 def root():

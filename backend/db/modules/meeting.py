@@ -123,10 +123,10 @@ class Decision(Base):
     )
 
 
-class ActionItem(Base):
+class Task(Base):
     """meeting_id = NULL이면 사용자가 직접 만든 항목."""
 
-    __tablename__ = "action_items"
+    __tablename__ = "tasks"
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
@@ -148,18 +148,18 @@ class ActionItem(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('open','in_progress','done','cancelled')", name="chk_action_items_status"
+            "status IN ('open','in_progress','done','cancelled')", name="chk_tasks_status"
         ),
         CheckConstraint(
             "priority IS NULL OR priority IN ('low','medium','high')",
-            name="chk_action_items_priority",
+            name="chk_tasks_priority",
         ),
         Index(
-            "idx_action_items_workspace", "workspace_id", "status", "due_at",
+            "idx_tasks_workspace", "workspace_id", "status", "due_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
-            "idx_action_items_category", "category_id", "status", "due_at",
+            "idx_tasks_category", "category_id", "status", "due_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )
