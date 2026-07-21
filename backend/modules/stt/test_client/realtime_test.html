@@ -47,6 +47,9 @@
     <div id="enrollScript" style="font-size:13px;background:#f5f5f4;border-radius:8px;padding:10px 12px;margin-bottom:8px;line-height:1.6;">
       (서버에서 등록 문장을 불러오는 중...)
     </div>
+    <div style="margin-bottom:8px;">
+      <button id="reloadScriptBtn" type="button" style="font-size:12px;padding:4px 10px;">🔄 등록 문장 다시 불러오기 (서버 주소 바꾼 후 눌러주세요)</button>
+    </div>
     <div style="display:flex;align-items:center;gap:8px;">
       <button id="registerProfileBtn" type="button">🎙️ 위 문장을 읽으며 내 목소리 등록</button>
       <span id="profileStatus" class="enroll-status">미등록</span>
@@ -278,6 +281,15 @@ loadEnrollScript().catch(() => {
   document.getElementById("enrollScript").textContent = "(서버 연결 후 새로고침하면 등록 문장이 표시됩니다)";
 });
 loadGlobalProfiles().catch(() => {});
+
+// 서버 주소를 바꾼 뒤 새로고침 없이 바로 다시 불러올 수 있게
+document.getElementById("reloadScriptBtn").onclick = () => {
+  document.getElementById("enrollScript").textContent = "(불러오는 중...)";
+  loadEnrollScript().catch(() => {
+    document.getElementById("enrollScript").textContent = "(불러오기 실패 — 서버 주소를 확인해주세요)";
+  });
+  loadGlobalProfiles().catch(() => {});
+};
 
 // ── ① 화자 사전 등록 (말하면 자동으로 이름 인식) ──────────────
 const ENROLL_MAX_SEC = 8;          // 이 이상 말해도 강제 종료
