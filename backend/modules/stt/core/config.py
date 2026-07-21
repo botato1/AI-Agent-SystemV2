@@ -86,6 +86,13 @@ REALTIME_SILENCE_MS = 500       # 이만큼 침묵이 지속되면 발화 구간
 REALTIME_FLUSH_CHECK_INTERVAL_SEC = 0.3  # VAD 기반 flush 판정 주기 (매 프레임 돌리면 CPU 낭비)
 REALTIME_FLUSH_MIN_TAIL_SEC = 0.5        # 회의 종료 시 이보다 짧은 잔여 버퍼는 버림 (노이즈 수준)
 
+# 강제 컷(REALTIME_MAX_CHUNK_SEC 도달) 시 단어 중간이 잘리는 걸 완화하기 위한 설정.
+# 정상 침묵 판정(REALTIME_SILENCE_MS=500ms)까진 못 기다려도, 최근 구간 안에서
+# 아주 짧은 틈이라도 있으면 그 지점에서 자르고 나머지는 다음 청크로 넘긴다.
+# (둘 다 못 찾으면 기존처럼 버퍼 끝에서 그냥 강제로 자름 — 최후 수단)
+REALTIME_FORCE_CUT_LOOKBACK_SEC = 3.0
+REALTIME_FORCE_CUT_MIN_SILENCE_MS = 100
+
 # Local Agreement 스트리밍 설정 — 발화자가 안 쉬고 계속 말해도
 # 청크가 끝나기 전에 미리 텍스트를 흘려보내기 위한 파라미터
 REALTIME_PARTIAL_INTERVAL_SEC = 1.0   # 이 주기로 버퍼 전체를 다시 훑어 잠정 텍스트 갱신

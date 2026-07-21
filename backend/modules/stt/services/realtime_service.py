@@ -13,6 +13,8 @@ from ..core.config import (
     REALTIME_SILENCE_MS,
     REALTIME_FLUSH_CHECK_INTERVAL_SEC,
     REALTIME_FLUSH_MIN_TAIL_SEC,
+    REALTIME_FORCE_CUT_LOOKBACK_SEC,
+    REALTIME_FORCE_CUT_MIN_SILENCE_MS,
     REALTIME_PARTIAL_INTERVAL_SEC,
     REALTIME_PARTIAL_MIN_SEC,
     FAST_BEAM_SIZE,
@@ -116,13 +118,50 @@ class RealtimeSTTSession:
         trailing_silence_ms = (duration - last_speech_end_sec) * 1000
         return trailing_silence_ms >= REALTIME_SILENCE_MS
 
+    def _find_soft_cutoff(self, buffer: np.ndarray) -> int:
+        """
+        강제 컷(REALTIME_MAX_CHUNK_SEC 도달) 시 단어 중간이 잘리는 걸 피하기 위해,
+        버퍼 끝 REALTIME_FORCE_CUT_LOOKBACK_SEC초 구간 안에서 짧은 틈(≥100ms)이라도
+        있으면 그 지점을 자르는 위치로 반환. 못 찾으면 버퍼 길이(=끝에서 그냥 자름)를 반환.
+        """
+        lookback_samples = int(REALTIME_FORCE_CUT_LOOKBACK_SEC * REALTIME_SAMPLE_RATE)
+        tail_start = max(0, len(buffer) - lookback_samples)
+        tail = buffer[tail_start:]
+
+        speech_spans = get_speech_timestamps(
+            tail,
+            VadOptions(min_silence_duration_ms=REALTIME_FORCE_CUT_MIN_SILENCE_MS),
+            sampling_rate=REALTIME_SAMPLE_RATE,
+        )
+        # tail 안에 발화 구간이 2개 이상 있어야 그 사이에 실제 틈이 있다는 뜻.
+        # 마지막 틈(=끝에서 가장 가까운 자연스러운 경계) 바로 앞에서 자름.
+        if len(speech_spans) >= 2:
+            return tail_start + speech_spans[-2]["end"]
+        return len(buffer)
+
     def pop_chunk(self) -> tuple[np.ndarray, float]:
-        """현재 버퍼를 청크로 확정하고 비움. (청크, 회의 시작 기준 오프셋 초) 반환."""
-        chunk = self._materialize_buffer()
+        """
+        현재 버퍼를 청크로 확정하고 비움. (청크, 회의 시작 기준 오프셋 초) 반환.
+        강제 컷 상황(버퍼가 최대 길이에 도달)이면 단어 중간이 안 잘리게 최근 구간에서
+        짧은 틈을 찾아 그 지점까지만 확정하고, 나머지는 다음 청크로 이어서 넘김.
+        """
+        buffer = self._materialize_buffer()
+        cutoff = len(buffer)
+        if self._buffer_duration_sec() >= REALTIME_MAX_CHUNK_SEC:
+            cutoff = self._find_soft_cutoff(buffer)
+
+        chunk = buffer[:cutoff]
+        leftover = buffer[cutoff:]
+
         offset_sec = self._elapsed_sec
-        self._elapsed_sec += self._buffer_duration_sec()
-        self._pending = []
-        self._total_samples = 0
+        self._elapsed_sec += len(chunk) / REALTIME_SAMPLE_RATE
+
+        if len(leftover) > 0:
+            self._pending = [leftover]
+            self._total_samples = len(leftover)
+        else:
+            self._pending = []
+            self._total_samples = 0
         self._last_partial_at = 0.0
         self._prev_partial_words = []
         return chunk, offset_sec
