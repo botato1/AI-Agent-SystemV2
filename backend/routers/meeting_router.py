@@ -13,6 +13,7 @@ from backend.core.dependencies import get_current_user_id, require_workspace_mem
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
+from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
     MeetingResponse,
@@ -108,10 +109,11 @@ def start_meeting_api(
     )
 
 
-# 음성 파일 업로드 (등록만 — 실제 STT 연동은 후속 작업에서 처리)
+# 음성 파일 업로드 (등록 후 백그라운드로 8002 STT 처리 → 회의 후처리까지 자동 진행)
 @router.post("/upload", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
 async def upload_meeting_api(
     workspace_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     title: str = Form(..., min_length=1, max_length=200),
     file: UploadFile = File(...),
     related_room_id: uuid.UUID | None = Form(None),
@@ -136,7 +138,7 @@ async def upload_meeting_api(
 
     file_content = await file.read()
     storage_path, stored_filename = _save_audio_to_local_storage(file_content, file.filename)
-    
+
     workspace_file = file_crud.create_workspace_file(
         db,
         workspace_id=workspace_id,
@@ -166,6 +168,12 @@ async def upload_meeting_api(
         source_file_id=workspace_file.id,
         status="created",
     )
+
+    background_tasks.add_task(
+        process_uploaded_audio_stt,
+        meeting.id, workspace_id, category.id, file_content,
+    )
+
     return MeetingResponse.model_validate(meeting)
 
 

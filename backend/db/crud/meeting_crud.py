@@ -34,6 +34,14 @@ def add_segment(db: Session, meeting_id: uuid.UUID, content: str, start_ms: int,
     db.refresh(row)
     return row
 
+def add_segments_bulk(db: Session, meeting_id: uuid.UUID, segments: list[dict]) -> list[MeetingSegment]:
+    """세그먼트를 한 번에 저장(단일 commit). STT 스트리밍 종료 후 일괄 저장할 때 사용."""
+    rows = [MeetingSegment(meeting_id=meeting_id, **seg) for seg in segments]
+    db.add_all(rows)
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return rows
 
 def get_segments(db: Session, meeting_id: uuid.UUID) -> list[MeetingSegment]:
     return (
