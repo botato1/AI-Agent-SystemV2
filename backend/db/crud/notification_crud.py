@@ -8,11 +8,14 @@ from sqlalchemy.orm import Session
 from backend.db.modules import Notification
 
 
-def create_notification(db: Session, user_id: uuid.UUID, workspace_id: uuid.UUID, type: str, **fields) -> Notification:
+def create_notification(db: Session, user_id: uuid.UUID, workspace_id: uuid.UUID, type: str, commit: bool = True, **fields) -> Notification:
     row = Notification(user_id=user_id, workspace_id=workspace_id, type=type, **fields)
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 

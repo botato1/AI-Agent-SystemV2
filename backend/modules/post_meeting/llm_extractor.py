@@ -12,7 +12,7 @@ post-meeting은 회의 종료 후 비동기로 도는 작업이라 레이턴시 
 import json
 import re
 
-from backend.modules.llm.ollama_client import _call_ollama
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
 
 EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 이 내용을 분석해서 아래 JSON 스키마에
 맞춰 정확히 출력하라. 다른 설명이나 텍스트 없이 JSON만 출력하라.
@@ -81,7 +81,8 @@ def extract(transcript: str) -> dict:
     실패 시 모든 값이 비어있는 안전한 기본값을 반환한다 (파이프라인 중단 방지).
     """
     prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript=transcript)
-    raw = _call_ollama(prompt, timeout=300.0)  # 긴 회의 전체를 읽어야 하니 타임아웃 넉넉히
+    # 회의 전체 요약/결정 추출은 비동기 처리 - 처음부터 Model2(Qwen3-8B)로 감
+    raw = _call_ollama(prompt, timeout=300.0, model=OLLAMA_MODEL_HEAVY)  # 긴 회의 전체를 읽어야 하니 타임아웃 넉넉히
 
     fallback = {
         "full_summary": "",

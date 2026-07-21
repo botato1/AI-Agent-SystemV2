@@ -5,21 +5,37 @@
 1. 텍스트 확보          (text_assembler)
 2. 구조화 LLM 호출       (llm_extractor)
 3. Decision 상태 전이    (decision_transition)
-4. Action Items 저장
+4. Task 저장
 5. 검색용 인덱싱         (indexer)
 6. 완료 처리
 
-[수정 - 2026.07.21 리뷰 반영]
-- (8번) 타임스탬프 소실: indexer.index_transcript()에 평문을 재파싱해서 넘기던 것을
-  text_assembler.get_segments_for_indexing()이 만든 구조화 리스트(실제 초 단위
-  타임스탬프 포함)를 그대로 넘기도록 변경. document_loader.load_document는 그대로 씀.
-- (9번) rollback 무효화: 각 CRUD 호출이 내부적으로 즉시 commit()해서 except 블록의
-  db.rollback()이 실제로는 아무것도 되돌리지 못했음. 관련 CRUD 함수들에 commit
-  옵션을 추가하고, 여기서는 전부 commit=False로 호출한 뒤 성공 시에만 마지막에
-  한 번 commit, 실패 시 rollback 한 번으로 이번 파이프라인 실행분 전체를 되돌림.
-  (단, document_loader.load_document 내부의 content_chunk 저장은 자체적으로 이미
-  commit+실패시 보정삭제 로직을 갖고 있는 독립 단위라 이 범위 밖 - 설계상 허용된
-  예외로 남겨둠. indexer.index_transcript가 이 함수를 그대로 호출함)
+[수정 - 2026.07.21 리뷰 재반영] 2단계 커밋 구조로 재설계
+기존에 commit=False로 미뤄뒀던 요약/결정/할일 변경이, 그 뒤에 실행되는
+indexer.index_transcript() -> document_loader.load_document() ->
+content_chunk_crud.bulk_create_chunks() 내부의 db.commit() 때문에
+같은 Session 안에서 한꺼번에 강제로 커밋되어버리는 문제가 있었다.
+즉 "마지막에 한 번만 commit"하려던 설계가 중간의 남의 commit() 때문에
+무력화됨 - commit=False만으로는 충분하지 않았음.
+
+해결: 파이프라인을 두 단계로 명확히 나눈다.
+
+  1단계(핵심 데이터, 원자적): 요약 + 결정 + 할일
+    -> 전부 commit=False로 쌓았다가 여기서 딱 한 번 commit.
+    -> 이 시점 이전에 실패하면 전부 롤백, 이 시점 이후엔 확정된 사실로 취급.
+
+  2단계(검색 인덱싱 + 알림, 1단계와 별개 단위):
+    -> content_chunks/ChromaDB 인덱싱은 document_loader가 이미 자체적으로
+       원자성을 보장하는 독립 단위(내부 commit + 실패시 ChromaDB 보정삭제)라
+       1단계와 억지로 묶지 않는다.
+    -> 2단계가 실패해도 1단계(요약/결정/할일)는 이미 확정된 채로 남는다.
+       이건 의도된 동작이다 - 검색 인덱싱 실패가 "이미 내려진 결정"
+       자체를 무효로 만들 이유는 없음. 대신 meeting.status로 실패를 표시해서
+       재처리가 필요함을 알린다.
+
+⚠️ 재실행 시 멱등성 한계: upsert_summary는 이미 upsert라 안전하지만,
+   decision_transition.process_topics()와 create_task()는 재실행 시 동일한
+   결정/할일이 중복 생성될 수 있다 (기존에도 있던 한계, 이번 수정 범위 밖 -
+   후속 작업으로 upsert 또는 "이 meeting에서 이미 처리됨" 체크 추가 필요).
 """
 
 import uuid
@@ -59,24 +75,23 @@ def run(
         uploaded_text: input_type='document_upload'일 때만 필수
 
     Returns:
-        {"status": "success"/"error", "meeting_id": str, "decision_count": int,
-         "action_item_count": int, "chunk_count": int, "error": str|None}
+        {"status": "success"/"partial_success"/"error", "meeting_id": str,
+         "decision_count": int, "action_item_count": int, "chunk_count": int,
+         "error": str|None}
     """
     meeting = db.get(Meeting, meeting_id)
     if not meeting:
         return {"status": "error", "meeting_id": str(meeting_id), "error": "meeting_not_found"}
 
+    # ── 1단계: 핵심 데이터 (요약/결정/할일) — 원자적 트랜잭션 ──────────────
     try:
-        # 1. 텍스트 확보 - LLM 프롬프트용(평문)과 인덱싱용(타임스탬프 보존)을 따로 확보
         transcript = text_assembler.assemble_transcript(db, meeting, uploaded_text=uploaded_text)
         segments_for_indexing = text_assembler.get_segments_for_indexing(
             db, meeting, uploaded_text=uploaded_text
         )
 
-        # 2. 구조화 LLM 호출 (통합 1회)
         extracted = llm_extractor.extract(transcript)
 
-        # meeting_summaries 저장 (full_transcript 포함) - commit=False, 마지막에 일괄 커밋
         meeting_crud.upsert_summary(
             db,
             meeting_id=meeting.id,
@@ -88,7 +103,6 @@ def run(
             commit=False,
         )
 
-        # 3. Decision 상태 전이
         new_decisions = decision_transition.process_topics(
             db,
             workspace_id=meeting.workspace_id,
@@ -98,10 +112,10 @@ def run(
             commit=False,
         )
 
-        # 4. Action Items 저장 (2-2 결과 그대로 - 별도 LLM 호출 없음)
-        # [수정 - 리뷰 반영 5번] action_items -> tasks 명명 변경, 팀 CRUD에 맞춤
         action_item_count = 0
         for item in extracted["action_items"]:
+            # ⚠️ meeting_crud.create_task()가 commit 파라미터를 지원하는지,
+            # 함수명이 실제 팀 CRUD와 일치하는지 팀원 확인 필요 (미확인 상태로 병합 금지)
             meeting_crud.create_task(
                 db,
                 workspace_id=meeting.workspace_id,
@@ -116,13 +130,28 @@ def run(
             )
             action_item_count += 1
 
-        # 5. 검색용 인덱싱 (이중 저장)
-        # index_transcript는 document_loader.load_document를 그대로 호출하는데,
-        # 이 함수는 자체적으로 commit + 실패시 ChromaDB 보정삭제 로직을 갖고 있는
-        # 독립 단위라 여기 트랜잭션 범위 밖임 (설계상 허용된 예외, 주석 상단 참조)
+        # 1단계 확정 — 여기서만 커밋. 이 지점 이전 실패는 전부 롤백된다.
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        meeting.status = "failed"
+        db.commit()
+        print(f"[post_meeting.pipeline] 1단계(핵심 데이터) 실패 meeting_id={meeting_id}: {e}")
+        return {
+            "status": "error", "meeting_id": str(meeting_id),
+            "decision_count": 0, "action_item_count": 0, "chunk_count": 0,
+            "error": str(e),
+        }
+
+    # ── 2단계: 검색 인덱싱 + 알림 — 1단계와 별개 단위 ──────────────────────
+    # index_transcript는 document_loader.load_document를 호출하는데, 이 함수는
+    # 자체적으로 원자성을 보장하는 독립 단위(내부 commit + 실패시 ChromaDB
+    # 보정삭제)라 여기서 억지로 commit=False로 묶지 않는다 (상단 docstring 참조).
+    try:
         transcript_index_result = indexer.index_transcript(db, file_id, segments_for_indexing)
         indexer.index_decisions(db, meeting.workspace_id, meeting.category_id, new_decisions)
-        indexer.tag_chunks_with_decisions(db, file_id, new_decisions, commit=False)
+        indexer.tag_chunks_with_decisions(db, file_id, new_decisions, commit=True)
 
         notification_crud.create_notification(
             db,
@@ -133,10 +162,9 @@ def run(
             message=extracted["short_summary"],
             ref_type="meeting",
             ref_id=meeting.id,
-            commit=False,
+            commit=True,
         )
 
-        # 6. 완료 처리 - 여기서 전체를 한 번에 커밋 (여기까지 온 것 자체가 전부 성공했다는 뜻)
         meeting.status = "completed"
         db.commit()
 
@@ -150,14 +178,17 @@ def run(
         }
 
     except Exception as e:
-        # 여기까지 오면 위 단계들은 전부 flush만 됐지 commit 안 된 상태이므로
-        # rollback이 실제로 이번 실행분 전체(요약/결정/할일/청크태깅/알림)를 되돌린다.
-        db.rollback()
+        # 1단계(요약/결정/할일)는 이미 커밋되어 확정된 상태 - 되돌리지 않는다.
+        # 검색 인덱싱만 실패한 것이므로 meeting 상태만 실패로 표시해 재처리가
+        # 필요함을 알린다 (재인덱싱 로직은 후속 작업 - 지금은 상태 표시까지만).
         meeting.status = "failed"
         db.commit()
-        print(f"[post_meeting.pipeline] 실패 meeting_id={meeting_id}: {e}")
+        print(f"[post_meeting.pipeline] 2단계(인덱싱/알림) 실패 meeting_id={meeting_id}: {e}")
         return {
-            "status": "error", "meeting_id": str(meeting_id),
-            "decision_count": 0, "action_item_count": 0, "chunk_count": 0,
-            "error": str(e),
+            "status": "partial_success",
+            "meeting_id": str(meeting_id),
+            "decision_count": len(new_decisions),
+            "action_item_count": action_item_count,
+            "chunk_count": 0,
+            "error": f"핵심 데이터는 저장됨, 검색 인덱싱 실패: {e}",
         }

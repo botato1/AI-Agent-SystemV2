@@ -45,11 +45,14 @@ def record_match(
     reference_decision_id: Optional[uuid.UUID] = None,
     reference_file_id: Optional[uuid.UUID] = None,
     confidence_score: Optional[float] = None,
+    commit: bool = True,
     **extra_fields,
 ) -> RelatedHistoryMatch:
     """
     알림을 실제로 띄운 시점에 호출 — "이미 알림 줬다"는 기록을 남기는 함수.
     already_notified_in_session()으로 먼저 확인 후, 처음이면 팝업 띄우고 이 함수 호출.
+
+    [수정 - 리뷰 반영 9번] commit 옵션 추가 (post_meeting 파이프라인 단일 트랜잭션용).
     """
     row = RelatedHistoryMatch(
         workspace_id=workspace_id,
@@ -64,8 +67,11 @@ def record_match(
         **extra_fields,
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 

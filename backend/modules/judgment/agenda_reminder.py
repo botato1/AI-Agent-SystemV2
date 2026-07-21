@@ -20,7 +20,8 @@ def check_on_session_start(db: Session, category_id: uuid.UUID) -> dict:
         {"popup": {"type": "agenda_reminder", "message": str, "items": list[dict]}}
         미해결 항목이 없어도 팝업은 항상 반환한다 ("없습니다" 표시, 설계 문서 1-3 참조).
     """
-    items = meeting_crud.list_open_action_items_by_category(db, category_id)
+    # [수정 - 리뷰 반영 5번] action_items -> tasks 명명 변경, 팀 CRUD에 맞춤
+    items = meeting_crud.list_open_tasks_by_category(db, category_id)
 
     if not items:
         return {
