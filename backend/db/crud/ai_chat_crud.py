@@ -91,6 +91,71 @@ def add_sources(
         db.refresh(r)
     return rows
 
+def add_ai_exchange(
+    db: Session,
+    *,
+    session_id: uuid.UUID,
+    user_content: str,
+    assistant_content: str,
+    sources: Optional[list[dict]] = None,
+    model_name: Optional[str] = None,
+) -> AiChatMessage:
+    """
+    사용자 질문, AI 답변, 답변 근거를 하나의 트랜잭션으로 저장한다.
+
+    하나라도 저장에 실패하면 전체를 rollback해
+    질문이나 답변만 단독으로 남지 않도록 한다.
+    """
+
+    try:
+        user_message = AiChatMessage(
+            session_id=session_id,
+            role="user",
+            content=user_content,
+        )
+
+        assistant_message = AiChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=assistant_content,
+            model_name=model_name,
+        )
+
+        db.add_all(
+            [
+                user_message,
+                assistant_message,
+            ]
+        )
+
+        # assistant_message.id를 출처 FK에 사용하기 위해 flush한다.
+        # 아직 commit은 하지 않는다.
+        db.flush()
+
+        if sources:
+            source_rows = []
+
+            for source in sources:
+                source_fields = dict(source)
+                source_fields.pop("ai_message_id", None)
+
+                source_rows.append(
+                    AiMessageSource(
+                        ai_message_id=assistant_message.id,
+                        **source_fields,
+                    )
+                )
+
+            db.add_all(source_rows)
+
+        db.commit()
+        db.refresh(assistant_message)
+
+        return assistant_message
+
+    except Exception:
+        db.rollback()
+        raise
 
 def get_session_history(db: Session, session_id: uuid.UUID) -> list[AiChatMessage]:
     return (

@@ -78,11 +78,13 @@ def send_ai_chat_message(
             detail="AI 답변 생성 기능은 아직 사용할 수 없습니다.",
         )
 
-    ai_chat_crud.add_message(db, session_id=session.id, role="user", content=request.content)
-    assistant_message = ai_chat_crud.add_message(db, session_id=session.id, role="assistant", content=answer)
-    if sources:
-        ai_chat_crud.add_sources(db, assistant_message.id, sources)
-
+    assistant_message = ai_chat_crud.add_ai_exchange(
+        db,
+        session_id=session.id,
+        user_content=request.content,
+        assistant_content=answer,
+        sources=sources,
+    )
     return AIChatMessageSchema.model_validate(assistant_message)
 
 
