@@ -18,7 +18,7 @@ if os.name == "nt":
             os.add_dll_directory(_d)
 
 # 저장 경로 (repo 루트 기준)
-_REPO_ROOT     = Path(__file__).parent.parent.parent.parent  # AI-Agent-System/
+_REPO_ROOT     = Path(__file__).parent  # document/
 _STORAGE_DIR   = _REPO_ROOT / "storage" / "uploads" / "documents"
 _DATA_DIR      = _REPO_ROOT / "data" / "uploads" / "documents"
 
