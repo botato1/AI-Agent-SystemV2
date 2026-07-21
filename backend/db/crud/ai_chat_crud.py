@@ -4,6 +4,7 @@ room 단위 세션, 사용자별 비공개.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -103,15 +104,21 @@ def add_ai_exchange(
     """
     사용자 질문, AI 답변, 답변 근거를 하나의 트랜잭션으로 저장한다.
 
-    하나라도 저장에 실패하면 전체를 rollback해
-    질문이나 답변만 단독으로 남지 않도록 한다.
+    사용자 메시지와 AI 답변에 서로 다른 created_at을 명시해
+    조회 시 질문이 답변보다 먼저 정렬되도록 한다.
     """
 
     try:
+        user_created_at = datetime.now(timezone.utc)
+        assistant_created_at = user_created_at + timedelta(
+            microseconds=1
+        )
+
         user_message = AiChatMessage(
             session_id=session_id,
             role="user",
             content=user_content,
+            created_at=user_created_at,
         )
 
         assistant_message = AiChatMessage(
@@ -119,6 +126,7 @@ def add_ai_exchange(
             role="assistant",
             content=assistant_content,
             model_name=model_name,
+            created_at=assistant_created_at,
         )
 
         db.add_all(
@@ -137,7 +145,10 @@ def add_ai_exchange(
 
             for source in sources:
                 source_fields = dict(source)
-                source_fields.pop("ai_message_id", None)
+                source_fields.pop(
+                    "ai_message_id",
+                    None,
+                )
 
                 source_rows.append(
                     AiMessageSource(
@@ -161,7 +172,10 @@ def get_session_history(db: Session, session_id: uuid.UUID) -> list[AiChatMessag
     return (
         db.query(AiChatMessage)
         .filter(AiChatMessage.session_id == session_id)
-        .order_by(AiChatMessage.created_at)
+        .order_by(
+            AiChatMessage.created_at.asc(),
+            AiChatMessage.id.asc(),
+        )
         .all()
     )
 
