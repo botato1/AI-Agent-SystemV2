@@ -3,6 +3,7 @@
 import uuid
 from typing import Optional
 from datetime import datetime, timezone
+from sqlalchemy import text
 
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,87 @@ def create_workspace_file(db: Session, **fields) -> WorkspaceFile:
     db.refresh(row)
     return row
 
+def create_versioned_workspace_file(
+    db: Session,
+    *,
+    workspace_id: uuid.UUID,
+    original_filename: str,
+    **fields,
+) -> WorkspaceFile:
+    """
+    동일 워크스페이스·파일명의 버전 전환과 새 버전 생성을
+    하나의 트랜잭션으로 처리한다.
+
+    PostgreSQL advisory lock을 사용해 최초 업로드를 포함한
+    동시 업로드도 같은 파일명 단위로 직렬화한다.
+    """
+
+    lock_key = f"workspace_file_version:{workspace_id}:{original_filename}"
+
+    try:
+        # 동일 workspace_id + filename에 대한 동시 업로드를 직렬화한다.
+        db.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:lock_key, 0)"
+                ")"
+            ),
+            {"lock_key": lock_key},
+        )
+
+        previous_version = (
+            db.query(WorkspaceFile)
+            .filter(
+                WorkspaceFile.workspace_id == workspace_id,
+                WorkspaceFile.original_filename == original_filename,
+                WorkspaceFile.is_latest.is_(True),
+                WorkspaceFile.deleted_at.is_(None),
+            )
+            .order_by(WorkspaceFile.version_no.desc())
+            .with_for_update()
+            .first()
+        )
+
+        if previous_version:
+            previous_version.is_latest = False
+
+            version_group_id = previous_version.version_group_id
+            version_no = previous_version.version_no + 1
+            previous_version_id = previous_version.id
+
+            # 기존 버전의 is_latest 변경을 먼저 DB에 반영하되
+            # commit은 하지 않아 실패 시 전체 rollback되도록 한다.
+            db.flush()
+
+        else:
+            version_group_id = uuid.uuid4()
+            version_no = 1
+            previous_version_id = None
+
+        row_fields = dict(fields)
+        row_fields.update(
+            {
+                "workspace_id": workspace_id,
+                "original_filename": original_filename,
+                "version_group_id": version_group_id,
+                "version_no": version_no,
+                "previous_version_id": previous_version_id,
+                "is_latest": True,
+            }
+        )
+
+        row = WorkspaceFile(**row_fields)
+
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        return row
+
+    except Exception:
+        db.rollback()
+        raise
+
 
 def get_file(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
     return (
@@ -55,16 +137,6 @@ def get_latest_file_by_filename(
         )
         .first()
     )
-
-
-def supersede_file_version(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
-    """새 버전이 생성될 때 기존 최신 버전의 is_latest를 내린다."""
-    row = get_file(db, file_id)
-    if row:
-        row.is_latest = False
-        db.commit()
-        db.refresh(row)
-    return row
 
 
 def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str) -> list[WorkspaceFile]:
