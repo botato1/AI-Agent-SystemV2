@@ -206,37 +206,47 @@ def save_summary_as_document(
     short_summary: str,
     discussion_points: list[str],
 ):
-    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤 meeting_summaries에 연결한다."""
-    content = (
-        f"# {title} 회의 요약\n\n"
-        f"## 전체 요약\n{full_summary}\n\n"
-        f"## 핵심 요약\n{short_summary}\n\n"
-        f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points)
-    )
-    content_bytes = content.encode("utf-8")
+    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤 meeting_summaries에 연결한다.
 
-    MEETING_SUMMARY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    stored_filename = f"{meeting_id}.md"
-    storage_path = MEETING_SUMMARY_STORAGE_DIR / stored_filename
-    storage_path.write_bytes(content_bytes)
+    부가 기능이라 실패해도 예외를 밖으로 던지지 않는다 — 이미 저장된 요약/결정사항/할일까지
+    실패 처리되는 걸 막기 위함. 실패 시 None을 반환하고 로그만 남긴다.
+    """
+    try:
+        content = (
+            f"# {title} 회의 요약\n\n"
+            f"## 전체 요약\n{full_summary}\n\n"
+            f"## 핵심 요약\n{short_summary}\n\n"
+            f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points)
+        )
+        content_bytes = content.encode("utf-8")
 
-    workspace_file = file_crud.create_workspace_file(
-        db,
-        workspace_id=workspace_id,
-        category_id=category_id,
-        uploaded_by=uploaded_by,
-        original_filename=f"{title}_요약.md",
-        stored_filename=stored_filename,
-        storage_path=str(storage_path),
-        mime_type="text/markdown",
-        extension="md",
-        file_kind="document",
-        origin_type="meeting_summary",
-        file_size_bytes=len(content_bytes),
-        sha256_hash=hashlib.sha256(content_bytes).hexdigest(),
-        version_group_id=uuid.uuid4(),
-        analysis_status="completed",
-    )
+        MEETING_SUMMARY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        stored_filename = f"{meeting_id}.md"
+        storage_path = MEETING_SUMMARY_STORAGE_DIR / stored_filename
+        storage_path.write_bytes(content_bytes)
 
-    meeting_crud.update_summary_file(db, meeting_id, workspace_file.id)
-    return workspace_file
+        workspace_file = file_crud.create_workspace_file(
+            db,
+            workspace_id=workspace_id,
+            category_id=category_id,
+            uploaded_by=uploaded_by,
+            original_filename=f"{title}_요약.md",
+            stored_filename=stored_filename,
+            storage_path=str(storage_path),
+            mime_type="text/markdown",
+            extension="md",
+            file_kind="document",
+            origin_type="meeting_summary",
+            file_size_bytes=len(content_bytes),
+            sha256_hash=hashlib.sha256(content_bytes).hexdigest(),
+            version_group_id=uuid.uuid4(),
+            analysis_status="completed",
+        )
+
+        meeting_crud.update_summary_file(db, meeting_id, workspace_file.id)
+        return workspace_file
+
+    except Exception as exc:
+        db.rollback()
+        print(f"[meeting_service] 요약 문서 저장 실패 (meeting_id={meeting_id}): {repr(exc)}")
+        return None
