@@ -16,6 +16,7 @@ data/raw/
 data/processed/
 data/knowledge/
 data/uploads/
+backend/modules/document/dataset/
 
 # 자동 생성 저장소
 storage/
