@@ -1,5 +1,4 @@
-// src/App.tsx
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
@@ -9,20 +8,23 @@ import GraphView from "./components/GraphView";
 import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
+
 import { Channel, ContradictionLogEntry, Task, TaskPriority, TaskStatus, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
 import { useVoiceMeetings } from "./hooks/useVoiceMeetings";
 import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
 import { Language, translations } from "./data/translations";
-import { getMockData } from "./data/mockData"; // 구조화된 목업 가져오기
-
-type Selection = { type: "channel"; channel: Channel } | { type: "placeholder"; key: PlaceholderKey };
+import { getMockData } from "./data/mockData";
+import { getProfileApi, logoutApi } from "./services/auth";
 
 interface RegisteredAccount {
   username: string;
+  email?: string;
   password: string;
   user: User;
 }
+
+type Selection = { type: "channel"; channel: Channel } | { type: "placeholder"; key: PlaceholderKey };
 
 const PLACEHOLDER_LABELS: Record<
   Exclude<PlaceholderKey, "voiceMeeting" | "dashboard" | "docAnalysis" | "graph">,
@@ -32,13 +34,14 @@ const PLACEHOLDER_LABELS: Record<
 export default function App() {
   const [lang, setLang] = useState<Language>("ko");
   const t = translations[lang];
-  
+
   // 현재 언어셋에 맞는 목업 데이터 미리 가져오기
   const initialData = getMockData(lang);
 
   // 로그인/회원가입 상태
   const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
 
   // 워크스페이스 목록 관리
   const [workspaces, setWorkspaces] = useState<Workspace[]>(initialData.mockWorkspaces);
@@ -57,7 +60,47 @@ export default function App() {
     [initialData.mockWorkspaces[0].id]: initialData.mockContradictionLog,
   });
 
-  // 언어가 변경될 때 독립된 함수로부터 새로운 언어 목업 세트를 할당받아 에러 완치
+  const [selection, setSelection] = useState<Selection>({
+    type: "channel",
+    channel: initialData.mockChannels[0],
+  });
+
+  const [showProfile, setShowProfile] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+
+  // 1. 페이지 로드/새로고침 시 GET /api/auth/profile 로 자동 로그인 체크
+  useEffect(() => {
+    async function checkAutoLogin() {
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        setIsAuthChecking(false);
+        return;
+      }
+
+      const profileResult = await getProfileApi();
+
+      if (profileResult.status === "success" && profileResult.user) {
+        setCurrentUser({
+          id: profileResult.user.id,
+          name: profileResult.user.display_name || profileResult.user.username,
+          username: profileResult.user.username,
+          status: "online",
+          avatarColor: "#3B82F6",
+          avatarImageUrl: null,
+        });
+      } else {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+      }
+
+      setIsAuthChecking(false);
+    }
+
+    checkAutoLogin();
+  }, []);
+
+  // 언어가 변경될 때 독립된 함수로부터 새로운 언어 목업 세트를 할당받음
   useEffect(() => {
     const data = getMockData(lang);
     const defaultWsId = data.mockWorkspaces[0].id;
@@ -83,15 +126,6 @@ export default function App() {
   const tasks = tasksByWorkspace[currentWorkspaceId] ?? [];
   const contradictionLog = contradictionLogByWorkspace[currentWorkspaceId] ?? [];
 
-  const [selection, setSelection] = useState<Selection>({
-    type: "channel",
-    channel: initialData.mockChannels[0],
-  });
-  
-  const [showProfile, setShowProfile] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const { theme, toggleTheme } = useTheme();
-
   const voiceMeetings = useVoiceMeetings(currentWorkspaceId, lang);
   const hasRecording = voiceMeetings.meetings.some((m) => m.status === "recording");
   const hasPaused = voiceMeetings.meetings.some((m) => m.status === "paused");
@@ -100,18 +134,21 @@ export default function App() {
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
   const activeRecorderName = voiceMeetings.meetings.find((m) => m.status === "recording")?.startedBy ?? null;
 
-  if (!currentUser) {
-    return (
-      <AuthView
-        registeredAccounts={registeredAccounts}
-        onSignUp={(account) => {
-          setRegisteredAccounts((prev) => [...prev, account]);
-          setCurrentUser(account.user);
-        }}
-        onLogIn={(user) => setCurrentUser(user)}
-      />
-    );
-  }
+  // 2. 회원가입 완료 처리
+  const handleSignUp = (account: RegisteredAccount) => {
+    setRegisteredAccounts((prev) => [...prev, account]);
+  };
+
+  // 3. 로그인 완료 처리
+  const handleLogIn = (user: User) => {
+    setCurrentUser(user);
+  };
+
+  // 4. 로그아웃 처리
+  const handleLogOut = async () => {
+    await logoutApi();
+    setCurrentUser(null);
+  };
 
   function handleChangeAvatarColor(color: string) {
     setCurrentUser((prev) => (prev ? { ...prev, avatarColor: color, avatarImageUrl: null } : prev));
@@ -131,10 +168,6 @@ export default function App() {
         a.user.username === currentUser?.username ? { ...a, user: { ...a.user, avatarImageUrl: imageUrl } } : a
       )
     );
-  }
-
-  function handleLogout() {
-    setCurrentUser(null);
   }
 
   function handleCreateTask(task: Omit<Task, "id">) {
@@ -235,6 +268,27 @@ export default function App() {
     });
   }
 
+  // 자동 로그인 확인 중 로딩 화면
+  if (isAuthChecking) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-sm">
+        로그인 정보를 확인 중입니다...
+      </div>
+    );
+  }
+
+  // 로그인되지 않은 경우 AuthView 표시
+  if (!currentUser) {
+    return (
+      <AuthView
+        registeredAccounts={registeredAccounts}
+        onSignUp={handleSignUp}
+        onLogIn={handleLogIn}
+      />
+    );
+  }
+
+  // 로그인 완료된 후 메인 앱 화면
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar
@@ -255,7 +309,7 @@ export default function App() {
         user={currentUser}
         onOpenProfile={() => setShowProfile(true)}
         onOpenSettings={() => setShowSettings(true)}
-        onLogout={handleLogout}
+        onLogout={handleLogOut}
         theme={theme}
         onToggleTheme={toggleTheme}
         lang={lang}
@@ -302,6 +356,7 @@ export default function App() {
           onClose={() => setShowProfile(false)}
           onChangeAvatarColor={handleChangeAvatarColor}
           onChangeAvatarImage={handleChangeAvatarImage}
+          onUpdateSuccess={(updatedUser) => setCurrentUser(updatedUser)}
           t={t}
         />
       )}

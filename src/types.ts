@@ -21,6 +21,7 @@ export interface MemberActivity {
 }
 
 export interface User {
+  id: string;
   name: string;
   username: string; // 로그인용 아이디 (중복 불가)
   status: "online" | "away" | "offline";
