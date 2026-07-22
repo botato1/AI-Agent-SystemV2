@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -92,13 +93,18 @@ async def realtime_stt_ws(
         # ② 각자 PC 모드
         recorder = websocket.app.state.active_group_meetings.get(session_id)
         if recorder is None:
-            recorder = MeetingRecord(session_id, "group", record_audio=False)
+            recorder = MeetingRecord(session_id, "group", mixed_audio=True)
             websocket.app.state.active_group_meetings[session_id] = recorder
         websocket.app.state.active_group_participants.setdefault(session_id, set()).add(participant_name)
+        # 이 참가자가 회의 시작 후 몇 초 뒤에 합류했는지 — 세그먼트 시각/오디오 믹싱
+        # 위치를 "회의 전체 기준 절대 시각"으로 맞추는 데 필요 (먼저 합류한 사람 기준
+        # 0초가 아니라 항상 recorder 생성 시각 기준으로 통일)
+        join_offset_sec = time.monotonic() - recorder.start_monotonic
         session = RealtimeSTTSession(
-            session_id, fast_model, precise_model, fixed_speaker=participant_name, recorder=recorder
+            session_id, fast_model, precise_model,
+            fixed_speaker=participant_name, recorder=recorder, base_offset_sec=join_offset_sec,
         )
-        mode = f"각자 PC 모드 (참가자: {participant_name})"
+        mode = f"각자 PC 모드 (참가자: {participant_name}, 합류 시각: +{join_offset_sec:.1f}s)"
     else:
         # ① 한 대의 PC(공용 마이크) 모드
         merged_profiles: dict = {}

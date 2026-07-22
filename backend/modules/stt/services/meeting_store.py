@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import time
 import wave
 from datetime import datetime, timezone
 
@@ -31,16 +32,16 @@ class MeetingRecord:
                          비정상 종료 시 audio.wav 헤더가 깨질 수 있는 건 알려진 한계).
     """
 
-    def __init__(self, session_id: str, speaker_mode: str, record_audio: bool = True):
+    def __init__(self, session_id: str, speaker_mode: str, mixed_audio: bool = False):
         """
-        record_audio=False면 오디오를 저장하지 않고 세그먼트(텍스트)만 누적함 —
-        "각자 PC" 모드처럼 여러 참가자의 스트림을 하나의 회의록으로 합칠 때, 각자
-        보내는 오디오를 타이밍 맞춰 믹싱하는 건 별도 작업이 필요해 이번엔 지원하지
-        않고 텍스트만 병합함. 이 경우 오디오 기반 C-4 정밀 재분석도 생략됨
-        (refine_service가 audio_file=None을 보고 자동으로 건너뜀).
+        mixed_audio=True: "각자 PC" 모드용 — 여러 참가자가 각자 보내는 오디오를
+        "회의 시작 시각 기준 절대 위치"에 맞춰 메모리에서 합산(믹싱)하다가, 회의
+        종료 시 한 번에 파일로 씀. 공용 마이크 모드(mixed_audio=False, 기본값)처럼
+        스트림이 하나뿐이면 겹칠 일이 없어, 메모리 효율이 좋은 스트리밍 append 방식을
+        그대로 씀(청크 도착 즉시 디스크에 씀 — 회의가 길어져도 메모리에 안 쌓임).
         """
         self.session_id = session_id
-        self.record_audio = record_audio
+        self.mixed_audio = mixed_audio
         started = datetime.now(timezone.utc)
         # 같은 session_id로 회의를 여러 번 열 수 있으므로 시작 시각을 붙여 회의를 구분
         self.meeting_id = f"{session_id}_{started.strftime('%Y%m%d-%H%M%S')}"
@@ -55,12 +56,19 @@ class MeetingRecord:
             "status": "recording",        # recording | completed | disconnected
             "speaker_mode": speaker_mode,  # enrolled(사전등록) | auto(자동감지) | group(각자 PC)
             "refined": False,              # C-4 정밀 재분석 완료 여부 (후속 작업에서 사용)
-            "audio_file": "audio.wav" if record_audio else None,
+            "audio_file": "audio.wav",
             "segments": [],
         }
 
+        # 참가자가 회의 시작 후 몇 초에 합류했는지 계산하는 기준 시각(단조 시계 —
+        # 시스템 시각 변경/타임존 영향을 안 받아 오디오 위치 계산에 더 안전함)
+        self.start_monotonic = time.monotonic()
+
         self._wav = None
-        if record_audio:
+        self._mix_buffer: np.ndarray | None = None
+        if mixed_audio:
+            self._mix_buffer = np.zeros(0, dtype=np.float32)
+        else:
             self._wav = wave.open(os.path.join(self.dir, "audio.wav"), "wb")
             self._wav.setnchannels(1)
             self._wav.setsampwidth(2)
@@ -68,7 +76,7 @@ class MeetingRecord:
         self._finalized = False
         self._chunks_since_json_save = 0
         self._save_json()
-        logger.info(f"💾 회의 기록 시작: {self.meeting_id} (오디오 저장={record_audio})")
+        logger.info(f"💾 회의 기록 시작: {self.meeting_id} (믹싱 모드={mixed_audio})")
 
     @property
     def has_content(self) -> bool:
@@ -86,11 +94,21 @@ class MeetingRecord:
             return
         np.savez(os.path.join(self.dir, "profiles.npz"), **profiles)
 
-    def add_chunk(self, audio: np.ndarray, segments: list[dict]) -> None:
-        """확정된 청크 하나의 오디오와 세그먼트들을 저장. (블로킹 I/O — executor에서 호출할 것)"""
+    def add_chunk(self, audio: np.ndarray, segments: list[dict], absolute_offset_sec: float | None = None) -> None:
+        """
+        확정된 청크 하나의 오디오와 세그먼트들을 저장. (블로킹 I/O — executor에서 호출할 것)
+        absolute_offset_sec: 믹싱 모드에서 이 오디오를 회의 시작 기준 몇 초 지점에
+        합산할지. 겹치는 구간은 파형을 더해서(mix) 동시 발화도 반영됨.
+        """
         if self._finalized:
             return
-        if self._wav is not None:
+        if self._mix_buffer is not None:
+            start_sample = int((absolute_offset_sec or 0.0) * REALTIME_SAMPLE_RATE)
+            end_sample = start_sample + len(audio)
+            if end_sample > len(self._mix_buffer):
+                self._mix_buffer = np.pad(self._mix_buffer, (0, end_sample - len(self._mix_buffer)))
+            self._mix_buffer[start_sample:end_sample] += audio
+        elif self._wav is not None:
             pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
             self._wav.writeframes(pcm16.tobytes())
         self._meta["segments"].extend(segments)
@@ -138,6 +156,14 @@ class MeetingRecord:
         self._finalized = True
         if self._wav is not None:
             self._wav.close()
+        elif self._mix_buffer is not None and len(self._mix_buffer) > 0:
+            # 스트리밍 append 없이 메모리에 모아뒀던 믹싱 결과를 한 번에 파일로 씀
+            with wave.open(os.path.join(self.dir, "audio.wav"), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(REALTIME_SAMPLE_RATE)
+                pcm16 = np.clip(self._mix_buffer * 32768.0, -32768, 32767).astype(np.int16)
+                wf.writeframes(pcm16.tobytes())
 
         if not self._meta["segments"]:
             # 접속만 하고 발화 없이 끝난 세션 — 빈 회의 폴더가 계속 쌓이지 않게 정리

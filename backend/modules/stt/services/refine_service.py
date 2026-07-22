@@ -84,11 +84,11 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     if meta.get("refined"):
         logger.info(f"↩️ [{meeting_id}] 이미 재분석 완료된 회의 — 건너뜀")
         return meta
-    if not meta.get("audio_file"):
-        # "각자 PC" 모드처럼 오디오를 저장하지 않은 회의 — 오디오 기반 재분석 불가.
-        # 이미 각자 자기 이름으로 접속해 화자가 확정돼 있어 재분석의 의미(익명 라벨
-        # 매핑)도 없으므로, 실시간 결과를 그대로 최종본으로 인정하고 건너뜀.
-        logger.info(f"↩️ [{meeting_id}] 오디오 미저장 회의(각자 PC 모드 등) — 재분석 생략")
+    if meta.get("speaker_mode") == "group":
+        # "각자 PC" 모드 — 오디오(믹싱본)는 있지만, 참가자가 이미 자기 이름으로
+        # 접속해 화자가 확정돼 있음. 여기서 pyannote 화자분리를 돌리면 오히려
+        # 익명 라벨(SPEAKER_00 등)로 덮어써서 이미 정확한 정보를 퇴화시키므로 생략.
+        logger.info(f"↩️ [{meeting_id}] 각자 PC 모드 회의 — 화자 재분석 생략(이미 확정된 화자)")
         meta["refined"] = True
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)

@@ -52,6 +52,7 @@ class RealtimeSTTSession:
         speaker_identifier=None,
         recorder=None,
         fixed_speaker: str | None = None,
+        base_offset_sec: float = 0.0,
     ):
         self.session_id = session_id
         self.fast_model = fast_model
@@ -61,6 +62,10 @@ class RealtimeSTTSession:
         # "각자 PC" 모드용 — 참가자가 자기 이름으로 직접 접속하면 이미 화자가
         # 확정돼 있으므로 임베딩 매칭(speaker_identifier) 없이 이 이름을 그대로 씀
         self.fixed_speaker = fixed_speaker
+        # "각자 PC" 모드에서 이 참가자가 회의 시작 후 몇 초 뒤에 합류했는지.
+        # 세그먼트 시각과 믹싱 오디오 위치를 "회의 전체 기준 절대 시각"으로 맞추는 데 필요
+        # (참가자마다 자기 스트림 기준 0초부터 시작하므로, 이 오프셋을 더해야 서로 어긋나지 않음)
+        self.base_offset_sec = base_offset_sec
 
         # 오디오 버퍼: 매 프레임 np.concatenate 하면 버퍼가 길어질수록 복사 비용이
         # O(n²)로 커지므로, 조각 리스트로 쌓아두고 필요할 때만 합침
@@ -214,6 +219,9 @@ class RealtimeSTTSession:
         """
         loop = asyncio.get_event_loop()
         started = time.monotonic()
+        # 참가자 본인 스트림 기준 offset_sec에 회의 합류 시점을 더해 "회의 전체 기준
+        # 절대 시각"으로 변환 (각자 PC 모드가 아니면 base_offset_sec=0이라 그대로임)
+        offset_sec = offset_sec + self.base_offset_sec
 
         precise_task = loop.run_in_executor(None, self._transcribe, self.precise_model, audio, PRECISE_BEAM_SIZE)
         if self.fixed_speaker is not None:
@@ -235,7 +243,7 @@ class RealtimeSTTSession:
 
         if self.recorder is not None:
             # NAS 위 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로
-            await loop.run_in_executor(None, self.recorder.add_chunk, audio, precise_segments)
+            await loop.run_in_executor(None, self.recorder.add_chunk, audio, precise_segments, offset_sec)
 
         logger.info(
             f"🎙️ [{self.session_id}] 청크 처리 완료 "
