@@ -111,7 +111,8 @@ function float32ToPCM16LE(f32) {
 | `GET /meetings` | 저장된 회의 목록 (최신순). `{"count": N, "meetings": [{meeting_id, session_id, started_at, ended_at, status, speaker_mode, refined, segment_count}]}` |
 | `GET /meetings/{meeting_id}` | 회의록 상세. `segments`(아래 공통 스키마 배열), `refined`(정밀 재분석 완료 여부), `realtime_segments`(재분석 전 원본, 비교용) 포함 |
 | `POST /meetings/{meeting_id}/refine` | 정밀 재분석 수동 재실행 (자동 실행이 실패했을 때만 필요) |
-| `GET /meetings-files/{meeting_id}/audio.wav` | 회의 오디오 원본 (다시 듣기 플레이어 소스) — /api 접두사 없음 주의 |
+| `PATCH /meetings/{meeting_id}/segments/{index}` | 세그먼트 텍스트 수동 수정 (바디: `{"text": "고친 내용"}`). 2026-07-22 추가 |
+| `GET /meetings-files/{meeting_id}/audio.wav` | 회의 오디오 원본 (다시 듣기 플레이어 소스) — /api 접두사 없음 주의. **각자 PC 모드 회의는 이 파일이 없음**(`audio_file: null`) |
 
 `status`: `recording`(진행 중) / `completed`(정상 종료) / `disconnected`(끊김 — 그래도 기록은 보존됨).
 `refined`: 회의 종료 직후엔 false, 백그라운드 재분석(수 분)이 끝나면 true로 바뀜 → **아카이브 화면에서 "정밀 분석 중..." 배지로 표시하고 폴링/새로고침 권장**.
@@ -119,9 +120,20 @@ function float32ToPCM16LE(f32) {
 ## 5. WebSocket 프로토콜 (회의 진행 화면의 핵심)
 
 ### 연결
+
+**① 한 대의 PC(공용 마이크)**:
 ```
 ws://<서버주소>/api/ws/stt/{session_id}?attendees=이준오,가동현
 ```
+
+**② 각자 PC (2026-07-22 추가)**: 참가자마다 자기 브라우저에서 각자 접속, `participant_name`으로 본인 이름을 넣음. **같은 `session_id`로 접속해야 하나의 회의로 병합됨**:
+```
+ws://<서버주소>/api/ws/stt/{session_id}?participant_name=이준오
+```
+- 이미 본인이 누군지 알고 접속하는 거라 화자 식별 자체가 없음 — 그 이름으로 바로 라벨링됨
+- 여러 명의 오디오를 하나로 믹싱하는 건 지원 안 함 — 텍스트(세그먼트)만 시간순으로 병합됨. 그래서 이 모드로 진행한 회의는 **오디오 다시 듣기, C-4 정밀 재분석이 없음** (실시간 인식 결과가 곧 최종본)
+- 마지막 참가자가 "end"를 보내거나 연결이 끊길 때만 회의 전체가 종료 처리됨 (한 명이 먼저 나가도 회의는 계속됨)
+
 (`<서버주소>`가 https 터널이면 `wss://`로)
 - `session_id`: 회의방 식별자 (프론트가 생성, 예: UUID). 재연결 시 같은 값 사용하면 세션 등록 유지됨.
 - `attendees` (선택): 참석자 선택 화면에서 체크한 전역 프로필 이름들 (콤마 구분, URL 인코딩).
@@ -183,6 +195,7 @@ ws://<서버주소>/api/ws/stt/{session_id}?attendees=이준오,가동현
 
 ## 8. 아직 백엔드에 없는 것 (UI 설계 시 참고)
 
-- "각자 PC" 모드 (참여 링크 공유, 다중 스트림) — 화면 설계는 미리 해도 되나 연동 불가
-- 회의록 세그먼트 수정 API (user_edited 반영) — 추후 추가 예정
 - 요약/액션아이템 (A-5) — LLM 담당(승주) 영역
+- 인증(session_id만 알면 접속 가능) — 팀 로그인 연동 예정
+
+("각자 PC" 모드와 회의록 세그먼트 수정 API는 2026-07-22에 추가됨 — 위 4/5번 섹션 참고)
