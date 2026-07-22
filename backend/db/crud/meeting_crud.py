@@ -2,11 +2,10 @@
 
 import uuid
 from typing import Optional
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from backend.db.modules import Task, Decision, Meeting, MeetingSegment, MeetingSummary
+from backend.db.modules import Decision, Meeting, MeetingSegment, MeetingSummary, Task
 
 
 def create_meeting(
@@ -34,14 +33,6 @@ def add_segment(db: Session, meeting_id: uuid.UUID, content: str, start_ms: int,
     db.refresh(row)
     return row
 
-def add_segments_bulk(db: Session, meeting_id: uuid.UUID, segments: list[dict]) -> list[MeetingSegment]:
-    """세그먼트를 한 번에 저장(단일 commit). STT 스트리밍 종료 후 일괄 저장할 때 사용."""
-    rows = [MeetingSegment(meeting_id=meeting_id, **seg) for seg in segments]
-    db.add_all(rows)
-    db.commit()
-    for row in rows:
-        db.refresh(row)
-    return rows
 
 def get_segments(db: Session, meeting_id: uuid.UUID) -> list[MeetingSegment]:
     return (
@@ -85,81 +76,11 @@ def create_decision(db: Session, workspace_id: uuid.UUID, meeting_id: uuid.UUID,
     db.refresh(row)
     return row
 
-def get_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
-    return (
-        db.query(Meeting)
-        .filter(Meeting.id == meeting_id, Meeting.deleted_at.is_(None))
-        .first()
-    )
 
-
-def list_meetings(db: Session, workspace_id: uuid.UUID) -> list[Meeting]:
-    return (
-        db.query(Meeting)
-        .filter(Meeting.workspace_id == workspace_id, Meeting.deleted_at.is_(None))
-        .order_by(Meeting.created_at.desc())
-        .all()
-    )
-
-
-def update_meeting_status(db: Session, meeting_id: uuid.UUID, status: str, **fields) -> Optional[Meeting]:
-    row = get_meeting(db, meeting_id)
-    if row:
-        row.status = status
-        for k, v in fields.items():
-            setattr(row, k, v)
-        db.commit()
-        db.refresh(row)
-    return row
-
-
-def try_transition_meeting_status(
-    db: Session, meeting_id: uuid.UUID, from_status: str, to_status: str, **fields,
-) -> Optional[Meeting]:
-    """from_status일 때만 to_status로 전이하는 원자적 업데이트.
-
-    REST /end와 WS 종료가 동시에 들어와도 둘 다 read-then-write를 하면
-    양쪽 다 전이에 성공했다고 착각해 후처리가 중복 실행될 수 있다.
-    UPDATE ... WHERE status=from_status로 실제 전이한 쪽만 True(row 반환)가 되게 한다.
-    """
-    updated_rows = (
-        db.query(Meeting)
-        .filter(
-            Meeting.id == meeting_id,
-            Meeting.deleted_at.is_(None),
-            Meeting.status == from_status,
-        )
-        .update({"status": to_status, **fields}, synchronize_session=False)
-    )
-    db.commit()
-    if updated_rows == 0:
-        return None
-    return get_meeting(db, meeting_id)
-
-
-def delete_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
-    row = get_meeting(db, meeting_id)
-    if row:
-        row.deleted_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(row)
-    return row
-
-
-def get_meeting_summary(db: Session, meeting_id: uuid.UUID) -> Optional[MeetingSummary]:
-    return db.query(MeetingSummary).filter(MeetingSummary.meeting_id == meeting_id).first()
-
-
-def list_decisions_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Decision]:
-    return (
-        db.query(Decision)
-        .filter(Decision.meeting_id == meeting_id, Decision.deleted_at.is_(None))
-        .order_by(Decision.decided_at.desc())
-        .all()
-    )
-
-
-def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, **fields) -> Task:
+# [수정 - 리뷰 반영] ActionItem -> Task 팀 컨벤션으로 모델/함수명 전면 변경.
+# 기존 create_action_item/list_open_action_items_by_category는 삭제하고
+# create_task/list_open_tasks_by_category로 완전히 대체 (wrapper 아님).
+def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, commit: bool = True, **fields) -> Task:
     row = Task(workspace_id=workspace_id, category_id=category_id, title=title, **fields)
     db.add(row)
     if commit:
@@ -193,39 +114,3 @@ def list_open_tasks_by_category(db: Session, category_id: uuid.UUID) -> list[Tas
         )
         .all()
     )
-
-def get_task(db: Session, task_id: uuid.UUID) -> Optional[Task]:
-    return (
-        db.query(Task)
-        .filter(Task.id == task_id, Task.deleted_at.is_(None))
-        .first()
-    )
-
-
-def update_task_status(db: Session, task_id: uuid.UUID, status: str) -> Optional[Task]:
-    row = get_task(db, task_id)
-    if row:
-        row.status = status
-        if status == "done":
-            row.completed_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(row)
-    return row
-
-
-def update_task_priority(db: Session, task_id: uuid.UUID, priority: str) -> Optional[Task]:
-    row = get_task(db, task_id)
-    if row:
-        row.priority = priority
-        db.commit()
-        db.refresh(row)
-    return row
-
-
-def delete_task(db: Session, task_id: uuid.UUID) -> Optional[Task]:
-    row = get_task(db, task_id)
-    if row:
-        row.deleted_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(row)
-    return row
