@@ -34,11 +34,18 @@ from stt.core.config import (  # noqa: E402
 )
 
 
-def load_model():
-    """서버와 동일한 기준(아키텍처별 엔진 자동 선택)으로 정밀 모델 로딩."""
+def load_model(adapter_path: str | None = None):
+    """
+    서버와 동일한 기준(아키텍처별 엔진 자동 선택)으로 정밀 모델 로딩.
+    adapter_path를 주면 LoRA 어댑터를 얹어서 로드 (파인튜닝 전/후 비교용).
+    faster-whisper 엔진에서는 어댑터 로딩을 지원하지 않음(peft가 ctranslate2
+    포맷을 다루지 않음) — transformers 엔진에서만 의미 있음.
+    """
     if STT_ENGINE == "transformers":
         from stt.services.whisper_engine import TransformersWhisperEngine
-        return TransformersWhisperEngine(WHISPER_MODEL_PRECISE, device=DEVICE)
+        return TransformersWhisperEngine(WHISPER_MODEL_PRECISE, device=DEVICE, adapter_path=adapter_path)
+    if adapter_path:
+        raise SystemExit("faster-whisper 엔진은 LoRA 어댑터 로딩을 지원하지 않음 (transformers 엔진에서만 가능)")
     from faster_whisper import WhisperModel
     return WhisperModel(WHISPER_MODEL_PRECISE, device=DEVICE, compute_type=COMPUTE_TYPE)
 
@@ -86,6 +93,7 @@ def main():
     parser.add_argument("--manifest", required=True, help="jsonl: {\"audio\": ..., \"text\": ...}")
     parser.add_argument("--terms", default=None, help="용어 재현율 평가용 용어 목록 파일")
     parser.add_argument("--output", default="report.json")
+    parser.add_argument("--adapter-path", default=None, help="LoRA 어댑터 경로 (없으면 순정 베이스 모델)")
     args = parser.parse_args()
 
     with open(args.manifest, encoding="utf-8") as f:
@@ -95,8 +103,8 @@ def main():
         with open(args.terms, encoding="utf-8") as f:
             terms = [line.strip() for line in f if line.strip()]
 
-    print(f"엔진={STT_ENGINE}, 모델={WHISPER_MODEL_PRECISE}, 평가 대상={len(items)}개")
-    model = load_model()
+    print(f"엔진={STT_ENGINE}, 모델={WHISPER_MODEL_PRECISE}, 어댑터={args.adapter_path or '없음(베이스)'}, 평가 대상={len(items)}개")
+    model = load_model(args.adapter_path)
 
     total_word_err = total_words = 0
     total_char_err = total_chars = 0
@@ -143,6 +151,7 @@ def main():
     report = {
         "engine": STT_ENGINE,
         "model": WHISPER_MODEL_PRECISE,
+        "adapter": args.adapter_path,
         "beam_size": PRECISE_BEAM_SIZE,
         "num_items": len(items),
         "wer": round(total_word_err / max(total_words, 1), 4),
