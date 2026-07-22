@@ -194,11 +194,23 @@ async def process_uploaded_audio_stt(
     finally:
         db.close()
 
-# 회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤 meeting_summaries에 연결
-# 부가 기능이라 실패해도 예외 밖으로 던지지 않음 -> 이미 저장된 요약/결정사항/할일까지
-# 실패 처리되는 걸 막기 위함. 실패시 None을 반환하고 로그만 남김
-def save_summary_as_document(db: Session, *, meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID, uploaded_by: uuid.UUID,
-    title: str, full_summary: str, short_summary: str, discussion_points: list[str]):
+def save_summary_as_document(
+    db: Session,
+    *,
+    meeting_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    category_id: uuid.UUID,
+    uploaded_by: uuid.UUID,
+    title: str,
+    full_summary: str,
+    short_summary: str,
+    discussion_points: list[str],
+):
+    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤 meeting_summaries에 연결한다.
+
+    부가 기능이라 실패해도 예외를 밖으로 던지지 않는다 — 이미 저장된 요약/결정사항/할일까지
+    실패 처리되는 걸 막기 위함. 실패 시 None을 반환하고 로그만 남긴다.
+    """
     try:
         content = (
             f"# {title} 회의 요약\n\n"
