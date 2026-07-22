@@ -1,4 +1,4 @@
-"""회의/결정/할일 CRUD (가동현 파트 — 기본 템플릿)"""
+"""회의/결정/할일 CRUD"""
 
 import uuid
 from typing import Optional
@@ -34,6 +34,7 @@ def add_segment(db: Session, meeting_id: uuid.UUID, content: str, start_ms: int,
     db.refresh(row)
     return row
 
+
 def add_segments_bulk(db: Session, meeting_id: uuid.UUID, segments: list[dict]) -> list[MeetingSegment]:
     """세그먼트를 한 번에 저장(단일 commit). STT 스트리밍 종료 후 일괄 저장할 때 사용."""
     rows = [MeetingSegment(meeting_id=meeting_id, **seg) for seg in segments]
@@ -42,6 +43,7 @@ def add_segments_bulk(db: Session, meeting_id: uuid.UUID, segments: list[dict]) 
     for row in rows:
         db.refresh(row)
     return rows
+
 
 def get_segments(db: Session, meeting_id: uuid.UUID) -> list[MeetingSegment]:
     return (
@@ -84,6 +86,7 @@ def create_decision(db: Session, workspace_id: uuid.UUID, meeting_id: uuid.UUID,
     db.commit()
     db.refresh(row)
     return row
+
 
 def get_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
     return (
@@ -159,7 +162,10 @@ def list_decisions_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Decisi
     )
 
 
-def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, **fields) -> Task:
+# [수정 - 리뷰 반영] ActionItem -> Task 팀 컨벤션으로 모델/함수명 전면 변경.
+# 기존 create_action_item/list_open_action_items_by_category는 삭제하고
+# create_task/list_open_tasks_by_category로 완전히 대체 (wrapper 아님).
+def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, commit: bool = True, **fields) -> Task:
     row = Task(workspace_id=workspace_id, category_id=category_id, title=title, **fields)
     db.add(row)
     if commit:
@@ -193,6 +199,7 @@ def list_open_tasks_by_category(db: Session, category_id: uuid.UUID) -> list[Tas
         )
         .all()
     )
+
 
 def get_task(db: Session, task_id: uuid.UUID) -> Optional[Task]:
     return (

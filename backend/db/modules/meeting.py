@@ -30,7 +30,10 @@ class Meeting(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        CheckConstraint("input_type IN ('live_recording','audio_upload')", name="chk_meetings_input_type"),
+        CheckConstraint(
+            "input_type IN ('live_recording','audio_upload','document_upload')",
+            name="chk_meetings_input_type",
+        ),
         CheckConstraint(
             "status IN ('created','recording','processing','completed','failed','cancelled')",
             name="chk_meetings_status",
