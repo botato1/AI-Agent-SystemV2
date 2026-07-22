@@ -52,7 +52,13 @@ def get_segments(db: Session, meeting_id: uuid.UUID) -> list[MeetingSegment]:
     )
 
 
-def upsert_summary(db: Session, meeting_id: uuid.UUID, **fields) -> MeetingSummary:
+def upsert_summary(db: Session, meeting_id: uuid.UUID, commit: bool = True, **fields) -> MeetingSummary:
+    """
+    [수정 - 리뷰 반영 9번] commit 옵션 추가. post_meeting.pipeline.run()처럼
+    여러 CRUD 호출을 하나의 트랜잭션으로 묶어서 실패 시 전체 rollback이
+    실제로 동작하게 하려면 commit=False로 호출하고, 호출부(pipeline)가
+    마지막에 한 번만 commit해야 한다. 기본값 True라 기존 호출부는 그대로 동작.
+    """
     row = db.query(MeetingSummary).filter(MeetingSummary.meeting_id == meeting_id).first()
     if row:
         for k, v in fields.items():
@@ -60,8 +66,11 @@ def upsert_summary(db: Session, meeting_id: uuid.UUID, **fields) -> MeetingSumma
     else:
         row = MeetingSummary(meeting_id=meeting_id, **fields)
         db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 
@@ -153,8 +162,11 @@ def list_decisions_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Decisi
 def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str, **fields) -> Task:
     row = Task(workspace_id=workspace_id, category_id=category_id, title=title, **fields)
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 

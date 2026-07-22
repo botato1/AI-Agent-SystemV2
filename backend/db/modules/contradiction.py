@@ -21,10 +21,23 @@ class Contradiction(Base):
     source_type = Column(String(30), nullable=False)
     meeting_segment_id = Column(UUID(as_uuid=True), ForeignKey("meeting_segments.id"), nullable=True)
     room_message_id = Column(UUID(as_uuid=True), ForeignKey("room_messages.id"), nullable=True)
+    # [추가 - 2026.07.16] 세션 스코프 반정규화 (related_history_matches와 동일 패턴).
+    # "세션 내 같은 decision에 대해 모순 팝업은 1회만" 규칙을 매번 join 없이 빠르게
+    # 체크하기 위함 (source_type에 따라 둘 중 하나만 채워짐).
+    session_meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=True)
+    session_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     reference_type = Column(String(30), nullable=False)
-    reference_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=False)
+    # [수정 - 2026.07.16] decision 대비 모순은 workspace_file이 없으므로 nullable로 변경
+    reference_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     reference_chunk_id = Column(UUID(as_uuid=True), ForeignKey("content_chunks.id"), nullable=True)
     reference_code_fact_id = Column(UUID(as_uuid=True), ForeignKey("code_facts.id"), nullable=True)
+    # [추가 - 2026.07.16] 발화가 과거 결정(decisions)과 충돌났을 때의 참조 대상.
+    # 실시간 판단 파이프라인 1-1(결정 비교 판단) Case 3에서 사용.
+    # 기존엔 reference_type이 content_chunk/code_fact 둘뿐이라 "결정과 충돌"을
+    # 저장할 방법이 없었음 — 이 필드가 없으면 모순 해결("변경 인지함") 시
+    # decisions.status를 superseded로 전이시킬 대상을 찾을 수 없어 실제로
+    # 반영이 안 되는 구멍이 있었음.
+    reference_decision_id = Column(UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=True)
     statement_text_snapshot = Column(Text, nullable=False)
     reference_text_snapshot = Column(Text, nullable=False)
     reference_location = Column(JSONB, nullable=True)
@@ -43,7 +56,7 @@ class Contradiction(Base):
             name="chk_contradictions_source_type",
         ),
         CheckConstraint(
-            "reference_type IN ('content_chunk','code_fact')",
+            "reference_type IN ('content_chunk','code_fact','decision')",
             name="chk_contradictions_reference_type",
         ),
         CheckConstraint("severity IN ('low','medium','high')", name="chk_contradictions_severity"),
@@ -59,14 +72,21 @@ class Contradiction(Base):
         ),
         CheckConstraint(
             "(reference_type = 'content_chunk' AND reference_chunk_id IS NOT NULL "
-            "AND reference_code_fact_id IS NULL) OR "
+            "AND reference_code_fact_id IS NULL AND reference_decision_id IS NULL) OR "
             "(reference_type = 'code_fact' AND reference_code_fact_id IS NOT NULL "
-            "AND reference_chunk_id IS NULL)",
+            "AND reference_chunk_id IS NULL AND reference_decision_id IS NULL) OR "
+            "(reference_type = 'decision' AND reference_decision_id IS NOT NULL "
+            "AND reference_chunk_id IS NULL AND reference_code_fact_id IS NULL)",
             name="chk_contradictions_reference_exclusive",
         ),
         Index("idx_contradictions_workspace", "workspace_id", "status", "detected_at"),
         Index("idx_contradictions_category", "category_id", "status", "detected_at"),
         Index("idx_contradictions_reference_file", "reference_file_id", "detected_at"),
+        # 세션 내 같은 decision에 이미 모순 팝업 떴는지 빠르게 조회 (1-1 Case 3, 1-5 규칙)
+        Index(
+            "idx_contradictions_session_decision",
+            "session_meeting_id", "session_room_id", "reference_decision_id",
+        ),
     )
 
 
