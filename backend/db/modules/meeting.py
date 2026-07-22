@@ -78,6 +78,7 @@ class MeetingSummary(Base):
 
     id = uuid_pk()
     meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False, unique=True)
+    file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     full_summary = Column(Text, nullable=True)
     short_summary = Column(Text, nullable=True)
     discussion_points = Column(JSONB, nullable=True)

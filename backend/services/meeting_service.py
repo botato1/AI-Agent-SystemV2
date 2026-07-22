@@ -1,15 +1,21 @@
 # backend/services/meeting_service.py
 
 import asyncio
+import hashlib
 import os
 import uuid
+from pathlib import Path
 
 import httpx
+from sqlalchemy.orm import Session
 
-from backend.db.crud import meeting_crud
+from backend.db.crud import file_crud, meeting_crud
 from backend.db.session import SessionLocal
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
+
+# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
+MEETING_SUMMARY_STORAGE_DIR = Path("data/uploads/summaries")
 
 # 완성된 오디오 파일 STT+화자분리 REST 엔드포인트.
 # 실시간 녹음(WS, /api/ws/stt/{session_id})과는 별도 경로 — 파일이 이미 통째로 있으므로
@@ -187,3 +193,50 @@ async def process_uploaded_audio_stt(
 
     finally:
         db.close()
+
+def save_summary_as_document(
+    db: Session,
+    *,
+    meeting_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    category_id: uuid.UUID,
+    uploaded_by: uuid.UUID,
+    title: str,
+    full_summary: str,
+    short_summary: str,
+    discussion_points: list[str],
+):
+    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤 meeting_summaries에 연결한다."""
+    content = (
+        f"# {title} 회의 요약\n\n"
+        f"## 전체 요약\n{full_summary}\n\n"
+        f"## 핵심 요약\n{short_summary}\n\n"
+        f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points)
+    )
+    content_bytes = content.encode("utf-8")
+
+    MEETING_SUMMARY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{meeting_id}.md"
+    storage_path = MEETING_SUMMARY_STORAGE_DIR / stored_filename
+    storage_path.write_bytes(content_bytes)
+
+    workspace_file = file_crud.create_workspace_file(
+        db,
+        workspace_id=workspace_id,
+        category_id=category_id,
+        uploaded_by=uploaded_by,
+        original_filename=f"{title}_요약.md",
+        stored_filename=stored_filename,
+        storage_path=str(storage_path),
+        mime_type="text/markdown",
+        extension="md",
+        file_kind="document",
+        origin_type="meeting_summary",
+        file_size_bytes=len(content_bytes),
+        sha256_hash=hashlib.sha256(content_bytes).hexdigest(),
+        version_group_id=uuid.uuid4(),
+        analysis_status="completed",
+    )
+
+    meeting_crud.update_summary_file(db, meeting_id, workspace_file.id)
+    return workspace_file
