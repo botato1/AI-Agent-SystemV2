@@ -87,6 +87,12 @@ class WhisperFinetuneDataset(torch.utils.data.Dataset):
 class DataCollatorSpeechSeq2SeqWithPadding:
     def __init__(self, processor):
         self.processor = processor
+        # 주의: Whisper 라벨의 실제 시작 토큰은 tokenizer.bos_token_id(50257)가 아니라
+        # <|startoftranscript|>(50258)임 — 이 둘을 착각하면 아래 중복 토큰 제거 조건이
+        # 항상 False가 되어 절대 실행되지 않고, 학습 내내 디코더 입력에 시작 토큰이
+        # 중복으로 들어가는 상태가 유지됨 (epoch이 늘수록 이 잘못된 패턴이 강화되어
+        # 생성이 붕괴함 — 실측: 3epoch 경미한 성능 저하, 5epoch 완전 붕괴로 확인됨).
+        self._start_token_id = processor.tokenizer.convert_tokens_to_ids("<|startoftranscript|>")
 
     def __call__(self, features):
         input_features = [{"input_features": f["input_features"]} for f in features]
@@ -96,8 +102,9 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
 
-        # BOS 토큰이 라벨 맨 앞에 이미 붙어있으면 학습 시 중복 예측을 유도하므로 제거
-        if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
+        # 시작 토큰이 라벨 맨 앞에 이미 붙어있으면(항상 그럼), 모델이 forward 시 자동으로
+        # 한 번 더 붙이는 것과 중복되므로 여기서 제거
+        if (labels[:, 0] == self._start_token_id).all().cpu().item():
             labels = labels[:, 1:]
 
         batch["labels"] = labels
