@@ -15,7 +15,16 @@ if str(BASE_DIR) not in sys.path:
 load_dotenv(BASE_DIR / ".env")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+# [수정 - 2026.07.16] Model1/Model2 이원화 확정.
+#   Model1(경량, 실시간): Qwen2.5-7B — judgment/ 파이프라인 기본 모델, 파인튜닝 대상
+#   Model2(무거운 모델): Qwen3-8B — confidence 낮을 때 escalate 대상 + post_meeting 전용
+#   (post_meeting은 회의 종료 후 비동기 처리라 레이턴시 제약이 없어 처음부터 Model2로 감)
+OLLAMA_MODEL_LIGHT = os.getenv("OLLAMA_MODEL_LIGHT", "qwen2.5:7b")   # Model1
+OLLAMA_MODEL_HEAVY = os.getenv("OLLAMA_MODEL_HEAVY", "qwen3:8b")    # Model2
+
+# 하위 호환용 - 기존에 OLLAMA_MODEL을 직접 참조하던 코드가 있으면 Model1로 동작
+OLLAMA_MODEL = OLLAMA_MODEL_LIGHT
 
 
 # ── 유틸 ─────────────────────────────────────────────────────
@@ -207,14 +216,20 @@ def _build_context_from_docs(docs: list, max_chars: int = 6000) -> str:
     return "\n\n".join(parts)[:max_chars]
 
 
-def _call_ollama(prompt: str, timeout: float = 150.0) -> str:
-    """Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회)."""
+def _call_ollama(prompt: str, timeout: float = 150.0, model: str = OLLAMA_MODEL_LIGHT) -> str:
+    """
+    Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회).
+
+    [수정 - 2026.07.16] model 인자 추가 (Model1/2 이원화).
+    기본값은 OLLAMA_MODEL_LIGHT(Model1)이라 기존 호출부는 그대로 둬도 동작한다.
+    Model2로 escalate하려면 model=OLLAMA_MODEL_HEAVY로 명시 호출.
+    """
     # 프롬프트 끝에 한국어 강제 지시 추가
     ko_suffix = "\n\n[중요] 반드시 한국어로만 답하세요. 중국어 사용 절대 금지."
 
     response = httpx.post(
         f"{OLLAMA_BASE_URL}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": prompt + ko_suffix, "stream": False},
+        json={"model": model, "prompt": prompt + ko_suffix, "stream": False},
         timeout=timeout,
     )
     text = response.json().get("response", "답변 생성 실패").strip()
@@ -227,7 +242,7 @@ def _call_ollama(prompt: str, timeout: float = 150.0) -> str:
         response = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={
-                "model": OLLAMA_MODEL,
+                "model": model,
                 "prompt": prompt + ko_suffix + "\n한국어 외 다른 언어는 절대 사용하지 마세요.",
                 "stream": False,
             },
