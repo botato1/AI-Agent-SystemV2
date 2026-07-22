@@ -246,6 +246,7 @@ function renderAttendeeChecks(names) {
     row.innerHTML = `
       <label style="margin-right:6px;"><input type="checkbox" class="attendee-cb" value="${name}" /> ${name}</label>
       <button type="button" class="rename-toggle-btn attendee-rename-btn" data-name="${name}">✏️ 수정</button>
+      <button type="button" class="rename-toggle-btn attendee-delete-btn" data-name="${name}">🗑️ 삭제</button>
     `;
     attendeeChecksEl.appendChild(row);
   });
@@ -265,6 +266,20 @@ function renderAttendeeChecks(names) {
         renderAttendeeChecks(data.registered_names);
       } else {
         log(`❌ 전역 프로필 이름 수정 실패: ${data.message}`);
+      }
+    });
+  });
+  attendeeChecksEl.querySelectorAll(".attendee-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`"${name}" 프로필을 삭제할까요? (되돌릴 수 없음)`)) return;
+      const res = await fetch(`${httpBase()}/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.status === "success") {
+        log(`🗑️ 전역 프로필 삭제 완료: ${name}`);
+        renderAttendeeChecks(data.registered_names);
+      } else {
+        log(`❌ 전역 프로필 삭제 실패: ${data.message}`);
       }
     });
   });
