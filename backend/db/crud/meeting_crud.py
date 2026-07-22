@@ -75,6 +75,15 @@ def upsert_summary(db: Session, meeting_id: uuid.UUID, commit: bool = True, **fi
         db.flush()
     return row
 
+def update_summary_file(db: Session, meeting_id: uuid.UUID, file_id: uuid.UUID) -> Optional[MeetingSummary]:
+    """요약이 문서(workspace_files)로 저장된 뒤, 그 file_id를 요약 레코드에 연결한다."""
+    row = get_meeting_summary(db, meeting_id)
+    if row:
+        row.file_id = file_id
+        db.commit()
+        db.refresh(row)
+    return row
+
 
 def create_decision(db: Session, workspace_id: uuid.UUID, meeting_id: uuid.UUID, title: str, decision_text: str, decided_at, **fields) -> Decision:
     """MVP: post-meeting 일괄 추출로만 호출됨 (실시간 채팅에서는 호출 안 함)."""
