@@ -6,7 +6,10 @@ from typing import Any, AsyncIterator, Optional
 
 import websockets
 
-# 8001 실시간 STT WebSocket 서버 주소
+# 8002 실시간 STT WebSocket 서버 주소
+#STT_STREAM_BASE_URL = os.getenv("STT_STREAM_BASE_URL", "ws://61.81.98.86:8002")
+
+# 실시간 STT WebSocket 서버 주소
 STT_STREAM_BASE_URL = os.getenv("STT_STREAM_BASE_URL", "ws://61.81.98.82:8002")
 
 class SttStreamClient:
