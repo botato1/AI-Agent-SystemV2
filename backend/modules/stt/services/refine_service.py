@@ -84,6 +84,15 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     if meta.get("refined"):
         logger.info(f"↩️ [{meeting_id}] 이미 재분석 완료된 회의 — 건너뜀")
         return meta
+    if not meta.get("audio_file"):
+        # "각자 PC" 모드처럼 오디오를 저장하지 않은 회의 — 오디오 기반 재분석 불가.
+        # 이미 각자 자기 이름으로 접속해 화자가 확정돼 있어 재분석의 의미(익명 라벨
+        # 매핑)도 없으므로, 실시간 결과를 그대로 최종본으로 인정하고 건너뜀.
+        logger.info(f"↩️ [{meeting_id}] 오디오 미저장 회의(각자 PC 모드 등) — 재분석 생략")
+        meta["refined"] = True
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return meta
 
     wav_path = os.path.join(meeting_dir, meta.get("audio_file", "audio.wav"))
     audio, sample_rate = sf.read(wav_path, dtype="float32")

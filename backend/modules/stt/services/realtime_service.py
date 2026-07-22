@@ -51,12 +51,16 @@ class RealtimeSTTSession:
         precise_model: WhisperModel,
         speaker_identifier=None,
         recorder=None,
+        fixed_speaker: str | None = None,
     ):
         self.session_id = session_id
         self.fast_model = fast_model
         self.precise_model = precise_model
         self.speaker_identifier = speaker_identifier  # LiveSpeakerIdentifier | None
         self.recorder = recorder  # MeetingRecord | None — 확정 청크를 디스크에 누적 저장
+        # "각자 PC" 모드용 — 참가자가 자기 이름으로 직접 접속하면 이미 화자가
+        # 확정돼 있으므로 임베딩 매칭(speaker_identifier) 없이 이 이름을 그대로 씀
+        self.fixed_speaker = fixed_speaker
 
         # 오디오 버퍼: 매 프레임 np.concatenate 하면 버퍼가 길어질수록 복사 비용이
         # O(n²)로 커지므로, 조각 리스트로 쌓아두고 필요할 때만 합침
@@ -212,7 +216,11 @@ class RealtimeSTTSession:
         started = time.monotonic()
 
         precise_task = loop.run_in_executor(None, self._transcribe, self.precise_model, audio, PRECISE_BEAM_SIZE)
-        if self.speaker_identifier is not None:
+        if self.fixed_speaker is not None:
+            # 각자 PC 모드 — 참가자가 이미 자기 이름으로 접속했으므로 화자 식별 자체가 불필요
+            precise_segments = await precise_task
+            speaker_label = self.fixed_speaker
+        elif self.speaker_identifier is not None:
             speaker_task = loop.run_in_executor(None, self.speaker_identifier.identify, audio)
             precise_segments, speaker_label = await asyncio.gather(precise_task, speaker_task)
         else:
@@ -251,6 +259,9 @@ class RealtimeSTTSession:
         (recorder 쪽은 블로킹 I/O — executor에서 호출할 것)
         """
         renamed = False
+        if self.fixed_speaker == old_name:
+            self.fixed_speaker = new_name
+            renamed = True
         if self.speaker_identifier is not None:
             renamed = self.speaker_identifier.rename_speaker(old_name, new_name) or renamed
         if self.recorder is not None:

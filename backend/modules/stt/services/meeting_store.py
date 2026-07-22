@@ -31,8 +31,16 @@ class MeetingRecord:
                          비정상 종료 시 audio.wav 헤더가 깨질 수 있는 건 알려진 한계).
     """
 
-    def __init__(self, session_id: str, speaker_mode: str):
+    def __init__(self, session_id: str, speaker_mode: str, record_audio: bool = True):
+        """
+        record_audio=False면 오디오를 저장하지 않고 세그먼트(텍스트)만 누적함 —
+        "각자 PC" 모드처럼 여러 참가자의 스트림을 하나의 회의록으로 합칠 때, 각자
+        보내는 오디오를 타이밍 맞춰 믹싱하는 건 별도 작업이 필요해 이번엔 지원하지
+        않고 텍스트만 병합함. 이 경우 오디오 기반 C-4 정밀 재분석도 생략됨
+        (refine_service가 audio_file=None을 보고 자동으로 건너뜀).
+        """
         self.session_id = session_id
+        self.record_audio = record_audio
         started = datetime.now(timezone.utc)
         # 같은 session_id로 회의를 여러 번 열 수 있으므로 시작 시각을 붙여 회의를 구분
         self.meeting_id = f"{session_id}_{started.strftime('%Y%m%d-%H%M%S')}"
@@ -45,20 +53,22 @@ class MeetingRecord:
             "started_at": started.isoformat(),
             "ended_at": None,
             "status": "recording",        # recording | completed | disconnected
-            "speaker_mode": speaker_mode,  # enrolled(사전등록) | auto(자동감지)
+            "speaker_mode": speaker_mode,  # enrolled(사전등록) | auto(자동감지) | group(각자 PC)
             "refined": False,              # C-4 정밀 재분석 완료 여부 (후속 작업에서 사용)
-            "audio_file": "audio.wav",
+            "audio_file": "audio.wav" if record_audio else None,
             "segments": [],
         }
 
-        self._wav = wave.open(os.path.join(self.dir, "audio.wav"), "wb")
-        self._wav.setnchannels(1)
-        self._wav.setsampwidth(2)
-        self._wav.setframerate(REALTIME_SAMPLE_RATE)
+        self._wav = None
+        if record_audio:
+            self._wav = wave.open(os.path.join(self.dir, "audio.wav"), "wb")
+            self._wav.setnchannels(1)
+            self._wav.setsampwidth(2)
+            self._wav.setframerate(REALTIME_SAMPLE_RATE)
         self._finalized = False
         self._chunks_since_json_save = 0
         self._save_json()
-        logger.info(f"💾 회의 기록 시작: {self.meeting_id}")
+        logger.info(f"💾 회의 기록 시작: {self.meeting_id} (오디오 저장={record_audio})")
 
     @property
     def has_content(self) -> bool:
@@ -80,9 +90,11 @@ class MeetingRecord:
         """확정된 청크 하나의 오디오와 세그먼트들을 저장. (블로킹 I/O — executor에서 호출할 것)"""
         if self._finalized:
             return
-        pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
-        self._wav.writeframes(pcm16.tobytes())
+        if self._wav is not None:
+            pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
+            self._wav.writeframes(pcm16.tobytes())
         self._meta["segments"].extend(segments)
+        self._meta["segments"].sort(key=lambda s: s.get("start", 0))
         self._chunks_since_json_save += 1
         if self._chunks_since_json_save >= _JSON_SAVE_EVERY_N_CHUNKS:
             self._save_json()
@@ -124,7 +136,8 @@ class MeetingRecord:
         if self._finalized:
             return
         self._finalized = True
-        self._wav.close()
+        if self._wav is not None:
+            self._wav.close()
 
         if not self._meta["segments"]:
             # 접속만 하고 발화 없이 끝난 세션 — 빈 회의 폴더가 계속 쌓이지 않게 정리
