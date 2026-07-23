@@ -40,7 +40,14 @@ class Meeting(Base):
             "status IN ('created','recording','paused','processing','completed','failed','cancelled')",
             name="chk_meetings_status",
         ),
-        # ... 기존 Index들 그대로
+        Index(
+            "idx_meetings_workspace", "workspace_id", "started_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_meetings_category", "category_id", "started_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
 
