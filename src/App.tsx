@@ -9,12 +9,12 @@ import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
 
-import { Channel, ContradictionLogEntry, Task, TaskPriority, TaskStatus, User, Workspace } from "./types";
+import { Channel, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
-import { useVoiceMeetings } from "./hooks/useVoiceMeetings";
+import { useLiveMeeting } from "./hooks/useLiveMeeting";
 import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
+import { useRealTasks } from "./hooks/useRealTasks";
 import { Language, translations } from "./data/translations";
-import { getMockData } from "./data/mockData";
 import { hashAvatarColor, loadAvatarColor, saveAvatarColor } from "./data/avatarColors";
 import { getProfileApi, logoutApi } from "./services/auth";
 import {
@@ -65,12 +65,8 @@ export default function App() {
   // 워크스페이스 멤버 id → 표시 이름 매핑 (채팅 메시지 발신자 이름 표시용)
   const [memberNameById, setMemberNameById] = useState<Record<string, string>>({});
 
-  // 채팅방/할일/로그 등 데이터 상태
+  // 채팅방별 데이터 상태
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, Channel[]>>({});
-  const [tasksByWorkspace, setTasksByWorkspace] = useState<Record<string, Task[]>>({});
-  const [contradictionLogByWorkspace, setContradictionLogByWorkspace] = useState<
-    Record<string, ContradictionLogEntry[]>
-  >({});
 
   const [selection, setSelection] = useState<Selection>({
     type: "placeholder",
@@ -179,35 +175,22 @@ export default function App() {
     loadMembers();
   }, [currentWorkspaceId]);
 
-  // 언어 변경 시 기본 세트 동기화
-  useEffect(() => {
-    if (!currentWorkspaceId) return;
-    const data = getMockData(lang);
-
-    setTasksByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: prev[currentWorkspaceId] ?? data.mockTasks,
-    }));
-    setContradictionLogByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: prev[currentWorkspaceId] ?? data.mockContradictionLog,
-    }));
-  }, [lang, currentWorkspaceId]);
-
   // 💡 현재 선택된 워크스페이스 객체 추출
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId) || null;
 
   const channels = channelsByWorkspace[currentWorkspaceId] ?? [];
-  const tasks = tasksByWorkspace[currentWorkspaceId] ?? [];
-  const contradictionLog = contradictionLogByWorkspace[currentWorkspaceId] ?? [];
 
-  const voiceMeetings = useVoiceMeetings(currentWorkspaceId, lang);
-  const hasRecording = voiceMeetings.meetings.some((m) => m.status === "recording");
-  const hasPaused = voiceMeetings.meetings.some((m) => m.status === "paused");
-  const voiceMeetingStatus = hasRecording ? "recording" : hasPaused ? "paused" : null;
+  const liveMeeting = useLiveMeeting(currentWorkspaceId, {
+    id: currentUser?.id ?? "",
+    name: currentUser?.name ?? "",
+  });
+  const voiceMeetingStatus =
+    liveMeeting.status === "recording" ? "recording" : liveMeeting.status === "paused" ? "paused" : null;
 
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
-  const activeRecorderName = voiceMeetings.meetings.find((m) => m.status === "recording")?.startedBy ?? null;
+  const activeRecorderName = voiceMeetingStatus ? liveMeeting.startedByName : null;
+
+  const realTasks = useRealTasks(currentWorkspaceId, memberNameById);
 
   // 회원가입
   const handleSignUp = (account: RegisteredAccount) => {
@@ -231,8 +214,6 @@ export default function App() {
     setCurrentWorkspaceId("");
     setSelection({ type: "placeholder", key: "dashboard" });
     setChannelsByWorkspace({});
-    setTasksByWorkspace({});
-    setContradictionLogByWorkspace({});
     setMemberNameById({});
   };
 
@@ -248,38 +229,6 @@ export default function App() {
     setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: imageUrl } : prev));
   }
 
-  function handleCreateTask(task: Omit<Task, "id">) {
-    setTasksByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: [...(prev[currentWorkspaceId] ?? []), { ...task, id: crypto.randomUUID() }],
-    }));
-  }
-
-  function handleTaskStatusChange(id: string, newStatus: TaskStatus) {
-    setTasksByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((tItem) =>
-        tItem.id === id ? { ...tItem, status: newStatus } : tItem
-      ),
-    }));
-  }
-
-  function handleTaskPriorityChange(id: string, newPriority: TaskPriority) {
-    setTasksByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((tItem) =>
-        tItem.id === id ? { ...tItem, priority: newPriority } : tItem
-      ),
-    }));
-  }
-
-  function handleDeleteTask(id: string) {
-    setTasksByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).filter((tItem) => tItem.id !== id),
-    }));
-  }
-
   // 워크스페이스 생성 API
   async function handleCreateWorkspace() {
     const wsName = `${t.name_new_workspace}${workspaces.length + 1}`;
@@ -291,8 +240,6 @@ export default function App() {
 
       setWorkspaces((prev) => [...prev, newWorkspace]);
       setChannelsByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
-      setTasksByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
-      setContradictionLogByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
 
       setCurrentWorkspaceId(newWorkspace.id);
       localStorage.setItem("last_workspace_id", newWorkspace.id);
@@ -470,22 +417,37 @@ export default function App() {
           t={t}
         />
       ) : selection.key === "voiceMeeting" ? (
-        <VoiceMeetingView {...voiceMeetings} t={t} />
+        <VoiceMeetingView
+          workspaceId={currentWorkspaceId}
+          status={liveMeeting.status}
+          meeting={liveMeeting.meeting}
+          segments={liveMeeting.segments}
+          partial={liveMeeting.partial}
+          errorMessage={liveMeeting.errorMessage}
+          onStart={liveMeeting.start}
+          onPause={liveMeeting.pause}
+          onResume={liveMeeting.resume}
+          onStop={liveMeeting.stop}
+          onReset={liveMeeting.reset}
+          t={t}
+        />
       ) : selection.key === "dashboard" ? (
         <DashboardView
+          workspaceId={currentWorkspaceId}
           userName={currentUser.name}
-          tasks={tasks}
-          onCreateTask={handleCreateTask}
-          onStatusChange={handleTaskStatusChange}
-          onPriorityChange={handleTaskPriorityChange}
-          onDeleteTask={handleDeleteTask}
-          contradictionLog={contradictionLog}
+          tasks={realTasks.tasks}
+          onCreateTask={realTasks.createTask}
+          onUpdateTask={realTasks.updateTask}
+          onStatusChange={realTasks.changeStatus}
+          onPriorityChange={realTasks.changePriority}
+          onDeleteTask={realTasks.removeTask}
           t={t}
         />
       ) : selection.key === "docAnalysis" ? (
-        <DocumentAnalysisView {...documentAnalysis} t={t} />
+        <DocumentAnalysisView workspaceId={currentWorkspaceId} {...documentAnalysis} t={t} />
       ) : selection.key === "graph" ? (
         <GraphView
+          workspaceId={currentWorkspaceId}
           documents={documentAnalysis.documents}
           onGoToAnalysis={(id) => {
             documentAnalysis.selectDocument(id);

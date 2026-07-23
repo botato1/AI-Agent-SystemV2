@@ -1,81 +1,158 @@
+// src/components/DashboardView.tsx
 import { useState } from "react";
-import { ContradictionLogEntry, Task, TaskPriority, TaskStatus } from "../types";
+import { Task, TaskPriority, TaskStatus } from "../types";
+import { Contradiction, ContradictionStatus } from "../services/contradiction";
+import { useContradictions } from "../hooks/useContradictions";
 import { WarningIcon } from "./icons";
 import TaskBoard from "./TaskBoard";
 import CreateTaskModal from "./CreateTaskmodal";
 
 interface DashboardViewProps {
+  workspaceId: string;
   userName: string;
   tasks: Task[];
   onCreateTask: (task: Omit<Task, "id">) => void;
+  onUpdateTask?: (updatedTask: Task) => void;
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
   onDeleteTask: (id: string) => void;
-  contradictionLog: ContradictionLogEntry[];
-  t: any; // App.tsx에서 주입되는 번역 객체
+  t: any;
 }
 
 type DashboardTab = "tasks" | "log";
 
-function statusBadge(status: ContradictionLogEntry["status"], t: any) {
-  if (status === "pending") {
-    return (
-      <span className="rounded-full bg-recall-danger/15 px-2 py-0.5 text-[11px] text-recall-danger">
-        {t.dashboard_contradiction_pending}
-      </span>
-    );
-  }
-  if (status === "kept") {
-    return (
-      <span className="rounded-full bg-recall-border px-2 py-0.5 text-[11px] text-recall-textMuted">
-        {t.dashboard_contradiction_kept}
-      </span>
-    );
-  }
-  return (
-    <span className="rounded-full bg-recall-accent/15 px-2 py-0.5 text-[11px] text-recall-accent">
-      {t.dashboard_contradiction_changed}
-    </span>
-  );
+function severityBadge(severity: Contradiction["severity"]) {
+  const map = {
+    high: { label: "높음", className: "bg-recall-danger/15 text-recall-danger" },
+    medium: { label: "중간", className: "bg-amber-500/15 text-amber-400" },
+    low: { label: "낮음", className: "bg-recall-textMuted/15 text-recall-textMuted" },
+  } as const;
+  const { label, className } = map[severity];
+  return <span className={`rounded-full px-2 py-0.5 text-[11px] ${className}`}>{label}</span>;
 }
 
-// 모순 감지 로그 - 채널/회의 전반에서 감지된 모순 이력
-function ContradictionLogList({ log, t }: { log: ContradictionLogEntry[]; t: any }) {
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(
+    d.getMinutes()
+  ).padStart(2, "0")}`;
+}
+
+function ContradictionLog({ workspaceId }: { workspaceId: string }) {
+  const {
+    statusFilter,
+    setStatusFilter,
+    contradictions,
+    isLoading,
+    resolve,
+    dismiss,
+  } = useContradictions(workspaceId);
+
+  const tabs: { key: ContradictionStatus; label: string }[] = [
+    { key: "unresolved", label: "미해결" },
+    { key: "resolved", label: "해결됨" },
+    { key: "dismissed", label: "무시됨" },
+  ];
+
   return (
-    <div className="space-y-2">
-      {log.length === 0 ? (
-        <p className="text-sm text-recall-textMuted">{t.dashboard_no_contradiction}</p>
+    <div>
+      <div className="mb-3 flex gap-0.5">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setStatusFilter(tab.key)}
+            className={`rounded-lg px-2.5 py-1 text-xs ${
+              statusFilter === tab.key
+                ? "bg-recall-accent/15 text-recall-accent"
+                : "text-recall-textMuted hover:bg-white/5"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+      ) : contradictions.length === 0 ? (
+        <p className="text-sm text-recall-textMuted">표시할 항목이 없습니다.</p>
       ) : (
-        log.map((entry) => (
-          <div key={entry.id} className="rounded-lg border border-recall-border p-3">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-medium text-recall-textMuted">
-                <WarningIcon size={12} className="text-recall-danger" />
-                {entry.channelName}
-              </span>
-              <span className="text-[11px] text-recall-textMuted">{entry.date}</span>
+        <div className="space-y-2">
+          {contradictions.map((c) => (
+            <div key={c.id} className="rounded-lg border border-recall-border p-3">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-recall-textMuted">
+                  <WarningIcon size={12} className="text-recall-danger" />
+                  {c.source_type === "meeting_segment" ? "회의 발언" : "채팅 메시지"}
+                </span>
+                <span className="text-[11px] text-recall-textMuted">{formatDate(c.detected_at)}</span>
+              </div>
+
+              <div className="mb-1.5 space-y-1 text-sm">
+                <p className="text-recall-text">
+                  <span className="text-recall-textMuted">발언: </span>
+                  {c.statement_text_snapshot}
+                </p>
+                <p className="text-recall-text">
+                  <span className="text-recall-textMuted">기준자료: </span>
+                  {c.reference_text_snapshot}
+                </p>
+              </div>
+
+              {c.reason && <p className="mb-2 text-xs text-recall-textMuted">{c.reason}</p>}
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  {severityBadge(c.severity)}
+                  <span className="text-[11px] text-recall-textMuted">
+                    신뢰도 {Math.round(c.confidence_score * 100)}%
+                  </span>
+                </div>
+
+                {c.status === "unresolved" && (
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => dismiss(c.id)}
+                      className="rounded-lg border border-recall-border px-2.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
+                    >
+                      무시
+                    </button>
+                    <button
+                      onClick={() => resolve(c.id, "keep_reference")}
+                      className="rounded-lg border border-recall-border px-2.5 py-1 text-xs text-recall-text hover:bg-white/5"
+                    >
+                      기준 유지
+                    </button>
+                    <button
+                      onClick={() => resolve(c.id, "change_acknowledged")}
+                      className="rounded-lg bg-recall-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                    >
+                      변경 인지
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-            <p className="mb-1.5 text-sm text-recall-text">{entry.description}</p>
-            {statusBadge(entry.status, t)}
-          </div>
-        ))
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
 export default function DashboardView({
+  workspaceId,
   userName,
   tasks,
   onCreateTask,
+  onUpdateTask,
   onStatusChange,
   onPriorityChange,
   onDeleteTask,
-  contradictionLog,
   t,
 }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("tasks");
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createInitialStatus, setCreateInitialStatus] = useState<TaskStatus | null>(null);
 
   const tabs: { id: DashboardTab; label: string }[] = [
     { id: "tasks", label: t.dashboard_tab_tasks },
@@ -84,7 +161,6 @@ export default function DashboardView({
 
   return (
     <div className="flex h-full w-full flex-col bg-recall-bgMain p-4">
-      {/* 사용자 그리팅 메시지 및 보조 멘트 영역이 완전히 제거되어 콘텐츠가 상단부터 시작합니다 */}
       <div className="mb-3 flex gap-0.5 border-b border-recall-border">
         {tabs.map((tab) => (
           <button
@@ -105,20 +181,27 @@ export default function DashboardView({
         {activeTab === "tasks" ? (
           <TaskBoard
             taskList={tasks}
-            onOpenModal={() => setShowCreateModal(true)}
+            workspaceId={workspaceId}
+            onOpenModal={(status) => setCreateInitialStatus(status || "todo")}
             onStatusChange={onStatusChange}
             onPriorityChange={onPriorityChange}
+            onUpdateTask={onUpdateTask}
             onDelete={onDeleteTask}
             t={t}
           />
         ) : (
-          <ContradictionLogList log={contradictionLog} t={t} />
+          <ContradictionLog workspaceId={workspaceId} />
         )}
       </div>
 
-      {showCreateModal && (
-        <CreateTaskModal onClose={() => setShowCreateModal(false)} onCreate={onCreateTask}
-        t={t} />
+      {createInitialStatus && (
+        <CreateTaskModal
+          workspaceId={workspaceId}
+          initialStatus={createInitialStatus}
+          onClose={() => setCreateInitialStatus(null)}
+          onCreate={onCreateTask}
+          t={t}
+        />
       )}
     </div>
   );
