@@ -208,6 +208,7 @@ MeetingInputType = Literal[
 MeetingStatus = Literal[
     "created",
     "recording",
+    "paused",
     "processing",
     "completed",
     "failed",
@@ -250,6 +251,7 @@ ContradictionSourceType = Literal[
 ContradictionReferenceType = Literal[
     "content_chunk",
     "code_fact",
+    "decision",
 ]
 
 ContradictionSeverity = Literal[

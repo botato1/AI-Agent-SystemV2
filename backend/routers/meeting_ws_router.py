@@ -1,6 +1,7 @@
 # backend/routers/meeting_ws_router.py
 
 import asyncio
+import math
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,18 @@ MEETING_RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
 # 여기 담아두고 완료 시 스스로 discard하게 해서 방지한다.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
+_PAUSED_STREAMS: dict[uuid.UUID, asyncio.Event] = {}
+
+def set_stream_paused(meeting_id: uuid.UUID, paused: bool) -> None:
+    """REST pause/resume 엔드포인트가 현재 열려있는 WS 스트림에 신호를 보낼 때 사용.
+    이 meeting_id로 열린 WS 연결이 없으면(아직 연결 전/이미 끊김) 아무 일도 안 함."""
+    event = _PAUSED_STREAMS.get(meeting_id)
+    if event is None:
+        return
+    if paused:
+        event.set()
+    else:
+        event.clear()
 
 def _spawn_background_task(coro) -> asyncio.Task:
     task = asyncio.create_task(coro)
@@ -40,23 +53,30 @@ def _open_recording_file(meeting_id: uuid.UUID):
     path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}.pcm"
     return open(path, "ab")
 
+def _extract_stt_confidence(seg: dict) -> float | None:
+    """avg_logprob(로그 확률)을 0~1 범위 신뢰도 점수로 변환. 없으면 None."""
+    avg_logprob = seg.get("avg_logprob")
+    if avg_logprob is None:
+        return None
+    return round(math.exp(avg_logprob), 4)
 
 def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
-    """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording 상태면 자동으로 마무리한다."""
+    """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording/paused 상태면 자동으로 마무리한다."""
+    db.expire_all()  # REST pause/resume이 다른 세션에서 커밋한 최신 값을 확실히 읽기 위함
     meeting = meeting_crud.get_meeting(db, meeting_id)
-    if not meeting or meeting.status != "recording":
+    if not meeting or meeting.status not in ("recording", "paused"):
         return
 
     ended_at = datetime.now(timezone.utc)
     duration_ms = (
-        int((ended_at - meeting.started_at).total_seconds() * 1000)
+        max(0, int((ended_at - meeting.started_at).total_seconds() * 1000) - meeting.paused_duration_ms)
         if meeting.started_at else None
     )
 
-    # recording -> processing 전이를 원자적으로 시도한다. /end REST 호출(end_meeting_api)이
+    # recording/paused -> processing 전이를 원자적으로 시도한다. /end REST 호출(end_meeting_api)이
     # 근접한 시점에 같은 전이를 시도할 수 있으므로, 실제로 이긴 쪽만 후처리를 예약해야 중복 실행을 막는다.
     transitioned = meeting_crud.try_transition_meeting_status(
-        db, meeting_id, from_status="recording", to_status="processing",
+        db, meeting_id, from_status=meeting.status, to_status="processing",
         ended_at=ended_at, duration_ms=duration_ms,
     )
     if transitioned is None:
@@ -72,7 +92,7 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     ))
 
 
-async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClient, recording_file) -> None:
+async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClient, recording_file, paused_event: asyncio.Event) -> None:
     while True:
         message = await websocket.receive()
         if message["type"] == "websocket.disconnect":
@@ -80,6 +100,8 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 
         chunk = message.get("bytes")
         if chunk is not None:
+            if paused_event.is_set():
+                continue  # 일시정지 중 — 저장/STT 전송 안 함
             recording_file.write(chunk)
             await stt_client.send_audio(chunk)
             continue
@@ -110,6 +132,7 @@ async def _relay_stt_to_frontend(
                         end_ms=int(seg["end"] * 1000),
                         segment_index=next_index,
                         speaker_label=seg.get("speaker"),
+                        stt_confidence=_extract_stt_confidence(seg),
                     )
                     next_index += 1
                 except Exception as e:
@@ -178,8 +201,21 @@ async def meeting_stream_ws(
     recording_file = _open_recording_file(meeting_id)
     next_index = len(meeting_crud.get_segments(db, meeting_id))
 
+    # REST pause/resume 엔드포인트가 이 스트림에 신호를 보낼 수 있게 등록.
+    # set()되면 오디오를 저장/전송하지 않고 버림 (일시정지 상태).
+    paused_event = asyncio.Event()
+    _PAUSED_STREAMS[meeting_id] = paused_event
+
+    # 이 등록 전(WS 핸드셰이크/STT 서버 연결 대기 중)에 /pause REST가 먼저
+    # 처리됐을 수 있다 — 그 경우 set_stream_paused는 아직 없는 이벤트를 조용히
+    # 무시하고 지나간다. 등록 직후 DB 상태를 다시 확인해 놓친 일시정지를 반영한다.
+    db.expire_all()
+    current_meeting = meeting_crud.get_meeting(db, meeting_id)
+    if current_meeting and current_meeting.status == "paused":
+        paused_event.set()
+
     frontend_task = asyncio.create_task(
-        _relay_frontend_to_stt(websocket, stt_client, recording_file)
+        _relay_frontend_to_stt(websocket, stt_client, recording_file, paused_event)
     )
     stt_task = asyncio.create_task(
         _relay_stt_to_frontend(
@@ -195,6 +231,7 @@ async def meeting_stream_ws(
         for task in pending:
             task.cancel()
     finally:
+        _PAUSED_STREAMS.pop(meeting_id, None)
         recording_file.close()
         await stt_client.close()
         _finalize_meeting_if_recording(db, meeting_id)

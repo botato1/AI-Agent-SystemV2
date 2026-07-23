@@ -14,6 +14,7 @@ from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.services.meeting_service import process_uploaded_audio_stt
+from backend.routers import meeting_ws_router
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
     MeetingResponse,
@@ -202,7 +203,7 @@ def end_meeting_api(
 
     ended_at = datetime.now(timezone.utc)
     duration_ms = (
-        int((ended_at - meeting.started_at).total_seconds() * 1000)
+        max(0, int((ended_at - meeting.started_at).total_seconds() * 1000) - meeting.paused_duration_ms)
         if meeting.started_at else None
     )
 
@@ -320,3 +321,74 @@ def get_meeting_decisions_api(
     return DecisionListResponse(
         decisions=[DecisionResponse.model_validate(d) for d in decisions]
     )
+
+# 실시간 녹음 일시정지
+@router.post("/{meeting_id}/pause", response_model=MeetingResponse)
+def pause_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.input_type != "live_recording":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="실시간 녹음 회의가 아닙니다.",
+        )
+
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="recording", to_status="paused",
+        paused_at=datetime.now(timezone.utc),
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+
+    meeting_ws_router.set_stream_paused(meeting_id, True)
+    return MeetingResponse.model_validate(transitioned)
+
+
+# 실시간 녹음 재개
+@router.post("/{meeting_id}/resume", response_model=MeetingResponse)
+def resume_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.input_type != "live_recording":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="실시간 녹음 회의가 아닙니다.",
+        )
+    if meeting.status != "paused" or meeting.paused_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="일시정지 상태가 아닙니다.",
+        )
+
+    additional_pause_ms = int(
+        (datetime.now(timezone.utc) - meeting.paused_at).total_seconds() * 1000
+    )
+
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="paused", to_status="recording",
+        paused_duration_ms=meeting.paused_duration_ms + additional_pause_ms,
+        paused_at=None,
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="일시정지 상태가 아닙니다.",
+        )
+
+    meeting_ws_router.set_stream_paused(meeting_id, False)
+    return MeetingResponse.model_validate(transitioned)
