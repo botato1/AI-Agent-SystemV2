@@ -1,6 +1,7 @@
 # backend/routers/meeting_ws_router.py
 
 import asyncio
+import math
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,12 @@ def _open_recording_file(meeting_id: uuid.UUID):
     path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}.pcm"
     return open(path, "ab")
 
+def _extract_stt_confidence(seg: dict) -> float | None:
+    """avg_logprob(로그 확률)을 0~1 범위 신뢰도 점수로 변환. 없으면 None."""
+    avg_logprob = seg.get("avg_logprob")
+    if avg_logprob is None:
+        return None
+    return round(math.exp(avg_logprob), 4)
 
 def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording/paused 상태면 자동으로 마무리한다."""
@@ -125,6 +132,7 @@ async def _relay_stt_to_frontend(
                         end_ms=int(seg["end"] * 1000),
                         segment_index=next_index,
                         speaker_label=seg.get("speaker"),
+                        stt_confidence=_extract_stt_confidence(seg),
                     )
                     next_index += 1
                 except Exception as e:
@@ -197,6 +205,14 @@ async def meeting_stream_ws(
     # set()되면 오디오를 저장/전송하지 않고 버림 (일시정지 상태).
     paused_event = asyncio.Event()
     _PAUSED_STREAMS[meeting_id] = paused_event
+
+    # 이 등록 전(WS 핸드셰이크/STT 서버 연결 대기 중)에 /pause REST가 먼저
+    # 처리됐을 수 있다 — 그 경우 set_stream_paused는 아직 없는 이벤트를 조용히
+    # 무시하고 지나간다. 등록 직후 DB 상태를 다시 확인해 놓친 일시정지를 반영한다.
+    db.expire_all()
+    current_meeting = meeting_crud.get_meeting(db, meeting_id)
+    if current_meeting and current_meeting.status == "paused":
+        paused_event.set()
 
     frontend_task = asyncio.create_task(
         _relay_frontend_to_stt(websocket, stt_client, recording_file, paused_event)

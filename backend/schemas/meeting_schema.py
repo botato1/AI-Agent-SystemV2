@@ -292,6 +292,7 @@ class MeetingSegmentResponse(TimestampSchema):
     start_ms: int
     end_ms: int
     segment_index: int
+    stt_confidence: Optional[Decimal] = None
     is_edited: bool
 
 
