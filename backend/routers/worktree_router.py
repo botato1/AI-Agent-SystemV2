@@ -4,12 +4,13 @@ import hashlib
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import file_crud, room_crud
+from backend.services import document_service
 from backend.schemas.worktree_schema import (
     WorktreeSchema,
     WorktreeListResponse,
@@ -64,6 +65,7 @@ def _get_worktree_or_404(db: Session, worktree_id: uuid.UUID, workspace_id: uuid
 @router.post("", response_model=WorktreeSchema, status_code=status.HTTP_201_CREATED)
 async def upload_worktree(
     workspace_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     root_folder_name: str = Form(..., min_length=1, max_length=255),
     files: list[UploadFile] = File(...),
     current_user_id: str = Depends(get_current_user_id),
@@ -95,13 +97,15 @@ async def upload_worktree(
 
     completed_count = 0
     failed_count = 0
+    analyzable_file_ids: list[uuid.UUID] = []
 
     for f in files:
         try:
             file_content = await f.read()
             storage_path, stored_filename = _save_worktree_file_to_local_storage(file_content, f.filename)
+            file_kind = _infer_file_kind(f.filename)
 
-            file_crud.create_workspace_file(
+            workspace_file = file_crud.create_workspace_file(
                 db,
                 workspace_id=workspace_id,
                 category_id=category.id,
@@ -113,7 +117,7 @@ async def upload_worktree(
                 storage_path=storage_path,
                 mime_type=f.content_type,
                 extension=Path(f.filename).suffix.lstrip("."),
-                file_kind=_infer_file_kind(f.filename),
+                file_kind=file_kind,
                 origin_type="worktree",
                 file_size_bytes=len(file_content),
                 sha256_hash=hashlib.sha256(file_content).hexdigest(),
@@ -121,6 +125,10 @@ async def upload_worktree(
                 analysis_status="pending",
             )
             completed_count += 1
+
+            if file_kind in ("document", "image"):
+                analyzable_file_ids.append(workspace_file.id)
+
         except Exception as e:
             db.rollback()
             failed_count += 1
@@ -139,6 +147,11 @@ async def upload_worktree(
         failed_file_count=failed_count,
         status=final_status,
     )
+
+    # 문서/이미지 파일만 백그라운드로 분석 (코드/설정 파일 분석 로직은 아직 없음)
+    for file_id in analyzable_file_ids:
+        background_tasks.add_task(document_service.analyze_worktree_file_background, file_id)
+
     return WorktreeSchema.model_validate(worktree)
 
 

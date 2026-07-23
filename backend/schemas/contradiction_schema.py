@@ -44,11 +44,14 @@ class ContradictionSchema(ORMBaseSchema):
     source_type: ContradictionSourceType
     meeting_segment_id: Optional[UUID] = None
     room_message_id: Optional[UUID] = None
+    session_meeting_id: Optional[UUID] = None
+    session_room_id: Optional[UUID] = None
 
     reference_type: ContradictionReferenceType
-    reference_file_id: UUID
+    reference_file_id: Optional[UUID] = None
     reference_chunk_id: Optional[UUID] = None
     reference_code_fact_id: Optional[UUID] = None
+    reference_decision_id: Optional[UUID] = None
 
     statement_text_snapshot: str = Field(
         ...,
@@ -120,10 +123,10 @@ class ContradictionSchema(ORMBaseSchema):
                     "reference_chunk_id가 필수입니다."
                 )
 
-            if self.reference_code_fact_id is not None:
+            if self.reference_code_fact_id is not None or self.reference_decision_id is not None:
                 raise ValueError(
                     "reference_type이 content_chunk이면 "
-                    "reference_code_fact_id는 NULL이어야 합니다."
+                    "reference_code_fact_id/reference_decision_id는 NULL이어야 합니다."
                 )
 
         elif self.reference_type == "code_fact":
@@ -133,10 +136,23 @@ class ContradictionSchema(ORMBaseSchema):
                     "reference_code_fact_id가 필수입니다."
                 )
 
-            if self.reference_chunk_id is not None:
+            if self.reference_chunk_id is not None or self.reference_decision_id is not None:
                 raise ValueError(
                     "reference_type이 code_fact이면 "
-                    "reference_chunk_id는 NULL이어야 합니다."
+                    "reference_chunk_id/reference_decision_id는 NULL이어야 합니다."
+                )
+
+        elif self.reference_type == "decision":
+            if self.reference_decision_id is None:
+                raise ValueError(
+                    "reference_type이 decision이면 "
+                    "reference_decision_id가 필수입니다."
+                )
+
+            if self.reference_chunk_id is not None or self.reference_code_fact_id is not None:
+                raise ValueError(
+                    "reference_type이 decision이면 "
+                    "reference_chunk_id/reference_code_fact_id는 NULL이어야 합니다."
                 )
 
         return self

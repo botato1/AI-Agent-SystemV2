@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import UploadFile
 import httpx
 from sqlalchemy.orm import Session
+from backend.db.session import SessionLocal
 
 from backend.db.crud import content_chunk_crud, document_crud, file_crud, room_crud
 from backend.modules.rag.document_loader import load_document
@@ -524,6 +525,25 @@ async def retry_document_analysis(db: Session, file_id: UUID) -> dict:
     except Exception as e:
         file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
         return _build_error_response(None, filename, workspace_file.origin_type, "문서 재분석 중 오류가 발생했습니다.", repr(e))
+    
+async def analyze_worktree_file_background(file_id: UUID) -> None:
+    """
+    워크트리(폴더) 업로드로 등록된 문서/이미지 파일을 백그라운드에서 분석한다.
+
+    worktree_router.upload_worktree()는 파일 등록만 하고 analysis_status="pending"으로
+    남기므로(코드/설정 파일 분석 로직이 아직 없어 워크트리 자체는 등록 단계에서 끝남),
+    문서/이미지 파일만 여기서 기존 retry_document_analysis()를 재사용해 분석을 이어서 실행한다.
+
+    요청 스코프 db 세션은 응답 반환 후 닫히므로, 백그라운드 실행을 위해 별도 세션을 새로 연다.
+    개별 파일 분석 실패가 다른 파일이나 worktree 상태에 영향을 주지 않도록 예외를 여기서 흡수한다.
+    """
+    db = SessionLocal()
+    try:
+        await retry_document_analysis(db, file_id)
+    except Exception as e:
+        print(f"[document_service] 워크트리 파일 자동 분석 실패: file_id={file_id}, error={repr(e)}")
+    finally:
+        db.close()
 
 
 # 문서 상세 조회

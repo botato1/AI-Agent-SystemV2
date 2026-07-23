@@ -237,6 +237,18 @@ def update_task_priority(db: Session, task_id: uuid.UUID, priority: str) -> Opti
         db.refresh(row)
     return row
 
+def update_task(db: Session, task_id: uuid.UUID, **fields) -> Optional[Task]:
+    """전달된 필드만 갱신한다. status가 'done'으로 바뀌면 completed_at도 함께 채운다."""
+    row = get_task(db, task_id)
+    if row:
+        for k, v in fields.items():
+            setattr(row, k, v)
+        if fields.get("status") == "done":
+            row.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row
+
 
 def delete_task(db: Session, task_id: uuid.UUID) -> Optional[Task]:
     row = get_task(db, task_id)
