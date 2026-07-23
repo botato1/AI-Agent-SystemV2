@@ -31,7 +31,7 @@ export const translations = {
     status_todo: "해야 할 일",
     status_in_progress: "진행 중",
     status_done: "완료",
-    status_delayed: "지연",
+    status_cancelled: "취소됨",
     task_add_btn: "+ 업무 추가",
     task_delete_confirm: "이 업무를 삭제할까요?",
     task_cancel: "취소",
@@ -114,7 +114,7 @@ export const translations = {
     contradiction_btn_change: "변경",
 
     // === 음성 회의 컨트롤 ===
-    voice_btn_start: "새 녹음 시작",
+    voice_btn_start: "새 녹음",
     voice_btn_pause: "❚❚ 일시정지",
     voice_btn_resume: "▶ 재개",
     voice_btn_stop: "■ 종료",
@@ -189,7 +189,7 @@ export const translations = {
     status_todo: "To Do",
     status_in_progress: "In Progress",
     status_done: "Done",
-    status_delayed: "Delayed",
+    status_cancelled: "Cancelled",
     task_add_btn: "+ Add Task",
     task_delete_confirm: "Delete this task?",
     task_cancel: "Cancel",

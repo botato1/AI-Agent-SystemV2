@@ -30,14 +30,15 @@ export interface User {
 }
 
 // 대시보드 - 할 일 (칸반보드)
-export type TaskStatus = "todo" | "in_progress" | "done" | "delayed";
+export type TaskStatus = "todo" | "in_progress" | "done" | "cancelled";
 export type TaskPriority = "high" | "medium" | "low";
 
 export interface Task {
   id: string;
   task: string;
+  description?: string | null;
   assignee: string | null;
-  deadline: string | null; // "YYYY-MM-DD"
+  deadline: string | null; 
   status: TaskStatus;
   priority: TaskPriority;
 }
@@ -52,7 +53,7 @@ export interface ContradictionLogEntry {
 }
 
 // [핵심 교정] 훅과 뷰 컴포넌트 전체가 사용하는 규격에 맞게 "analyzed"로 통일합니다.
-export type DocumentAnalysisStatus = "analyzing" | "analyzed";
+export type DocumentAnalysisStatus = "analyzing" | "analyzed" | "failed";
 
 export interface AnalyzedDocument {
   id: string;

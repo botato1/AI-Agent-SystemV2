@@ -1,3 +1,4 @@
+// src/components/TaskBoard.tsx
 import { useEffect, useRef, useState } from "react";
 import {
   DndContext,
@@ -14,20 +15,24 @@ import {
 import { Task, TaskPriority, TaskStatus } from "../types";
 import {
   PlusIcon,
-  MoreIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   TrashIcon,
+  CloseIcon,
+  WarningIcon,
 } from "./icons";
+import { getWorkspaceMembersApi } from "../services/workspace";
 
 interface Props {
   taskList: Task[];
-  onOpenModal: () => void;
+  workspaceId?: string;
+  onOpenModal: (status?: TaskStatus) => void;
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
+  onUpdateTask?: (updatedTask: Task) => void;
   onDelete: (taskId: string) => void;
-  t: any; // 번역 객체 추가
+  t: any;
 }
 
 const priorityDotClass: Record<TaskPriority, string> = {
@@ -78,8 +83,25 @@ function parseDeadline(deadline: string | null): number | null {
   return isNaN(parsed) ? null : parsed;
 }
 
+function isOverdue(deadline: string | null): boolean {
+  if (!deadline) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const due = new Date(deadline);
+  due.setHours(0, 0, 0, 0);
+
+  return due < today;
+}
+
 function sortByDeadline(tasks: Task[]): Task[] {
   return [...tasks].sort((a, b) => {
+    const aOverdue = isOverdue(a.deadline) && a.status !== "done";
+    const bOverdue = isOverdue(b.deadline) && b.status !== "done";
+
+    if (aOverdue && !bOverdue) return -1;
+    if (!aOverdue && bOverdue) return 1;
+
     const aTime = parseDeadline(a.deadline);
     const bTime = parseDeadline(b.deadline);
     if (aTime !== null && bTime === null) return -1;
@@ -91,6 +113,12 @@ function sortByDeadline(tasks: Task[]): Task[] {
 
 function sortByPriority(tasks: Task[]): Task[] {
   return [...tasks].sort((a, b) => {
+    const aOverdue = isOverdue(a.deadline) && a.status !== "done";
+    const bOverdue = isOverdue(b.deadline) && b.status !== "done";
+
+    if (aOverdue && !bOverdue) return -1;
+    if (!aOverdue && bOverdue) return 1;
+
     if (priorityWeight[a.priority] !== priorityWeight[b.priority]) {
       return priorityWeight[a.priority] - priorityWeight[b.priority];
     }
@@ -112,151 +140,254 @@ function sortByCustomOrder(tasks: Task[], order: string[]): Task[] {
   });
 }
 
-type DropdownView = "main" | "status" | "priority" | "delete";
+function CalendarIcon({ size = 14, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+      <line x1="16" y1="2" x2="16" y2="6"></line>
+      <line x1="8" y1="2" x2="8" y2="6"></line>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </svg>
+  );
+}
 
-function TaskDropdown({
+function TaskDetailModal({
   task,
-  onStatusChange,
-  onPriorityChange,
-  onDelete,
+  workspaceId,
   onClose,
+  onSave,
+  onDelete,
   t,
 }: {
   task: Task;
-  onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
-  onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
-  onDelete: (taskId: string) => void;
+  workspaceId?: string;
   onClose: () => void;
+  onSave: (updatedTask: Task) => void;
+  onDelete: (id: string) => void;
   t: any;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<DropdownView>("main");
+  const [form, setForm] = useState<Task>({ ...task });
+  const [memberList, setMemberList] = useState<string[]>([]);
+  const [isAssigneeOpen, setIsAssigneeOpen] = useState(false);
 
-  const statusOptions: { value: TaskStatus; label: string }[] = [
-    { value: "todo", label: t.status_todo },
-    { value: "in_progress", label: t.status_in_progress },
-    { value: "done", label: t.status_done },
-    { value: "delayed", label: t.status_delayed },
-  ];
-
-  const priorityOptions: { value: TaskPriority; label: string }[] = [
-    { value: "high", label: t.priority_high },
-    { value: "medium", label: t.priority_medium },
-    { value: "low", label: t.priority_low },
-  ];
+  const assigneeRef = useRef<HTMLDivElement>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    setForm({ ...task });
+  }, [task]);
+
+  useEffect(() => {
+    async function fetchMembers() {
+      if (!workspaceId) return;
+      const res = await getWorkspaceMembersApi(workspaceId);
+      if (res.status === "success" && res.members) {
+        const names = res.members
+          .map((m) => m.display_name || m.username)
+          .filter(Boolean);
+        setMemberList(names);
+      }
     }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose]);
+    fetchMembers();
+  }, [workspaceId]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (assigneeRef.current && !assigneeRef.current.contains(e.target as Node)) {
+        setIsAssigneeOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filteredMembers = memberList.filter((name) =>
+    name.toLowerCase().includes((form.assignee || "").trim().toLowerCase())
+  );
+
+  function handleOpenDatePicker() {
+    const el = dateInputRef.current;
+    if (!el) return;
+    const input = el as HTMLInputElement & { showPicker?: () => void };
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+    } else {
+      input.focus();
+    }
+  }
+
+  function handleSave() {
+    if (!form.task.trim()) return;
+    onSave(form);
+    onClose();
+  }
 
   return (
-    <div
-      ref={ref}
-      className="absolute right-0 top-6 z-20 w-40 overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft py-1 shadow-lg"
-    >
-      {view === "main" && (
-        <>
-          <button
-            onClick={() => setView("status")}
-            className="flex w-full items-center justify-between px-3 py-2 text-xs text-recall-textMuted hover:bg-white/5"
-          >
-            상태
-            <ChevronDownIcon size={11} className="-rotate-90" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg rounded-2xl border border-recall-border bg-recall-bg p-6 shadow-2xl text-recall-text"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
+          <p className="text-sm font-semibold text-recall-text">업무 상세 및 수정</p>
+          <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
+            <CloseIcon size={16} />
           </button>
+        </div>
+
+        <div className="flex flex-col gap-4 max-h-[75vh] overflow-y-auto pr-1">
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-recall-textMuted">업무 제목</label>
+            <input
+              value={form.task}
+              onChange={(e) => setForm({ ...form, task: e.target.value })}
+              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text font-medium outline-none focus:border-recall-accent"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-recall-textMuted">상세 설명</label>
+            <textarea
+              rows={3}
+              value={form.description || ""}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="업무 세부 내용이나 메모를 입력하세요."
+              className="w-full resize-none rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent leading-relaxed"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">진행 상태</label>
+              <select
+                value={form.status}
+                onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+              >
+                <option value="todo">{t.status_todo}</option>
+                <option value="in_progress">{t.status_in_progress}</option>
+                <option value="done">{t.status_done}</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">우선순위</label>
+              <select
+                value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: e.target.value as TaskPriority })}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+              >
+                <option value="high">{t.priority_high}</option>
+                <option value="medium">{t.priority_medium}</option>
+                <option value="low">{t.priority_low}</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="relative" ref={assigneeRef}>
+              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">담당자</label>
+              <input
+                value={form.assignee || ""}
+                onFocus={() => setIsAssigneeOpen(true)}
+                onChange={(e) => {
+                  setForm({ ...form, assignee: e.target.value });
+                  setIsAssigneeOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    setIsAssigneeOpen(false);
+                  }
+                }}
+                placeholder="담당자 검색 또는 입력"
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+              />
+
+              {isAssigneeOpen && filteredMembers.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-36 overflow-y-auto rounded-xl border border-recall-border bg-recall-bgSoft py-1 shadow-xl">
+                  {filteredMembers.map((memberName) => (
+                    <button
+                      key={memberName}
+                      type="button"
+                      onClick={() => {
+                        setForm({ ...form, assignee: memberName });
+                        setIsAssigneeOpen(false);
+                      }}
+                      className="flex w-full items-center px-3 py-2 text-left text-xs hover:bg-white/5 transition"
+                    >
+                      <span>{memberName}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">마감일</label>
+              <div
+                onClick={handleOpenDatePicker}
+                className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
+              >
+                <span className={form.deadline ? "text-recall-text" : "text-recall-textMuted"}>
+                  {form.deadline || "마감일 선택"}
+                </span>
+
+                <CalendarIcon className="text-recall-textMuted flex-shrink-0" size={14} />
+
+                <input
+                  ref={dateInputRef}
+                  type="date"
+                  value={form.deadline || ""}
+                  onChange={(e) => setForm({ ...form, deadline: e.target.value })}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer pointer-events-auto"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-between items-center pt-5 border-t border-recall-border mt-4">
           <button
-            onClick={() => setView("priority")}
-            className="flex w-full items-center justify-between px-3 py-2 text-xs text-recall-textMuted hover:bg-white/5"
-          >
-            우선순위
-            <ChevronDownIcon size={11} className="-rotate-90" />
-          </button>
-          <div className="my-1 border-t border-recall-border" />
-          <button
-            onClick={() => setView("delete")}
-            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-recall-danger hover:bg-white/5"
+            type="button"
+            onClick={() => {
+              onDelete(task.id);
+              onClose();
+            }}
+            className="flex items-center gap-1 rounded-lg border border-recall-danger/40 px-3 py-1.5 text-xs text-recall-danger hover:bg-recall-danger/10 transition"
           >
             <TrashIcon size={13} />
             {t.task_delete}
           </button>
-        </>
-      )}
-
-      {view === "status" && (
-        <>
-          <button
-            onClick={() => setView("main")}
-            className="flex w-full items-center gap-1.5 border-b border-recall-border px-3 py-2 text-[11px] text-recall-textMuted hover:bg-white/5"
-          >
-            <ChevronLeftIcon size={11} />
-            상태
-          </button>
-          {statusOptions.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => {
-                onStatusChange(task.id, opt.value);
-                onClose();
-              }}
-              className="flex w-full items-center justify-between px-3 py-2 text-xs text-left text-recall-text hover:bg-white/5"
-            >
-              {opt.label}
-              {task.status === opt.value && <CheckIcon size={12} className="text-recall-accent" />}
-            </button>
-          ))}
-        </>
-      )}
-
-      {view === "priority" && (
-        <>
-          <button
-            onClick={() => setView("main")}
-            className="flex w-full items-center gap-1.5 border-b border-recall-border px-3 py-2 text-[11px] text-recall-textMuted hover:bg-white/5"
-          >
-            <ChevronLeftIcon size={11} />
-            우선순위
-          </button>
-          {priorityOptions.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => {
-                onPriorityChange(task.id, opt.value);
-                onClose();
-              }}
-              className="flex w-full items-center justify-between px-3 py-2 text-xs text-left text-recall-text hover:bg-white/5"
-            >
-              {opt.label}
-              {task.priority === opt.value && <CheckIcon size={12} className="text-recall-accent" />}
-            </button>
-          ))}
-        </>
-      )}
-
-      {view === "delete" && (
-        <div className="p-3">
-          <p className="mb-3 text-xs leading-relaxed text-recall-text">{t.task_delete_confirm}</p>
           <div className="flex gap-2">
             <button
-              onClick={() => setView("main")}
-              className="flex-1 rounded-lg border border-recall-border py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-recall-border px-3.5 py-1.5 text-xs text-recall-textMuted hover:bg-white/5 transition"
             >
-              {t.task_cancel}
+              취소
             </button>
             <button
-              onClick={() => {
-                onDelete(task.id);
-                onClose();
-              }}
-              className="flex-1 rounded-lg bg-recall-danger py-1.5 text-xs text-white"
+              type="button"
+              onClick={handleSave}
+              className="rounded-lg bg-recall-accent px-4 py-1.5 text-xs text-white font-medium hover:opacity-90 transition"
             >
-              {t.task_delete}
+              저장
             </button>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -265,7 +396,7 @@ function InsertionGap({ id }: { id: string }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <div
-      ref={setNodeRef}
+      ref={(element) => setNodeRef(element)}
       className="transition-all"
       style={{ height: isOver ? "10px" : "6px", margin: isOver ? "0" : "-3px 0" }}
     >
@@ -277,19 +408,17 @@ function InsertionGap({ id }: { id: string }) {
 function DraggableCard({
   task,
   onStatusChange,
-  onPriorityChange,
-  onDelete,
+  onSelectDetail,
   t,
 }: {
   task: Task;
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
-  onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
-  onDelete: (taskId: string) => void;
+  onSelectDetail: (task: Task) => void;
   t: any;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id });
-  const [openDropdown, setOpenDropdown] = useState(false);
   const isDone = task.status === "done";
+  const overdue = isOverdue(task.deadline) && !isDone;
 
   const priorityLabel: Record<TaskPriority, string> = {
     high: t.priority_high,
@@ -301,21 +430,25 @@ function DraggableCard({
     ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50 }
     : undefined;
 
-  function handleToggleDone() {
+  function handleToggleDone(e: React.MouseEvent) {
+    e.stopPropagation();
     onStatusChange(task.id, task.status === "done" ? "todo" : "done");
   }
 
   return (
     <div
-      ref={setNodeRef}
+      ref={(element) => setNodeRef(element)}
       style={style}
       {...listeners}
       {...attributes}
+      onClick={() => onSelectDetail(task)}
       className={`relative cursor-grab rounded-xl border p-3 transition active:cursor-grabbing ${
         isDragging
           ? "opacity-40 shadow-xl"
           : isDone
           ? "border-recall-border bg-recall-bg"
+          : overdue
+          ? "border-recall-danger/60 bg-recall-bgSoft hover:border-recall-danger"
           : "border-recall-border bg-recall-bgSoft hover:border-recall-accent/50"
       }`}
     >
@@ -340,24 +473,12 @@ function DraggableCard({
             />
             <span className="text-xs text-recall-textMuted">{priorityLabel[task.priority]}</span>
           </div>
-        </div>
 
-        <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
-          <button
-            onClick={() => setOpenDropdown((v) => !v)}
-            className="flex h-5 w-5 items-center justify-center rounded hover:bg-white/5"
-          >
-            <MoreIcon size={13} className="text-recall-textMuted" />
-          </button>
-          {openDropdown && (
-            <TaskDropdown
-              task={task}
-              onStatusChange={onStatusChange}
-              onPriorityChange={onPriorityChange}
-              onDelete={onDelete}
-              onClose={() => setOpenDropdown(false)}
-              t={t}
-            />
+          {overdue && (
+            <span className="flex items-center gap-1 rounded-full bg-recall-danger/15 px-2 py-0.5 text-[10px] font-semibold text-recall-danger">
+              <WarningIcon size={10} className="flex-shrink-0" />
+              지연
+            </span>
           )}
         </div>
       </div>
@@ -372,7 +493,9 @@ function DraggableCard({
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-recall-textMuted">{task.assignee ?? "-"}</span>
-        <span className="text-xs text-recall-textMuted">{formatDeadline(task.deadline)}</span>
+        <span className={`text-xs ${overdue ? "font-semibold text-recall-danger" : "text-recall-textMuted"}`}>
+          {formatDeadline(task.deadline)}
+        </span>
       </div>
     </div>
   );
@@ -382,7 +505,7 @@ function DroppableColumn({ col, children }: { col: any; children: React.ReactNod
   const { isOver, setNodeRef } = useDroppable({ id: col.id });
   return (
     <div
-      ref={setNodeRef}
+      ref={(element) => setNodeRef(element)}
       className={`flex min-h-24 flex-col rounded-xl transition-colors ${isOver ? "bg-recall-accent/5" : ""}`}
     >
       {children}
@@ -390,20 +513,29 @@ function DroppableColumn({ col, children }: { col: any; children: React.ReactNod
   );
 }
 
-export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPriorityChange, onDelete, t }: Props) {
+export default function TaskBoard({
+  taskList,
+  workspaceId,
+  onOpenModal,
+  onStatusChange,
+  onPriorityChange,
+  onUpdateTask,
+  onDelete,
+  t,
+}: Props) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
+
   const [sortMode, setSortMode] = useState<SortMode>("deadline");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const sortMenuRef = useRef<HTMLDivElement>(null);
 
-  // 컴포넌트 내부 최상단에 lang 선언 배치 (선언 전 참조 타입에러 해결)
   const lang = t.settings_lang === "언어" ? "ko" : "en";
 
   const columns: { id: TaskStatus; title: string; barColorClass: string }[] = [
     { id: "todo", title: t.status_todo, barColorClass: "bg-recall-textMuted" },
     { id: "in_progress", title: t.status_in_progress, barColorClass: "bg-amber-400" },
     { id: "done", title: t.status_done, barColorClass: "bg-emerald-400" },
-    { id: "delayed", title: t.status_delayed, barColorClass: "bg-rose-400" },
   ];
 
   const sortOptions: { value: SortMode; label: string }[] = [
@@ -463,6 +595,19 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
     setSortMode("custom");
   }
 
+  function handleSaveTaskDetail(updatedTask: Task) {
+    if (onUpdateTask) {
+      onUpdateTask(updatedTask);
+    } else {
+      if (updatedTask.status !== detailTask?.status) {
+        onStatusChange(updatedTask.id, updatedTask.status);
+      }
+      if (updatedTask.priority !== detailTask?.priority) {
+        onPriorityChange(updatedTask.id, updatedTask.priority);
+      }
+    }
+  }
+
   return (
     <div>
       <div className="mb-3 flex justify-end">
@@ -496,7 +641,7 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
       </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           {columnsWithTasks.map((col) => (
             <div key={col.id} className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
@@ -506,7 +651,7 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
                   <span className="text-xs text-recall-textMuted">{col.tasks.length}</span>
                 </div>
                 <button
-                  onClick={onOpenModal}
+                  onClick={() => onOpenModal(col.id)}
                   className="flex h-5 w-5 items-center justify-center rounded hover:bg-white/5"
                 >
                   <PlusIcon size={13} className="text-recall-textMuted" />
@@ -520,8 +665,7 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
                     <DraggableCard
                       task={task}
                       onStatusChange={onStatusChange}
-                      onPriorityChange={onPriorityChange}
-                      onDelete={onDelete}
+                      onSelectDetail={(t) => setDetailTask(t)}
                       t={t}
                     />
                     <InsertionGap id={`gap:${col.id}:${i + 1}`} />
@@ -529,7 +673,7 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
                 ))}
 
                 <button
-                  onClick={onOpenModal}
+                  onClick={() => onOpenModal(col.id)}
                   className="mt-2 w-full rounded-xl border border-dashed border-recall-border py-2 text-xs text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
                 >
                   {t.task_add_btn}
@@ -551,6 +695,17 @@ export default function TaskBoard({ taskList, onOpenModal, onStatusChange, onPri
           )}
         </DragOverlay>
       </DndContext>
+
+      {detailTask && (
+        <TaskDetailModal
+          task={detailTask}
+          workspaceId={workspaceId}
+          onClose={() => setDetailTask(null)}
+          onSave={handleSaveTaskDetail}
+          onDelete={onDelete}
+          t={t}
+        />
+      )}
     </div>
   );
 }

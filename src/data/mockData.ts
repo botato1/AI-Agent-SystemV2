@@ -45,7 +45,7 @@ export function getMockData(lang: Language) {
       task: isKo ? "STT 정확도 테스트" : "Testing STT accuracy",
       assignee: isKo ? "준오" : "Juno",
       deadline: "2026-07-14",
-      status: "delayed",
+      status: "cancelled",
       priority: "medium",
     },
   ];
