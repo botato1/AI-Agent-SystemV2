@@ -31,6 +31,7 @@
   .rename-box input[type="text"] { width: 120px; }
   fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
   legend { font-weight: bold; font-size: 13px; padding: 0 4px; }
+  .mode-disabled { opacity: 0.4; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -46,7 +47,7 @@
     </div>
   </fieldset>
 
-  <fieldset>
+  <fieldset id="sharedMicSection">
     <legend>👤 전역 목소리 프로필 — 최초 1회 등록하면 매 회의에서 재사용</legend>
     <div id="enrollScript" style="font-size:13px;background:#f5f5f4;border-radius:8px;padding:10px 12px;margin-bottom:8px;line-height:1.6;">
       (서버에서 등록 문장을 불러오는 중...)
@@ -79,7 +80,7 @@
     </div>
   </fieldset>
 
-  <details style="margin-bottom:16px;">
+  <details style="margin-bottom:16px;" id="guestEnrollSection">
     <summary style="cursor:pointer;font-size:13px;color:#555;">① 이번 회의 한정 화자 등록 (전역 프로필이 없는 게스트용, 펼쳐서 사용)</summary>
     <fieldset style="border-top:none;border-top-left-radius:0;border-top-right-radius:0;">
       <div>
@@ -124,6 +125,19 @@ const sessionIdInput = document.getElementById("sessionId");
 const participantNameInput = document.getElementById("participantName");
 const speakerCountInput = document.getElementById("speakerCount");
 const enrollRowsEl = document.getElementById("enrollRows");
+const sharedMicSectionEl = document.getElementById("sharedMicSection");
+const guestEnrollSectionEl = document.getElementById("guestEnrollSection");
+
+// 두 모드(각자 PC / 공용 마이크)는 섞어 쓸 수 없어(백엔드가 회의 하나를 하나의
+// 모드로만 처리함) — 각자 PC 모드용 이름을 입력하면 공용 마이크 모드 UI를 잠가서
+// 실수로 두 방식이 섞이는 걸 방지
+function updateModeExclusivity() {
+  const groupMode = participantNameInput.value.trim().length > 0;
+  sharedMicSectionEl.classList.toggle("mode-disabled", groupMode);
+  guestEnrollSectionEl.classList.toggle("mode-disabled", groupMode);
+  participantNameInput.disabled = [...document.querySelectorAll(".attendee-cb:checked")].length > 0;
+}
+participantNameInput.addEventListener("input", updateModeExclusivity);
 
 function log(msg) {
   const line = document.createElement("div");
@@ -244,6 +258,7 @@ function updateAttendeeSelectedSummary() {
   const checked = [...attendeeChecksEl.querySelectorAll(".attendee-cb:checked")].map((c) => c.value);
   document.getElementById("attendeeSelectedSummary").textContent =
     "선택된 참석자: " + (checked.length ? checked.join(", ") : "(없음)");
+  updateModeExclusivity();
 }
 
 function renderAttendeeChecks(names) {
