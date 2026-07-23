@@ -82,6 +82,10 @@ async def lifespan(app: FastAPI):
     app.state.active_group_meetings = {}
     app.state.active_group_participants = {}
 
+    # 연결이 예기치 않게 끊겼을 때 바로 회의를 끝내지 않고 잠깐(RECONNECT_GRACE_SEC)
+    # 재연결을 기다리기 위한 임시 보관소: {active_key: {"session":.., "recorder":.., "task":..}}
+    app.state.pending_disconnects = {}
+
     yield  # 서버 동작
 
     logger.info("🛑 서버 종료, 모델 메모리 해제")

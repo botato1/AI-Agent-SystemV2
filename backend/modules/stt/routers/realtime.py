@@ -11,6 +11,12 @@ from ..services.refine_service import refine_meeting
 
 router = APIRouter()
 
+# 연결이 끊겨도 곧바로 회의를 끝내지 않고, 이 시간 안에 같은 session_id(+참가자면
+# participant_name도 동일)로 재접속하면 기존 세션/회의록을 그대로 이어감.
+# 짧은 네트워크 끊김(터널 불안정, 와이파이 순단 등)에도 회의가 끊기지 않게 하기 위함 —
+# 팀원(지수)이 실제 통합 테스트 중 지적한 리스크.
+RECONNECT_GRACE_SEC = 20
+
 
 def _leave_group(app_state, session_id: str, participant_name: str) -> bool:
     """
@@ -30,14 +36,18 @@ def _leave_group(app_state, session_id: str, participant_name: str) -> bool:
 
 
 async def _finalize_abnormal(
-    session, recorder, app_state, session_id: str, cause: str, participant_name: str | None = None
+    session, recorder, app_state, session_id: str, cause: str,
+    participant_name: str | None, active_key: str,
 ) -> None:
     """
     비정상 종료(end 신호 없는 끊김/에러) 공통 처리.
     끊김이 감지되는 경로가 두 갈래(receive의 disconnect 메시지 / send 중 WebSocketDisconnect
-    예외)라서, 어느 쪽이든 동일하게 잔여 버퍼 처리 → 회의록 확정 → 재분석 예약이 되게 묶음.
-    각자 PC 모드(participant_name 있음)면, 남은 참가자가 있는 동안은 회의를 끝내지 않고
-    이 참가자만 조용히 퇴장시킴.
+    예외)라서, 어느 쪽이든 동일하게 잔여 버퍼 처리 → 재연결 유예 등록까지 되게 묶음.
+
+    바로 회의를 끝내지 않고 RECONNECT_GRACE_SEC 동안 재연결을 기다린다 — 그 안에
+    같은 키로 재접속하면(realtime_stt_ws 시작부의 pending_disconnects 확인 로직)
+    이 session/recorder를 그대로 이어받아 회의가 끊기지 않은 것처럼 계속됨.
+    유예 시간 안에 재연결이 없으면 그때 진짜로 확정(finalize) + 재분석 예약.
     """
     try:
         # 클라이언트에 보낼 순 없지만, 회의록에는 마지막 발언까지 남긴다
@@ -45,14 +55,110 @@ async def _finalize_abnormal(
     except Exception:
         logger.exception(f"⚠️ [{session_id}] 종료 시 잔여 버퍼 처리 실패 — 기존 기록까지만 저장됨")
 
-    if participant_name is not None and not _leave_group(app_state, session_id, participant_name):
-        logger.info(f"⚪ 참가자 퇴장({cause}): {session_id}/{participant_name} (다른 참가자가 있어 회의 계속)")
-        return
+    async def _delayed_finalize():
+        await asyncio.sleep(RECONNECT_GRACE_SEC)
+        pending = app_state.pending_disconnects.pop(active_key, None)
+        if pending is None:
+            return  # 이미 재연결되어 취소됨 (realtime_stt_ws가 pop해감)
 
-    recorder.finalize("disconnected")
-    if recorder.has_content:
-        asyncio.create_task(refine_meeting(recorder.meeting_id, app_state))
-    logger.info(f"⚪ 실시간 STT 세션 종료({cause}): {session_id}")
+        if participant_name is not None and not _leave_group(app_state, session_id, participant_name):
+            logger.info(f"⚪ 참가자 퇴장(재연결 유예 시간 초과): {session_id}/{participant_name} (다른 참가자가 있어 회의 계속)")
+            return
+
+        recorder.finalize("disconnected")
+        if recorder.has_content:
+            asyncio.create_task(refine_meeting(recorder.meeting_id, app_state))
+        logger.info(f"⚪ 실시간 STT 세션 종료(재연결 없음, {cause}): {session_id}")
+
+    task = asyncio.create_task(_delayed_finalize())
+    app_state.pending_disconnects[active_key] = {"session": session, "recorder": recorder, "task": task}
+    logger.info(f"⏸️ 연결 끊김({cause}): {session_id} — {RECONNECT_GRACE_SEC}초 안에 재연결하면 회의가 이어짐")
+
+
+async def _run_session(
+    websocket: WebSocket, session, recorder, session_id: str,
+    participant_name: str | None, active_key: str, mode: str,
+) -> None:
+    """
+    연결 하나의 수신 루프 본체 — 새로 만든 세션이든, 재연결로 이어받은 세션이든
+    동일하게 처리 (재연결 시에는 session/recorder를 새로 안 만들고 그대로 넘겨받음).
+    """
+    # rename API가 진행 중인 회의에도 이름 수정을 전파할 수 있게 레지스트리에 등록.
+    # 각자 PC 모드는 같은 session_id로 여러 연결이 동시에 있을 수 있어 참가자별로 키를 분리.
+    websocket.app.state.active_sessions[active_key] = session
+
+    logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
+
+    try:
+        while True:
+            message = await websocket.receive()
+
+            if message["type"] == "websocket.disconnect":
+                await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "연결 끊김", participant_name, active_key)
+                return
+
+            if message.get("text") is not None:
+                if message["text"] == "end":
+                    result = await session.flush_remaining()
+                    if result:
+                        await websocket.send_json(result)
+
+                    is_meeting_over = True
+                    if participant_name:
+                        is_meeting_over = _leave_group(websocket.app.state, session_id, participant_name)
+
+                    await websocket.send_json({
+                        "session_id": session_id,
+                        "type": "session_end",
+                        "meeting_id": recorder.meeting_id,
+                    })
+
+                    if is_meeting_over:
+                        recorder.finalize("completed")
+                        # 회의가 정상 종료됐으므로 이 세션의 사전 등록 정보도 정리
+                        websocket.app.state.enrolled_profiles.pop(session_id, None)
+                        # 회의 후 정밀 재분석(C-4) 백그라운드 실행 — 화자 오배정/청크 경계 오류 보정
+                        # (각자 PC 모드는 오디오가 없어 refine_meeting이 내부적으로 자동 생략함)
+                        if recorder.has_content:
+                            asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
+                        logger.info(f"⚪ 실시간 STT 세션 정상 종료(end): {session_id}")
+                    else:
+                        logger.info(f"⚪ 참가자 퇴장(정상): {session_id}/{participant_name} (다른 참가자가 있어 회의 계속)")
+                    break
+                continue  # end 외의 텍스트 프레임은 무시
+
+            data = message.get("bytes")
+            if not data:
+                continue
+            session.push_audio(data)
+
+            # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
+            partial = await session.maybe_stream_partial()
+            if partial:
+                await websocket.send_json(partial)
+
+            if session.should_flush():
+                chunk, offset_sec = session.pop_chunk()
+                result = await session.process_chunk(chunk, offset_sec)
+                await websocket.send_json(result)
+
+    except WebSocketDisconnect:
+        # 결과 전송(send) 도중 클라이언트가 끊긴 경우 — receive 경로와 동일하게 처리
+        await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "전송 중 끊김", participant_name, active_key)
+        return
+    except Exception:
+        logger.exception(f"❌ 실시간 STT 세션 에러 [{session_id}]")
+        await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "에러", participant_name, active_key)
+    finally:
+        # 어떤 경로로 끝나든(정상/끊김/에러) 레지스트리에서 제거.
+        # 같은 키로 새 연결이 이미 등록됐을 수 있으므로 내 세션일 때만 제거.
+        if websocket.app.state.active_sessions.get(active_key) is session:
+            websocket.app.state.active_sessions.pop(active_key, None)
+
+    try:
+        await websocket.close()
+    except Exception:
+        pass  # 이미 닫힌 소켓이면 무시
 
 
 @router.websocket("/ws/stt/{session_id}")
@@ -66,6 +172,8 @@ async def realtime_stt_ws(
     - 확정 결과는 서버에도 저장됨 (오디오 원본 + transcript.json → /api/meetings로 조회)
     - 회의를 끝낼 땐 텍스트 프레임 "end"를 보내면, 잔여 버퍼를 마지막 청크로
       처리한 결과와 "session_end" 메시지를 받은 뒤 정상 종료된다
+    - 연결이 예기치 않게 끊겨도 RECONNECT_GRACE_SEC(20초) 안에 같은 session_id
+      (+participant_name)로 재접속하면 회의가 끊기지 않고 그대로 이어짐
 
     두 가지 회의 방식을 지원한다 (session_id는 같은 회의면 항상 동일해야 함):
 
@@ -80,11 +188,26 @@ async def realtime_stt_ws(
     ② 각자 PC — participant_name 쿼리 파라미터로 자기 이름을 넣어 접속.
     같은 session_id로 여러 명이 각자 접속하면 하나의 공유 회의록으로 병합됨.
     이미 본인이 누군지 알고 접속하므로 화자 식별(임베딩 매칭) 자체가 불필요해서
-    바로 그 이름으로 라벨링됨. 단, 여러 스트림의 오디오를 하나로 믹싱하는 건
-    지원하지 않아 오디오 저장/C-4 정밀 재분석은 생략되고 실시간 전사가 최종본이 됨.
+    바로 그 이름으로 라벨링됨. 여러 스트림의 오디오는 회의 시작 기준 절대 시각으로
+    믹싱되어 하나의 오디오 파일로 저장되지만(겹치는 구간은 파형을 합산), 이미 화자가
+    확정돼 있어 C-4 정밀 재분석(익명 라벨 매핑)은 의미가 없으므로 생략됨.
     마지막 참가자가 나갈 때(또는 끊길 때)만 회의 전체가 종료 처리됨.
+
+    ⚠️ 두 모드는 같은 회의 안에서 섞어 쓸 수 없음 — 회의 하나는 처음부터 끝까지
+    하나의 모드로 통일해야 함 (참가자마다 다르게 접속하면 서로 다른 회의록이 생김).
     """
     await websocket.accept()
+
+    active_key = f"{session_id}:{participant_name}" if participant_name else session_id
+
+    # 재연결 확인 — 같은 키로 최근에 끊긴 세션이 유예 시간 안이면 이어받음
+    pending = websocket.app.state.pending_disconnects.pop(active_key, None)
+    if pending is not None:
+        pending["task"].cancel()
+        session = pending["session"]
+        recorder = pending["recorder"]
+        logger.info(f"🔄 재연결 성공, 기존 회의 이어감: {session_id} (회의ID: {recorder.meeting_id})")
+        return await _run_session(websocket, session, recorder, session_id, participant_name, active_key, "재연결(기존 회의 이어감)")
 
     fast_model = websocket.app.state.stt_model_fast
     precise_model = websocket.app.state.stt_model
@@ -143,80 +266,4 @@ async def realtime_stt_ws(
             recorder.save_profiles(initial_profiles)
         session = RealtimeSTTSession(session_id, fast_model, precise_model, speaker_identifier, recorder)
 
-    # rename API가 진행 중인 회의에도 이름 수정을 전파할 수 있게 레지스트리에 등록.
-    # 각자 PC 모드는 같은 session_id로 여러 연결이 동시에 있을 수 있어 참가자별로 키를 분리.
-    active_key = f"{session_id}:{participant_name}" if participant_name else session_id
-    websocket.app.state.active_sessions[active_key] = session
-
-    logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
-
-    try:
-        while True:
-            message = await websocket.receive()
-
-            if message["type"] == "websocket.disconnect":
-                await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "연결 끊김", participant_name)
-                return
-
-            if message.get("text") is not None:
-                if message["text"] == "end":
-                    result = await session.flush_remaining()
-                    if result:
-                        await websocket.send_json(result)
-
-                    is_meeting_over = True
-                    if participant_name:
-                        is_meeting_over = _leave_group(websocket.app.state, session_id, participant_name)
-
-                    await websocket.send_json({
-                        "session_id": session_id,
-                        "type": "session_end",
-                        "meeting_id": recorder.meeting_id,
-                    })
-
-                    if is_meeting_over:
-                        recorder.finalize("completed")
-                        # 회의가 정상 종료됐으므로 이 세션의 사전 등록 정보도 정리
-                        websocket.app.state.enrolled_profiles.pop(session_id, None)
-                        # 회의 후 정밀 재분석(C-4) 백그라운드 실행 — 화자 오배정/청크 경계 오류 보정
-                        # (각자 PC 모드는 오디오가 없어 refine_meeting이 내부적으로 자동 생략함)
-                        if recorder.has_content:
-                            asyncio.create_task(refine_meeting(recorder.meeting_id, websocket.app.state))
-                        logger.info(f"⚪ 실시간 STT 세션 정상 종료(end): {session_id}")
-                    else:
-                        logger.info(f"⚪ 참가자 퇴장(정상): {session_id}/{participant_name} (다른 참가자가 있어 회의 계속)")
-                    break
-                continue  # end 외의 텍스트 프레임은 무시
-
-            data = message.get("bytes")
-            if not data:
-                continue
-            session.push_audio(data)
-
-            # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
-            partial = await session.maybe_stream_partial()
-            if partial:
-                await websocket.send_json(partial)
-
-            if session.should_flush():
-                chunk, offset_sec = session.pop_chunk()
-                result = await session.process_chunk(chunk, offset_sec)
-                await websocket.send_json(result)
-
-    except WebSocketDisconnect:
-        # 결과 전송(send) 도중 클라이언트가 끊긴 경우 — receive 경로와 동일하게 처리
-        await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "전송 중 끊김", participant_name)
-        return
-    except Exception:
-        logger.exception(f"❌ 실시간 STT 세션 에러 [{session_id}]")
-        await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "에러", participant_name)
-    finally:
-        # 어떤 경로로 끝나든(정상/끊김/에러) 레지스트리에서 제거.
-        # 같은 키로 새 연결이 이미 등록됐을 수 있으므로 내 세션일 때만 제거.
-        if websocket.app.state.active_sessions.get(active_key) is session:
-            websocket.app.state.active_sessions.pop(active_key, None)
-
-    try:
-        await websocket.close()
-    except Exception:
-        pass  # 이미 닫힌 소켓이면 무시
+    await _run_session(websocket, session, recorder, session_id, participant_name, active_key, mode)
