@@ -2,6 +2,8 @@
 
 from backend.graphs.nodes.ai_chat_answer import (
     merge_and_rank_candidates,
+    filter_by_relevance,
+    clamp_similarity_score,
     format_chat_history,
     build_answer_prompt,
 )
@@ -25,6 +27,38 @@ def test_merge_and_rank_candidates_respects_top_k():
     result = merge_and_rank_candidates(doc_results, [], top_k=3)
     assert len(result) == 3
     assert result[0]["id"] == "d9"
+
+
+def test_filter_by_relevance_drops_low_score_candidates():
+    candidates = [{"id": "a", "score": 0.9}, {"id": "b", "score": 0.2}, {"id": "c", "score": 0.4}]
+    result = filter_by_relevance(candidates, min_score=0.4)
+    assert [c["id"] for c in result] == ["a", "c"]
+
+
+def test_filter_by_relevance_empty_when_all_below_threshold():
+    candidates = [{"id": "a", "score": 0.1}, {"id": "b", "score": 0.05}]
+    assert filter_by_relevance(candidates, min_score=0.4) == []
+
+
+def test_filter_by_relevance_missing_score_treated_as_zero():
+    candidates = [{"id": "a"}]
+    assert filter_by_relevance(candidates, min_score=0.4) == []
+
+
+def test_clamp_similarity_score_within_range():
+    assert clamp_similarity_score(0.75) == 0.75
+
+
+def test_clamp_similarity_score_clamps_above_one():
+    assert clamp_similarity_score(1.4) == 1.0
+
+
+def test_clamp_similarity_score_clamps_below_zero():
+    assert clamp_similarity_score(-0.3) == 0.0
+
+
+def test_clamp_similarity_score_handles_none():
+    assert clamp_similarity_score(None) == 0.0
 
 
 def test_format_chat_history_empty():
