@@ -41,3 +41,91 @@ def build_summary_prompt(original_text: str, accepted_text: str, base_summary: s
         accepted_text=accepted_text,
         base_summary=base_summary or "(추가 맥락 없음)",
     )
+
+
+def _call_llm_summary(prompt: str) -> str | None:
+    """Ollama에 일반 텍스트 요약 생성을 요청한다. 실패 시 None."""
+    try:
+        response = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        summary = response.json().get("response", "").strip()
+        return summary or None
+    except (httpx.HTTPError, ValueError, KeyError, AttributeError) as e:
+        print(f"[change_summary_generate] LLM 호출 실패: {repr(e)}")
+        return None
+
+
+def change_summary_generate_node(state: ContradictionResolutionState) -> dict:
+    contradiction_uuid = uuid.UUID(state["contradiction_id"])
+
+    db = SessionLocal()
+    try:
+        draft = contradiction_crud.get_change_summary_draft(db, contradiction_uuid)
+        if draft is None:
+            return {"error": f"contradiction_id={contradiction_uuid}에 대한 변경요약 초안을 찾을 수 없습니다."}
+
+        # 멱등성 가드 — meeting_postprocess_node의 "processing 아니면 거부"와 동일한 의도.
+        # 이미 처리 중/완료/실패한 draft를 중복 실행하지 않는다.
+        if draft.generation_status != "pending":
+            return {
+                "generated_summary": draft.generated_summary,
+                "generation_status": draft.generation_status,
+                "change_summary_draft_id": str(draft.id),
+            }
+
+        contradiction_crud.update_change_summary_draft(
+            db, contradiction_uuid, generation_status="processing",
+        )
+
+        prompt = build_summary_prompt(
+            draft.original_reference_text,
+            draft.accepted_change_text,
+            draft.base_summary_snapshot,
+        )
+        summary = _call_llm_summary(prompt)
+
+        if summary is None:
+            updated = contradiction_crud.update_change_summary_draft(
+                db, contradiction_uuid,
+                generation_status="failed",
+                generation_error="LLM 호출 실패",
+            )
+            return {
+                "generated_summary": None,
+                "generation_status": "failed",
+                "change_summary_draft_id": str(updated.id),
+            }
+
+        updated = contradiction_crud.update_change_summary_draft(
+            db, contradiction_uuid,
+            generated_summary=summary,
+            generation_status="completed",
+            model_name=OLLAMA_MODEL,
+        )
+        return {
+            "generated_summary": summary,
+            "generation_status": "completed",
+            "model_name": OLLAMA_MODEL,
+            "change_summary_draft_id": str(updated.id),
+        }
+
+    except Exception as e:
+        # meeting_postprocess_node의 finally 패턴과 동일 — draft가 processing에
+        # 영원히 멈춰있지 않도록 예상 못 한 예외도 failed로 남긴다.
+        print(f"[change_summary_generate] 처리 중 예외 발생: {repr(e)}")
+        try:
+            contradiction_crud.update_change_summary_draft(
+                db, contradiction_uuid,
+                generation_status="failed",
+                generation_error=repr(e),
+            )
+        except Exception:
+            pass
+        return {"error": f"변경요약 생성 중 예외 발생: {repr(e)}"}
+
+    finally:
+        db.close()
