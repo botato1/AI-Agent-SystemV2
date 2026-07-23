@@ -75,6 +75,11 @@ class MeetingRecord:
             self._wav.setframerate(REALTIME_SAMPLE_RATE)
         self._finalized = False
         self._chunks_since_json_save = 0
+        # 스트리밍(비믹싱) 모드에서 지금까지 실제로 기록된 오디오 길이(초). 재연결 시
+        # 새 세션이 이어붙일 위치를 "벽시계 경과 시간"이 아니라 "지금까지 쓴 오디오 길이"
+        # 기준으로 잡아야 함 — 끊긴 동안의 공백 시간은 오디오 자체엔 없기 때문
+        # (믹싱 모드는 반대로 벽시계 기준이 맞음 — 여러 스트림을 실제 시각에 맞춰 합산하므로).
+        self._written_audio_sec = 0.0
         self._save_json()
         logger.info(f"💾 회의 기록 시작: {self.meeting_id} (믹싱 모드={mixed_audio})")
 
@@ -82,6 +87,16 @@ class MeetingRecord:
     def has_content(self) -> bool:
         """발화가 하나라도 기록됐는지 — 빈 세션엔 재분석을 걸지 않기 위한 판단용."""
         return len(self._meta["segments"]) > 0
+
+    @property
+    def finalized(self) -> bool:
+        return self._finalized
+
+    @property
+    def written_audio_sec(self) -> float:
+        """스트리밍(비믹싱) 모드에서 지금까지 기록된 오디오 길이(초). 재연결 시 새
+        RealtimeSTTSession의 base_offset_sec으로 사용해 타임스탬프를 이어지게 함."""
+        return self._written_audio_sec
 
     def save_profiles(self, profiles: dict) -> None:
         """
@@ -111,6 +126,7 @@ class MeetingRecord:
         elif self._wav is not None:
             pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
             self._wav.writeframes(pcm16.tobytes())
+            self._written_audio_sec += len(audio) / REALTIME_SAMPLE_RATE
         self._meta["segments"].extend(segments)
         self._meta["segments"].sort(key=lambda s: s.get("start", 0))
         self._chunks_since_json_save += 1

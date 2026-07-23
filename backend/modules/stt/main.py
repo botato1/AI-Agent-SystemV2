@@ -74,17 +74,15 @@ async def lifespan(app: FastAPI):
     # rename API가 저장소뿐 아니라 살아있는 회의에도 이름 수정을 전파하기 위해 필요
     app.state.active_sessions = {}
 
-    # "각자 PC" 모드 — 참가자마다 별도 WebSocket으로 접속하되 하나의 회의록으로 병합.
-    # active_group_meetings: {session_id: MeetingRecord} — 첫 참가자가 생성, 이후
-    #   참가자들은 같은 recorder를 공유해 세그먼트를 한 타임라인으로 합침
-    # active_group_participants: {session_id: {참가자 이름, ...}} — 마지막 참가자가
-    #   나갈 때만 회의를 종료(finalize)하기 위한 참조 카운트 역할
-    app.state.active_group_meetings = {}
-    app.state.active_group_participants = {}
-
-    # 연결이 예기치 않게 끊겼을 때 바로 회의를 끝내지 않고 잠깐(RECONNECT_GRACE_SEC)
-    # 재연결을 기다리기 위한 임시 보관소: {active_key: {"session":.., "recorder":.., "task":..}}
-    app.state.pending_disconnects = {}
+    # 실시간 회의 레지스트리 (한 대의 PC 모드/각자 PC 모드 공통) —
+    # active_recorders: {session_id: MeetingRecord} — 회의 하나당 recorder 하나. 각자
+    #   PC 모드는 여러 참가자가 이 recorder를 공유해 세그먼트를 한 타임라인으로 합침.
+    # active_participants: {session_id: {참가자키: None(연결됨) | asyncio.Task(끊김,
+    #   재연결 유예 대기 중)}} — 한 대의 PC 모드는 참가자키가 고정값("__solo__") 하나뿐인
+    #   그룹처럼 취급. 마지막 참가자가 진짜로 나갈 때만(유예 시간 초과 포함) 회의를
+    #   종료(finalize)함 — 이 참조 카운트가 재연결 지원의 핵심 (routers/realtime.py 참고).
+    app.state.active_recorders = {}
+    app.state.active_participants = {}
 
     yield  # 서버 동작
 
