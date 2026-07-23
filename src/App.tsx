@@ -15,7 +15,21 @@ import { useVoiceMeetings } from "./hooks/useVoiceMeetings";
 import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
 import { Language, translations } from "./data/translations";
 import { getMockData } from "./data/mockData";
+import { hashAvatarColor, loadAvatarColor, saveAvatarColor } from "./data/avatarColors";
 import { getProfileApi, logoutApi } from "./services/auth";
+import {
+  createWorkspaceApi,
+  getWorkspaceListApi,
+  updateWorkspaceApi,
+  deleteWorkspaceApi,
+  getWorkspaceMembersApi,
+} from "./services/workspace";
+import {
+  getRoomListApi,
+  createRoomApi,
+  updateRoomApi,
+  deleteRoomApi,
+} from "./services/room";
 
 interface RegisteredAccount {
   username: string;
@@ -35,41 +49,39 @@ export default function App() {
   const [lang, setLang] = useState<Language>("ko");
   const t = translations[lang];
 
-  // 현재 언어셋에 맞는 목업 데이터 미리 가져오기
-  const initialData = getMockData(lang);
-
   // 로그인/회원가입 상태
   const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
 
-  // 워크스페이스 목록 관리
-  const [workspaces, setWorkspaces] = useState<Workspace[]>(initialData.mockWorkspaces);
-  const [currentWorkspaceId, setCurrentWorkspaceId] = useState(initialData.mockWorkspaces[0].id);
+  // 💡 워크스페이스 목록 상태 (목업 중복 방지를 위해 빈 배열로 시작)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
-  // 채팅방/할일/로그 등 목업 데이터 상태 분배
-  const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, Channel[]>>({
-    [initialData.mockWorkspaces[0].id]: initialData.mockChannels,
+  // 선택된 워크스페이스 ID
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string>(() => {
+    return localStorage.getItem("last_workspace_id") || "";
   });
-  const [tasksByWorkspace, setTasksByWorkspace] = useState<Record<string, Task[]>>({
-    [initialData.mockWorkspaces[0].id]: initialData.mockTasks,
-  });
+
+  // 워크스페이스 멤버 id → 표시 이름 매핑 (채팅 메시지 발신자 이름 표시용)
+  const [memberNameById, setMemberNameById] = useState<Record<string, string>>({});
+
+  // 채팅방/할일/로그 등 데이터 상태
+  const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, Channel[]>>({});
+  const [tasksByWorkspace, setTasksByWorkspace] = useState<Record<string, Task[]>>({});
   const [contradictionLogByWorkspace, setContradictionLogByWorkspace] = useState<
     Record<string, ContradictionLogEntry[]>
-  >({
-    [initialData.mockWorkspaces[0].id]: initialData.mockContradictionLog,
-  });
+  >({});
 
   const [selection, setSelection] = useState<Selection>({
-    type: "channel",
-    channel: initialData.mockChannels[0],
+    type: "placeholder",
+    key: "dashboard",
   });
 
   const [showProfile, setShowProfile] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
-  // 1. 페이지 로드/새로고침 시 GET /api/auth/profile 로 자동 로그인 체크
+  // 1. 자동 로그인 체크
   useEffect(() => {
     async function checkAutoLogin() {
       const token = localStorage.getItem("access_token");
@@ -81,12 +93,16 @@ export default function App() {
       const profileResult = await getProfileApi();
 
       if (profileResult.status === "success" && profileResult.user) {
+        const fixedAvatarColor =
+          loadAvatarColor(profileResult.user.username) || hashAvatarColor(profileResult.user.username);
+        saveAvatarColor(profileResult.user.username, fixedAvatarColor);
+
         setCurrentUser({
           id: profileResult.user.id,
           name: profileResult.user.display_name || profileResult.user.username,
           username: profileResult.user.username,
           status: "online",
-          avatarColor: "#3B82F6",
+          avatarColor: fixedAvatarColor,
           avatarImageUrl: null,
         });
       } else {
@@ -100,27 +116,86 @@ export default function App() {
     checkAutoLogin();
   }, []);
 
-  // 언어가 변경될 때 독립된 함수로부터 새로운 언어 목업 세트를 할당받음
+  // 2. 백엔드 워크스페이스 실시간 목록 조회 및 동기화
   useEffect(() => {
-    const data = getMockData(lang);
-    const defaultWsId = data.mockWorkspaces[0].id;
+    async function loadRealWorkspaces() {
+      if (!currentUser) return;
 
-    setWorkspaces(data.mockWorkspaces);
-    setCurrentWorkspaceId(defaultWsId);
-    setChannelsByWorkspace({
-      [defaultWsId]: data.mockChannels,
-    });
-    setTasksByWorkspace({
-      [defaultWsId]: data.mockTasks,
-    });
-    setContradictionLogByWorkspace({
-      [defaultWsId]: data.mockContradictionLog,
-    });
-    setSelection({
-      type: "channel",
-      channel: data.mockChannels[0],
-    });
-  }, [lang]);
+      const res = await getWorkspaceListApi();
+
+      if (res.status === "success" && res.workspaces.length > 0) {
+        setWorkspaces(res.workspaces);
+
+        const savedWsId = localStorage.getItem("last_workspace_id");
+        const exists = res.workspaces.find((w) => w.id === savedWsId);
+
+        const targetWsId = exists && savedWsId ? savedWsId : res.workspaces[0].id;
+        setCurrentWorkspaceId(targetWsId);
+        localStorage.setItem("last_workspace_id", targetWsId);
+      }
+    }
+
+    loadRealWorkspaces();
+  }, [currentUser]);
+
+  // 2-1. 워크스페이스 선택/전환 시 실시간 채팅방(rooms) 목록 조회
+  useEffect(() => {
+    async function loadRooms() {
+      if (!currentWorkspaceId) return;
+
+      const res = await getRoomListApi(currentWorkspaceId);
+
+      if (res.status === "success") {
+        setChannelsByWorkspace((prev) => ({
+          ...prev,
+          [currentWorkspaceId]: res.rooms.map((r) => ({ id: r.id, name: r.name })),
+        }));
+      }
+    }
+
+    loadRooms();
+  }, [currentWorkspaceId]);
+
+  // 2-2. 워크스페이스 선택/전환 시 멤버 목록 조회 (채팅 메시지 발신자 이름 표시용)
+  useEffect(() => {
+    async function loadMembers() {
+      if (!currentWorkspaceId) {
+        setMemberNameById({});
+        return;
+      }
+
+      const res = await getWorkspaceMembersApi(currentWorkspaceId);
+
+      if (res.status === "success") {
+        const nextMap: Record<string, string> = {};
+        res.members.forEach((m) => {
+          const userId = m.user_id || m.id;
+          if (userId) nextMap[userId] = m.display_name || m.username;
+        });
+        setMemberNameById(nextMap);
+      }
+    }
+
+    loadMembers();
+  }, [currentWorkspaceId]);
+
+  // 언어 변경 시 기본 세트 동기화
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    const data = getMockData(lang);
+
+    setTasksByWorkspace((prev) => ({
+      ...prev,
+      [currentWorkspaceId]: prev[currentWorkspaceId] ?? data.mockTasks,
+    }));
+    setContradictionLogByWorkspace((prev) => ({
+      ...prev,
+      [currentWorkspaceId]: prev[currentWorkspaceId] ?? data.mockContradictionLog,
+    }));
+  }, [lang, currentWorkspaceId]);
+
+  // 💡 현재 선택된 워크스페이스 객체 추출
+  const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId) || null;
 
   const channels = channelsByWorkspace[currentWorkspaceId] ?? [];
   const tasks = tasksByWorkspace[currentWorkspaceId] ?? [];
@@ -134,40 +209,43 @@ export default function App() {
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
   const activeRecorderName = voiceMeetings.meetings.find((m) => m.status === "recording")?.startedBy ?? null;
 
-  // 2. 회원가입 완료 처리
+  // 회원가입
   const handleSignUp = (account: RegisteredAccount) => {
     setRegisteredAccounts((prev) => [...prev, account]);
   };
 
-  // 3. 로그인 완료 처리
+  // 로그인
   const handleLogIn = (user: User) => {
     setCurrentUser(user);
   };
 
-  // 4. 로그아웃 처리
+  // 로그아웃 (상태 및 워크스페이스 완전 초기화)
   const handleLogOut = async () => {
     await logoutApi();
+    localStorage.removeItem("last_workspace_id");
+    setWorkspaces([]);
     setCurrentUser(null);
+
+    // 이전 계정에서 보던 화면 상태(선택된 채팅방, 캐시된 채널/멤버 정보)가
+    // 다음 로그인까지 남아있으면 workspace_id/room_id가 어긋나 404가 나므로 전부 리셋
+    setCurrentWorkspaceId("");
+    setSelection({ type: "placeholder", key: "dashboard" });
+    setChannelsByWorkspace({});
+    setTasksByWorkspace({});
+    setContradictionLogByWorkspace({});
+    setMemberNameById({});
   };
 
   function handleChangeAvatarColor(color: string) {
-    setCurrentUser((prev) => (prev ? { ...prev, avatarColor: color, avatarImageUrl: null } : prev));
-    setRegisteredAccounts((prev) =>
-      prev.map((a) =>
-        a.user.username === currentUser?.username
-          ? { ...a, user: { ...a.user, avatarColor: color, avatarImageUrl: null } }
-          : a
-      )
-    );
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      saveAvatarColor(prev.username, color);
+      return { ...prev, avatarColor: color, avatarImageUrl: null };
+    });
   }
 
   function handleChangeAvatarImage(imageUrl: string) {
     setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: imageUrl } : prev));
-    setRegisteredAccounts((prev) =>
-      prev.map((a) =>
-        a.user.username === currentUser?.username ? { ...a, user: { ...a.user, avatarImageUrl: imageUrl } } : a
-      )
-    );
   }
 
   function handleCreateTask(task: Omit<Task, "id">) {
@@ -202,25 +280,71 @@ export default function App() {
     }));
   }
 
-  function handleCreateWorkspace() {
-    const newWorkspace: Workspace = {
-      id: crypto.randomUUID(),
-      name: `${t.name_new_workspace}${workspaces.length + 1}`,
-    };
-    setWorkspaces((prev) => [...prev, newWorkspace]);
-    setChannelsByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
-    setTasksByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
-    setContradictionLogByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
-    setCurrentWorkspaceId(newWorkspace.id);
-    setSelection({ type: "placeholder", key: "dashboard" });
+  // 워크스페이스 생성 API
+  async function handleCreateWorkspace() {
+    const wsName = `${t.name_new_workspace}${workspaces.length + 1}`;
+
+    const apiRes = await createWorkspaceApi(wsName);
+
+    if (apiRes.status === "success" && apiRes.workspace) {
+      const newWorkspace = apiRes.workspace;
+
+      setWorkspaces((prev) => [...prev, newWorkspace]);
+      setChannelsByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
+      setTasksByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
+      setContradictionLogByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
+
+      setCurrentWorkspaceId(newWorkspace.id);
+      localStorage.setItem("last_workspace_id", newWorkspace.id);
+      setSelection({ type: "placeholder", key: "dashboard" });
+    } else {
+      alert(`워크스페이스 생성 실패: ${apiRes.message}`);
+    }
   }
 
-  function handleRenameWorkspace(id: string, name: string) {
-    setWorkspaces((prev) => prev.map((w) => (w.id === id ? { ...w, name } : w)));
+  // 워크스페이스 이름 수정 API
+  async function handleRenameWorkspace(id: string, name: string) {
+    if (!name.trim()) return;
+
+    const res = await updateWorkspaceApi(id, name);
+
+    if (res.status === "success" && res.workspace) {
+      const updatedName = res.workspace.name;
+      setWorkspaces((prev) =>
+        prev.map((w) => (w.id === id ? { ...w, name: updatedName } : w))
+      );
+    } else {
+      alert(`워크스페이스 이름 변경 실패: ${res.message}`);
+    }
   }
 
+  // 워크스페이스 삭제 API
+  async function handleDeleteWorkspace(id: string) {
+    const res = await deleteWorkspaceApi(id);
+
+    if (res.status === "success") {
+      const nextWorkspaces = workspaces.filter((w) => w.id !== id);
+      setWorkspaces(nextWorkspaces);
+
+      if (currentWorkspaceId === id) {
+        const nextWsId = nextWorkspaces.length > 0 ? nextWorkspaces[0].id : "";
+        setCurrentWorkspaceId(nextWsId);
+        if (nextWsId) {
+          localStorage.setItem("last_workspace_id", nextWsId);
+        } else {
+          localStorage.removeItem("last_workspace_id");
+        }
+      }
+    } else {
+      alert(res.message);
+    }
+  }
+
+  // 워크스페이스 선택
   function handleSelectWorkspace(id: string) {
     setCurrentWorkspaceId(id);
+    localStorage.setItem("last_workspace_id", id);
+
     const nextChannels = channelsByWorkspace[id] ?? [];
     setSelection(
       nextChannels.length > 0
@@ -229,46 +353,67 @@ export default function App() {
     );
   }
 
-  function handleCreateChannel() {
-    const newChannel: Channel = {
-      id: crypto.randomUUID(),
-      name: `${t.name_new_chatroom}${channels.length + 1}`,
-    };
-    setChannelsByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: [...(prev[currentWorkspaceId] ?? []), newChannel],
-    }));
-    setSelection({ type: "channel", channel: newChannel });
+  async function handleCreateChannel() {
+    const newName = `${t.name_new_chatroom}${channels.length + 1}`;
+
+    const res = await createRoomApi(currentWorkspaceId, newName);
+
+    if (res.status === "success" && res.room) {
+      const newChannel: Channel = { id: res.room.id, name: res.room.name };
+      setChannelsByWorkspace((prev) => ({
+        ...prev,
+        [currentWorkspaceId]: [...(prev[currentWorkspaceId] ?? []), newChannel],
+      }));
+      setSelection({ type: "channel", channel: newChannel });
+    } else {
+      alert(`채팅방 생성 실패: ${res.message}`);
+    }
   }
 
-  function handleRenameChannel(id: string, name: string) {
-    setChannelsByWorkspace((prev) => ({
-      ...prev,
-      [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((c) => (c.id === id ? { ...c, name } : c)),
-    }));
-    setSelection((prev) =>
-      prev.type === "channel" && prev.channel.id === id
-        ? { type: "channel", channel: { ...prev.channel, name } }
-        : prev
-    );
+  async function handleRenameChannel(id: string, name: string) {
+    if (!name.trim()) return;
+
+    const res = await updateRoomApi(currentWorkspaceId, id, name);
+
+    if (res.status === "success" && res.room) {
+      const updatedName = res.room.name;
+      setChannelsByWorkspace((prev) => ({
+        ...prev,
+        [currentWorkspaceId]: (prev[currentWorkspaceId] ?? []).map((c) =>
+          c.id === id ? { ...c, name: updatedName } : c
+        ),
+      }));
+      setSelection((prev) =>
+        prev.type === "channel" && prev.channel.id === id
+          ? { type: "channel", channel: { ...prev.channel, name: updatedName } }
+          : prev
+      );
+    } else {
+      alert(`채팅방 이름 변경 실패: ${res.message}`);
+    }
   }
 
-  function handleDeleteChannel(id: string) {
-    setChannelsByWorkspace((prev) => {
-      const next = (prev[currentWorkspaceId] ?? []).filter((c) => c.id !== id);
-      setSelection((sel) => {
-        if (sel.type === "channel" && sel.channel.id === id) {
-          return next.length > 0
-            ? { type: "channel", channel: next[0] }
-            : { type: "placeholder", key: "dashboard" };
-        }
-        return sel;
+  async function handleDeleteChannel(id: string) {
+    const res = await deleteRoomApi(currentWorkspaceId, id);
+
+    if (res.status === "success") {
+      setChannelsByWorkspace((prev) => {
+        const next = (prev[currentWorkspaceId] ?? []).filter((c) => c.id !== id);
+        setSelection((sel) => {
+          if (sel.type === "channel" && sel.channel.id === id) {
+            return next.length > 0
+              ? { type: "channel", channel: next[0] }
+              : { type: "placeholder", key: "dashboard" };
+          }
+          return sel;
+        });
+        return { ...prev, [currentWorkspaceId]: next };
       });
-      return { ...prev, [currentWorkspaceId]: next };
-    });
+    } else {
+      alert(res.message);
+    }
   }
 
-  // 자동 로그인 확인 중 로딩 화면
   if (isAuthChecking) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-sm">
@@ -277,7 +422,6 @@ export default function App() {
     );
   }
 
-  // 로그인되지 않은 경우 AuthView 표시
   if (!currentUser) {
     return (
       <AuthView
@@ -288,7 +432,6 @@ export default function App() {
     );
   }
 
-  // 로그인 완료된 후 메인 앱 화면
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar
@@ -297,6 +440,7 @@ export default function App() {
         onSelectWorkspace={handleSelectWorkspace}
         onCreateWorkspace={handleCreateWorkspace}
         onRenameWorkspace={handleRenameWorkspace}
+        onDeleteWorkspace={handleDeleteWorkspace}
         channels={channels}
         selectedChannelId={selection.type === "channel" ? selection.channel.id : null}
         activePlaceholder={selection.type === "placeholder" ? selection.key : null}
@@ -317,7 +461,14 @@ export default function App() {
       />
 
       {selection.type === "channel" ? (
-        <MainArea channel={selection.channel} activeRecorderName={activeRecorderName} t={t} />
+        <MainArea
+          channel={selection.channel}
+          workspaceId={currentWorkspaceId}
+          currentUser={{ id: currentUser.id, name: currentUser.name }}
+          memberNameById={memberNameById}
+          activeRecorderName={activeRecorderName}
+          t={t}
+        />
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView {...voiceMeetings} t={t} />
       ) : selection.key === "dashboard" ? (
@@ -360,14 +511,18 @@ export default function App() {
           t={t}
         />
       )}
+
+      {/* 💡 워크스페이스 정보가 반영된 Settings 모달 */}
       {showSettings && (
         <Settings
           onClose={() => setShowSettings(false)}
+          currentWorkspace={currentWorkspace}
           theme={theme}
           onToggleTheme={toggleTheme}
           lang={lang}
           onChangeLang={setLang}
           t={t}
+          onLogout={handleLogOut}
         />
       )}
     </div>

@@ -1,11 +1,14 @@
 // src/components/MainArea.tsx
 import { useEffect, useRef, useState } from "react";
 import { Channel, MemberActivity } from "../types"; // types.ts에서 정식 MemberActivity 타입을 가져옴 (충돌 해결!)
-import { SendIcon, DocumentIcon, MicIcon, PlusIcon, CloseIcon, SparklesIcon, WarningIcon, CheckIcon, UploadIcon } from "./icons";
+import { SendIcon, DocumentIcon, MicIcon, PlusIcon, CloseIcon, SparklesIcon, WarningIcon, CheckIcon, UploadIcon, TrashIcon } from "./icons";
 import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRuntime";
 
 interface MainAreaProps {
   channel: Channel;
+  workspaceId: string;
+  currentUser: { id: string; name: string };
+  memberNameById: Record<string, string>;
   activeRecorderName: string | null;
   t: any; // 번역 객체 타입
 }
@@ -210,19 +213,41 @@ function ContradictionPanel({ t }: { t: any }) {
 function MessageTab({
   messages,
   onSend,
+  onDeleteMessage,
   onUploadFiles,
   t,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
+  onDeleteMessage: (id: string) => void;
   onUploadFiles: (files: File[], kind: "file" | "voice") => void;
   t: any;
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
+  const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const memberActivities: MemberActivity[] = t.mock_member_activities || [];
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    }
+    function closeMenu() {
+      setContextMenu(null);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("scroll", closeMenu, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [contextMenu]);
 
   function addPendingFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -300,15 +325,42 @@ function MessageTab({
           )}
 
           {messages.map((m) => (
-            <div key={m.id} className="flex gap-2">
+            <div
+              key={m.id}
+              className="flex items-start gap-2"
+              onContextMenu={(e) => {
+                if (!m.isMine) return;
+                e.preventDefault();
+                setContextMenu({ messageId: m.id, x: e.clientX, y: e.clientY });
+              }}
+            >
               <div className="h-7 w-7 flex-shrink-0 rounded-full bg-recall-accent/30" />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-recall-text">{m.author}</p>
                 <p className="text-sm text-recall-textMuted">{m.text}</p>
               </div>
             </div>
           ))}
         </div>
+
+        {contextMenu && (
+          <div
+            ref={contextMenuRef}
+            style={{ position: "fixed", top: contextMenu.y, left: contextMenu.x }}
+            className="z-50 w-32 rounded-lg border border-recall-border bg-recall-bgSoft p-1.5 shadow-lg"
+          >
+            <button
+              onClick={() => {
+                onDeleteMessage(contextMenu.messageId);
+                setContextMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-danger hover:bg-white/5"
+            >
+              <TrashIcon size={13} />
+              삭제하기
+            </button>
+          </div>
+        )}
 
         <ComposerBar
           pendingFiles={pendingFiles}
@@ -489,10 +541,22 @@ function AiChatTab({ t }: { t: any }) {
   );
 }
 
-export default function MainArea({ channel, activeRecorderName, t }: MainAreaProps) {
+export default function MainArea({
+  channel,
+  workspaceId,
+  currentUser,
+  memberNameById,
+  activeRecorderName,
+  t,
+}: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
 
-  const { chatMessages, docs, sendChatMessage, addDocFiles, removeDoc } = useChannelRuntime(channel.id);
+  const { chatMessages, docs, sendChatMessage, deleteMessage, addDocFiles, removeDoc } = useChannelRuntime(
+    workspaceId,
+    channel.id,
+    currentUser,
+    memberNameById
+  );
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "message", label: t.chat_tab_message },
@@ -550,6 +614,7 @@ export default function MainArea({ channel, activeRecorderName, t }: MainAreaPro
         <MessageTab
           messages={chatMessages}
           onSend={sendChatMessage}
+          onDeleteMessage={deleteMessage}
           onUploadFiles={(files, kind) => addDocFiles(files, kind, true)}
           t={t}
         />

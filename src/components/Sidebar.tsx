@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Channel, User, Workspace } from "../types";
 import { Theme } from "../hooks/useTheme";
 import ProfilePopup from "./ProfilePopup";
+import InviteMemberModal from "./InviteMemberModal";
+import ManageMembersModal from "./ManageMembersModal";
 import {
   HomeIcon,
   ChatIcon,
@@ -25,6 +27,7 @@ interface SidebarProps {
   onSelectWorkspace: (id: string) => void;
   onCreateWorkspace: () => void;
   onRenameWorkspace: (id: string, name: string) => void;
+  onDeleteWorkspace?: (id: string) => void;
   channels: Channel[];
   selectedChannelId: string | null;
   activePlaceholder: PlaceholderKey | null;
@@ -40,8 +43,8 @@ interface SidebarProps {
   onLogout: () => void;
   theme: Theme;
   onToggleTheme: () => void;
-  lang: any; // 언어 상태 프로퍼티 추가
-  t: any;    // 번역 사전 매핑 객체 추가
+  lang: any;
+  t: any;
 }
 
 export default function Sidebar({
@@ -50,6 +53,7 @@ export default function Sidebar({
   onSelectWorkspace,
   onCreateWorkspace,
   onRenameWorkspace,
+  onDeleteWorkspace,
   channels,
   selectedChannelId,
   activePlaceholder,
@@ -65,21 +69,27 @@ export default function Sidebar({
   onLogout,
   theme,
   onToggleTheme,
-  lang,
   t,
 }: SidebarProps) {
   const [isChannelsExpanded, setIsChannelsExpanded] = useState(true);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [openMenuChannelId, setOpenMenuChannelId] = useState<string | null>(null);
-  const prevChannelCountRef = useRef(channels.length);
+  const prevChannelIdsRef = useRef<Set<string>>(new Set(channels.map((c) => c.id)));
+  const prevWorkspaceIdForChannelsRef = useRef(currentWorkspaceId);
 
-  // 워크스페이스 드롭다운 관련 상태
+  // 워크스페이스 드롭다운 및 메뉴 관련 상태
   const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [workspaceDraftName, setWorkspaceDraftName] = useState("");
+  const [openWsMenuId, setOpenWsMenuId] = useState<string | null>(null);
+
+  // 초대 모달 및 팀원 관리 모달용 상태
+  const [invitingWorkspace, setInvitingWorkspace] = useState<Workspace | null>(null);
+  const [managingWorkspace, setManagingWorkspace] = useState<Workspace | null>(null);
+
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
-  const prevWorkspaceCountRef = useRef(workspaces.length);
+  const prevWorkspaceIdsRef = useRef<Set<string>>(new Set(workspaces.map((w) => w.id)));
 
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId) ?? workspaces[0];
 
@@ -89,12 +99,17 @@ export default function Sidebar({
   ];
 
   useEffect(() => {
-    if (workspaces.length > prevWorkspaceCountRef.current) {
-      const newest = workspaces[workspaces.length - 1];
-      setEditingWorkspaceId(newest.id);
-      setWorkspaceDraftName(newest.name);
+    const prevIds = prevWorkspaceIdsRef.current;
+    const newOnes = workspaces.filter((w) => !prevIds.has(w.id));
+
+    // 목록을 통째로 처음 불러온 경우(prevIds가 비어있음)는 제외하고,
+    // 실제로 새로 생긴 워크스페이스가 정확히 1개일 때만 이름 입력 모드로 전환
+    if (prevIds.size > 0 && newOnes.length === 1) {
+      setEditingWorkspaceId(newOnes[0].id);
+      setWorkspaceDraftName(newOnes[0].name);
     }
-    prevWorkspaceCountRef.current = workspaces.length;
+
+    prevWorkspaceIdsRef.current = new Set(workspaces.map((w) => w.id));
   }, [workspaces]);
 
   useEffect(() => {
@@ -108,9 +123,19 @@ export default function Sidebar({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isWorkspaceMenuOpen]);
 
+  useEffect(() => {
+    if (!openWsMenuId) return;
+    function handleClickOutside() {
+      setOpenWsMenuId(null);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [openWsMenuId]);
+
   function startRenameWorkspace(workspace: Workspace) {
     setEditingWorkspaceId(workspace.id);
     setWorkspaceDraftName(workspace.name);
+    setOpenWsMenuId(null);
   }
 
   function commitRenameWorkspace() {
@@ -121,13 +146,23 @@ export default function Sidebar({
   }
 
   useEffect(() => {
-    if (channels.length > prevChannelCountRef.current) {
-      const newest = channels[channels.length - 1];
-      setEditingChannelId(newest.id);
-      setDraftName(newest.name);
+    // 워크스페이스 자체가 바뀐 경우엔 채널 목록이 통째로 교체된 것이므로
+    // "새로 생긴 채널"로 오인하지 않도록 이번 사이클은 추적 목록만 재동기화
+    const sameWorkspace = prevWorkspaceIdForChannelsRef.current === currentWorkspaceId;
+
+    if (sameWorkspace) {
+      const prevIds = prevChannelIdsRef.current;
+      const newOnes = channels.filter((c) => !prevIds.has(c.id));
+
+      if (prevIds.size > 0 && newOnes.length === 1) {
+        setEditingChannelId(newOnes[0].id);
+        setDraftName(newOnes[0].name);
+      }
     }
-    prevChannelCountRef.current = channels.length;
-  }, [channels]);
+
+    prevChannelIdsRef.current = new Set(channels.map((c) => c.id));
+    prevWorkspaceIdForChannelsRef.current = currentWorkspaceId;
+  }, [channels, currentWorkspaceId]);
 
   useEffect(() => {
     if (!openMenuChannelId) return;
@@ -153,6 +188,7 @@ export default function Sidebar({
 
   return (
     <div className="flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text">
+      {/* 1. 상단 워크스페이스 영역 */}
       <div ref={workspaceMenuRef} className="relative px-3 pb-3 pt-4">
         <button
           onClick={() => setIsWorkspaceMenuOpen((v) => !v)}
@@ -172,8 +208,10 @@ export default function Sidebar({
             {workspaces.map((ws) => {
               const isEditing = editingWorkspaceId === ws.id;
               const isCurrent = ws.id === currentWorkspaceId;
+              const isWsMenuOpen = openWsMenuId === ws.id;
+
               return (
-                <div key={ws.id} className="group flex items-center">
+                <div key={ws.id} className="group relative flex items-center">
                   {isEditing ? (
                     <input
                       autoFocus
@@ -196,13 +234,65 @@ export default function Sidebar({
                         <span className="min-w-0 flex-1 truncate">{ws.name}</span>
                         {isCurrent && <CheckIcon size={13} className="flex-shrink-0 text-recall-accent" />}
                       </button>
+
+                      {/* [더보기 ...] 버튼 */}
                       <button
-                        onClick={() => startRenameWorkspace(ws)}
-                        aria-label="Rename workspace"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenWsMenuId(isWsMenuOpen ? null : ws.id);
+                        }}
+                        aria-label="Workspace options"
                         className="hidden flex-shrink-0 px-1.5 text-recall-textMuted hover:text-recall-text group-hover:inline"
                       >
-                        <PencilIcon size={13} />
+                        <MoreIcon size={15} />
                       </button>
+
+                      {/* [더보기 ...] 드롭다운 메뉴 (이름 변경 / 팀원 관리 / 구분선 / 삭제하기) */}
+                      {isWsMenuOpen && (
+                        <div
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className="absolute right-0 top-full z-40 mt-0.5 w-36 rounded-lg border border-recall-border bg-recall-bg p-1.5 shadow-xl"
+                        >
+                          {/* 1. 이름 변경 */}
+                          <button
+                            onClick={() => startRenameWorkspace(ws)}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-text hover:bg-white/5"
+                          >
+                            <PencilIcon size={13} />
+                            이름 변경
+                          </button>
+
+                          {/* 2. 팀원 관리 */}
+                          <button
+                            onClick={() => {
+                              setOpenWsMenuId(null);
+                              setIsWorkspaceMenuOpen(false);
+                              setManagingWorkspace(ws);
+                            }}
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-text hover:bg-white/5"
+                          >
+                            ⚙️ 팀원 관리
+                          </button>
+
+                          {/* 3. 구분선 */}
+                          <div className="my-1 border-t border-recall-border" />
+
+                          {/* 4. 삭제하기 */}
+                          {onDeleteWorkspace && (
+                            <button
+                              onClick={() => {
+                                setOpenWsMenuId(null);
+                                setIsWorkspaceMenuOpen(false);
+                                onDeleteWorkspace(ws.id);
+                              }}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-danger hover:bg-white/5"
+                            >
+                              <TrashIcon size={13} />
+                              삭제하기
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -225,12 +315,14 @@ export default function Sidebar({
         )}
       </div>
 
+      {/* 2. 중앙 메인 스크롤 영역 */}
       <div className="flex-1 overflow-y-auto px-3">
         {/* 메인 그룹 */}
         <p className="mb-1.5 px-2 text-[11px] font-medium uppercase tracking-wide text-recall-textMuted">
           {t.main_group}
         </p>
 
+        {/* 대시보드 */}
         <button
           onClick={() => onSelectPlaceholder("dashboard")}
           className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
@@ -243,6 +335,7 @@ export default function Sidebar({
           <span className="truncate">{t.sidebar_dashboard}</span>
         </button>
 
+        {/* 채팅방 (채널 목록) */}
         <button
           onClick={() => setIsChannelsExpanded((v) => !v)}
           className="mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
@@ -337,6 +430,7 @@ export default function Sidebar({
           </div>
         )}
 
+        {/* 음성 회의 */}
         <button
           onClick={() => onSelectPlaceholder("voiceMeeting")}
           className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
@@ -361,7 +455,6 @@ export default function Sidebar({
         <p className="mb-1.5 mt-4 px-2 text-[11px] font-medium uppercase tracking-wide text-recall-textMuted">
           {t.analysis_group}
         </p>
-
         {ANALYSIS_ITEMS.map((item) => {
           const Icon = item.icon;
           return (
@@ -381,6 +474,7 @@ export default function Sidebar({
         })}
       </div>
 
+      {/* 3. 하단 프로필 영역 */}
       <ProfilePopup
         user={user}
         onOpenProfile={onOpenProfile}
@@ -390,6 +484,26 @@ export default function Sidebar({
         onToggleTheme={onToggleTheme}
         t={t}
       />
+
+      {/* 팀원 초대 모달 */}
+      {invitingWorkspace && (
+        <InviteMemberModal
+          workspaceId={invitingWorkspace.id}
+          workspaceName={invitingWorkspace.name}
+          onClose={() => setInvitingWorkspace(null)}
+        />
+      )}
+
+      {/* 팀원 관리 모달 */}
+      {managingWorkspace && (
+        <ManageMembersModal
+          workspaceId={managingWorkspace.id}
+          workspaceName={managingWorkspace.name}
+          currentUserId={user.id}
+          onClose={() => setManagingWorkspace(null)}
+          onOpenInviteModal={() => setInvitingWorkspace(managingWorkspace)}
+        />
+      )}
     </div>
   );
 }

@@ -65,3 +65,18 @@ export interface AnalyzedDocument {
   fileType: string; // 원본 미리보기용 mime 타입
   fileUrl: string; // 임시 URL
 }
+
+export interface Workspace {
+  id: string;
+  name: string;
+  description?: string | null; 
+  owner_id?: string;         
+  created_at?: string;      
+}
+
+// 워크스페이스 목록 조회 API 전체 응답 타입 
+export interface WorkspaceListApiResponse {
+  status: "success" | "error";
+  workspaces: Workspace[]; // 배열 형태
+  error: string | null;
+}
