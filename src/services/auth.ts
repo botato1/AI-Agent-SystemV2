@@ -397,3 +397,190 @@ export async function updateProfileApi(params: UpdateProfileParams): Promise<Pro
     };
   }
 }
+
+// 비밀번호 재설정 요청 API 응답 타입
+export interface PasswordResetRequestResponse {
+  status: "success" | "error";
+  message: string;
+  error: string | null;
+}
+
+// 10. 비밀번호 재설정 요청 API (POST /api/auth/password-reset/request)
+export async function requestPasswordResetApi(email: string): Promise<PasswordResetRequestResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+  const trimmedEmail = email.trim();
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/password-reset/request`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: trimmedEmail,
+      }),
+    });
+
+    const data = await response.json();
+
+    // 422 Unprocessable Entity (이메일 누락 / 형식 오류)
+    if (response.status === 422) {
+      return {
+        status: "error",
+        message: data.message || data.detail?.[0]?.msg || "올바른 이메일 형식을 입력해 주세요.",
+        error: "UNPROCESSABLE_ENTITY",
+      };
+    }
+
+    if (!response.ok || data.status === "error") {
+      return {
+        status: "error",
+        message: data.message || "비밀번호 재설정 요청 중 오류가 발생했습니다.",
+        error: data.error || "REQUEST_FAILED",
+      };
+    }
+
+    return {
+      status: "success",
+      message: data.message || "입력하신 이메일로 비밀번호 재설정 링크를 발송했습니다. (계정이 존재하는 경우)",
+      error: null,
+    };
+  } catch (error) {
+    console.error("requestPasswordResetApi error:", error);
+    return {
+      status: "error",
+      message: "서버와 통신할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+// 비밀번호 재설정 확인 API 응답 타입
+export interface PasswordResetConfirmResponse {
+  status: "success" | "error";
+  message: string;
+  error: string | null;
+}
+
+// 11. 비밀번호 재설정 확인 API (POST /api/auth/password-reset/confirm)
+export async function confirmPasswordResetApi(
+  resetToken: string,
+  newPassword: string
+): Promise<PasswordResetConfirmResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/password-reset/confirm`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        reset_token: resetToken.trim(),
+        new_password: newPassword,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "비밀번호 재설정에 실패했습니다.";
+      
+      // 상태 코드별 예외 메시지 정돈
+      if (response.status === 400) {
+        defaultMsg = "새 비밀번호가 보안 정책에 맞지 않습니다.";
+      } else if (response.status === 401) {
+        defaultMsg = "유효하지 않거나 만료된 재설정 토큰입니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 사용자입니다.";
+      }
+
+      return {
+        status: "error",
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      message: data.message || "비밀번호가 재설정되었습니다. 다시 로그인해주세요.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("confirmPasswordResetApi error:", error);
+    return {
+      status: "error",
+      message: "서버와 통신할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+// 회원 탈퇴 API 응답 타입
+export interface DeleteAccountResponse {
+  status: "success" | "error";
+  message: string;
+  error: string | null;
+}
+
+// 12. 회원 탈퇴 API (DELETE /api/auth/account)
+export async function deleteAccountApi(currentPassword: string): Promise<DeleteAccountResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/account`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        current_password: currentPassword,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "회원 탈퇴 처리 중 오류가 발생했습니다.";
+      if (response.status === 401) {
+        defaultMsg = "현재 비밀번호가 일치하지 않거나 인증이 만료되었습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 사용자입니다.";
+      }
+
+      return {
+        status: "error",
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    // 탈퇴 성공 시 저장된 토큰 정리
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+
+    return {
+      status: "success",
+      message: data.message || "회원 탈퇴가 완료되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("deleteAccountApi error:", error);
+    return {
+      status: "error",
+      message: "서버와 통신할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}

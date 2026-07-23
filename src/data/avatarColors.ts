@@ -29,3 +29,27 @@ export const AVATAR_COLORS = [
 export function randomAvatarColor(): string {
   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 }
+
+// username 기반으로 항상 같은 색이 나오도록 하는 결정적(deterministic) 배정
+export function hashAvatarColor(key: string): string {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash << 5) - hash + key.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % AVATAR_COLORS.length;
+  return AVATAR_COLORS[index];
+}
+
+// 백엔드에 avatarColor 저장 필드가 없어 프론트(localStorage)에서 계정별로 고정 저장
+function storageKey(username: string): string {
+  return `avatar_color:${username}`;
+}
+
+export function loadAvatarColor(username: string): string | null {
+  return localStorage.getItem(storageKey(username));
+}
+
+export function saveAvatarColor(username: string, color: string): void {
+  localStorage.setItem(storageKey(username), color);
+}
