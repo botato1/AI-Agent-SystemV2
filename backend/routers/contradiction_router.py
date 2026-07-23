@@ -3,12 +3,13 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import contradiction_crud
+from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
     ContradictionSchema,
     ContradictionListResponse,
@@ -65,6 +66,7 @@ def resolve_contradiction_api(
     workspace_id: uuid.UUID,
     contradiction_id: uuid.UUID,
     request: ContradictionResolveRequest,
+    background_tasks: BackgroundTasks,
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -86,7 +88,6 @@ def resolve_contradiction_api(
     )
 
     if request.resolution_type == "change_acknowledged":
-        # TODO: LLM 기반 변경요약 실제 생성은 후속 작업 — 지금은 draft row만 pending 상태로 생성
         context_type = "meeting" if contradiction.source_type == "meeting_segment" else "chat"
         contradiction_crud.create_change_summary_draft(
             db,
@@ -96,6 +97,14 @@ def resolve_contradiction_api(
             context_type=context_type,
             original_reference_text=contradiction.reference_text_snapshot,
             accepted_change_text=contradiction.statement_text_snapshot,
+        )
+        # 요약 생성은 백그라운드로 — 응답은 draft가 pending인 채로 바로 나가고,
+        # 프론트는 GET .../change-summary로 완료 여부를 폴링한다.
+        background_tasks.add_task(
+            run_change_summary_generation,
+            contradiction_id=str(contradiction_id),
+            workspace_id=str(workspace_id),
+            category_id=str(contradiction.category_id),
         )
 
     updated = contradiction_crud.get_contradiction(db, contradiction_id)
