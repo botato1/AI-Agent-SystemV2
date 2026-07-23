@@ -276,3 +276,16 @@ def create_change_summary_draft(
     db.commit()
     db.refresh(row)
     return row
+
+
+def update_change_summary_draft(
+    db: Session, contradiction_id: uuid.UUID, **fields
+) -> Optional[ChangeSummaryDraft]:
+    """generation_status/generated_summary/generation_error/model_name 등을 부분 갱신한다."""
+    row = get_change_summary_draft(db, contradiction_id)
+    if row:
+        for k, v in fields.items():
+            setattr(row, k, v)
+        db.commit()
+        db.refresh(row)
+    return row
