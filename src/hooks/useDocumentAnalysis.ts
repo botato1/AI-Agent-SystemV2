@@ -1,78 +1,153 @@
 // src/hooks/useDocumentAnalysis.ts
-import { useState } from "react";
-import { AnalyzedDocument } from "../types"; // 전역 types.ts 타입을 가져옵니다 (가져오기 선언 충돌 해결!)
+import { useEffect, useState } from "react";
+import { AnalyzedDocument } from "../types";
+import {
+  DocumentDetail,
+  getDocumentListApi,
+  uploadDocumentApi,
+  getDocumentApi,
+  deleteDocumentApi,
+  retryDocumentApi,
+} from "../services/document";
 
-interface WorkspaceDocState {
-  documents: AnalyzedDocument[];
-  activeDocId: string | null;
+const PENDING_STATUSES = new Set(["pending", "processing"]);
+
+function toDocStatus(apiStatus: string): AnalyzedDocument["status"] {
+  if (apiStatus === "completed") return "analyzed";
+  if (apiStatus === "failed") return "failed";
+  return "analyzing";
 }
 
-const EMPTY_STATE: WorkspaceDocState = { documents: [], activeDocId: null };
-
 export function useDocumentAnalysis(workspaceId: string) {
-  const [store, setStore] = useState<Record<string, WorkspaceDocState>>({});
+  const [documents, setDocuments] = useState<AnalyzedDocument[]>([]);
+  const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [activeDocDetail, setActiveDocDetail] = useState<DocumentDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
 
-  const current = store[workspaceId] ?? EMPTY_STATE;
-
-  function updateState(updater: (prev: WorkspaceDocState) => WorkspaceDocState) {
-    setStore((prev) => ({ ...prev, [workspaceId]: updater(prev[workspaceId] ?? EMPTY_STATE) }));
+  async function loadDocuments() {
+    if (!workspaceId) return;
+    const res = await getDocumentListApi(workspaceId);
+    if (res.status === "success") {
+      setDocuments(
+        res.documents.map((d) => ({
+          id: d.document_id,
+          name: d.filename,
+          size: 0,
+          uploadedAt: new Date(d.created_at).getTime(),
+          status: toDocStatus(d.analysis_status),
+          summary: null,
+          keywords: [],
+          fileType: "",
+          fileUrl: "",
+        }))
+      );
+    }
   }
 
-  function uploadDocument(fileList: FileList | null) {
+  useEffect(() => {
+    setActiveDocId(null);
+    setIsLoading(true);
+    loadDocuments().finally(() => setIsLoading(false));
+  }, [workspaceId]);
+
+  // 아직 분석 중인 문서가 있으면 완료될 때까지 목록을 주기적으로 재조회
+  useEffect(() => {
+    const hasPending = documents.some((d) => d.status === "analyzing");
+    if (!hasPending) return;
+    const timer = setInterval(loadDocuments, 5000);
+    return () => clearInterval(timer);
+  }, [documents, workspaceId]);
+
+  useEffect(() => {
+    async function loadDetail() {
+      if (!workspaceId || !activeDocId) {
+        setActiveDocDetail(null);
+        return;
+      }
+      setIsDetailLoading(true);
+      const res = await getDocumentApi(workspaceId, activeDocId);
+      setIsDetailLoading(false);
+      setActiveDocDetail(res.status === "success" ? res.document : null);
+    }
+
+    loadDetail();
+  }, [workspaceId, activeDocId]);
+
+  async function uploadDocument(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
 
-    const newDocs: AnalyzedDocument[] = Array.from(fileList).map((file) => {
-      const id = crypto.randomUUID();
-      
-      // 파일 업로드 직후는 analyzing 상태로 시작
-      const doc: AnalyzedDocument = {
-        id,
+    const files = Array.from(fileList);
+
+    for (const file of files) {
+      const tempId = crypto.randomUUID();
+      const placeholder: AnalyzedDocument = {
+        id: tempId,
         name: file.name,
         size: file.size,
         uploadedAt: Date.now(),
         status: "analyzing",
         summary: null,
-        keywords: null,
+        keywords: [],
         fileType: file.type || "application/octet-stream",
-        fileUrl: URL.createObjectURL(file),
+        fileUrl: "",
       };
+      setDocuments((prev) => [placeholder, ...prev]);
+      setActiveDocId(tempId);
 
-      // 1.8초 후 "done"이 아닌 완벽히 동기화된 "analyzed" 상태로 전환 처리
-      setTimeout(() => {
-        updateState((prev) => ({
-          ...prev,
-          documents: prev.documents.map((d) =>
-            d.id === id
-              ? {
-                  ...d,
-                  status: "analyzed", // "done" 대신 "analyzed"로 정확히 상태 일치!
-                  summary: "이 문서는 프로젝트의 핵심 아키텍처 가이드라인을 정의합니다. 구성 요소 간 중복을 방지하고 일관된 흐름을 유지하는 것을 목표로 합니다.",
-                  keywords: ["아키텍처", "가이드라인", "컴포넌트"],
-                }
-              : d
-          ),
-        }));
-      }, 1800);
+      const res = await uploadDocumentApi(workspaceId, file);
 
-      return doc;
-    });
+      if (res.status === "success" && res.documentId) {
+        setDocuments((prev) =>
+          prev.map((d) => (d.id === tempId ? { ...d, id: res.documentId as string } : d))
+        );
+        setActiveDocId((prev) => (prev === tempId ? (res.documentId as string) : prev));
+        await loadDocuments();
+      } else {
+        setDocuments((prev) => prev.map((d) => (d.id === tempId ? { ...d, status: "failed" } : d)));
+        alert(`문서 업로드 실패: ${res.message}`);
+      }
+    }
+  }
 
-    updateState((prev) => ({
-      ...prev,
-      documents: [...newDocs, ...prev.documents],
-      activeDocId: newDocs[0].id,
-    }));
+  async function deleteDocument(id: string) {
+    const res = await deleteDocumentApi(workspaceId, id);
+    if (res.status === "success") {
+      setDocuments((prev) => prev.filter((d) => d.id !== id));
+      setActiveDocId((prev) => (prev === id ? null : prev));
+    } else {
+      alert(`문서 삭제 실패: ${res.message}`);
+    }
+  }
+
+  async function retryDocument(id: string) {
+    setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, status: "analyzing" } : d)));
+    const res = await retryDocumentApi(workspaceId, id);
+    if (res.status === "success") {
+      await loadDocuments();
+      if (activeDocId === id) {
+        const detailRes = await getDocumentApi(workspaceId, id);
+        setActiveDocDetail(detailRes.status === "success" ? detailRes.document : null);
+      }
+    } else {
+      setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, status: "failed" } : d)));
+      alert(`재분석 요청 실패: ${res.message}`);
+    }
   }
 
   function selectDocument(id: string | null) {
-    updateState((prev) => ({ ...prev, activeDocId: id }));
+    setActiveDocId(id);
   }
 
-  // 뷰 컴포넌트(Props)가 요구하는 프로퍼티 명칭과 완벽히 매핑시켜 리턴합니다.
   return {
-    documents: current.documents,
-    activeDocId: current.activeDocId,
+    documents,
+    activeDocId,
+    activeDocDetail,
+    isLoading,
+    isDetailLoading,
     uploadDocument,
     selectDocument,
+    deleteDocument,
+    retryDocument,
   };
 }
