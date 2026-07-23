@@ -10,6 +10,16 @@
 
 import os
 
+import httpx
+
+from backend.db.crud import content_chunk_crud
+from backend.db.session import SessionLocal
+from backend.graphs.states.ai_chat_state import AIChatState
+from backend.modules.rag.chroma_client import DOCUMENT_COLLECTION, MEETING_COLLECTION, search_hybrid
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
 TOP_K_PER_COLLECTION = 5
 TOP_K_FINAL = 5
 CHAT_HISTORY_TURNS = 3
@@ -59,3 +69,96 @@ def build_answer_prompt(context_texts: list[str], chat_history: list[dict] | Non
     context = "\n\n---\n\n".join(context_texts) if context_texts else "(근거 자료 없음)"
     history = format_chat_history(chat_history)
     return _ANSWER_PROMPT.format(context=context, history=history, question=question)
+
+
+def _call_llm_answer(prompt: str) -> str | None:
+    """Ollama에 일반 텍스트 답변 생성을 요청한다. 실패 시 None (다른 노드처럼 JSON 강제 안 함 — 채팅 답변은 텍스트 그대로 노출)."""
+    try:
+        response = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        answer = response.json().get("response", "").strip()
+        return answer or None
+    except (httpx.HTTPError, ValueError, KeyError, AttributeError) as e:
+        print(f"[ai_chat_answer] LLM 호출 실패: {repr(e)}")
+        return None
+
+
+def ai_chat_answer_node(state: AIChatState) -> dict:
+    workspace_id = state["workspace_id"]
+    category_id = state["category_id"]
+    user_message = state["user_message"]
+    chat_history = state.get("chat_history")
+
+    try:
+        doc_results = search_hybrid(
+            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            top_k=TOP_K_PER_COLLECTION, collection_name=DOCUMENT_COLLECTION,
+        )
+        meeting_results = search_hybrid(
+            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            top_k=TOP_K_PER_COLLECTION, collection_name=MEETING_COLLECTION,
+        )
+    except Exception as e:
+        print(f"[ai_chat_answer] 검색 실패: {repr(e)}")
+        doc_results, meeting_results = [], []
+
+    candidates = merge_and_rank_candidates(doc_results, meeting_results, top_k=TOP_K_FINAL)
+
+    if not candidates:
+        return {
+            "answer": NO_RESULTS_ANSWER,
+            "chunk_search_results": [],
+            "retrieved_sources": [],
+        }
+
+    db = SessionLocal()
+    try:
+        resolved = []
+        for candidate in candidates:
+            chunk = content_chunk_crud.get_chunk_by_chroma_id(db, candidate["id"])
+            if chunk:
+                # ChromaDB엔 있는데 Postgres 쪽 원본 청크가 없는 경우(고아 데이터) — 스킵
+                resolved.append((candidate, chunk))
+    finally:
+        db.close()
+
+    if not resolved:
+        return {
+            "answer": NO_RESULTS_ANSWER,
+            "chunk_search_results": candidates,
+            "retrieved_sources": [],
+        }
+
+    context_texts = [chunk.chunk_text for _, chunk in resolved]
+    prompt = build_answer_prompt(context_texts, chat_history, user_message)
+    answer = _call_llm_answer(prompt)
+
+    if answer is None:
+        return {
+            "answer": LLM_FAILURE_ANSWER,
+            "chunk_search_results": candidates,
+            "retrieved_sources": [],
+            "error": "LLM 호출 실패",
+        }
+
+    sources = [
+        {
+            "source_type": "content_chunk",
+            "file_id": chunk.file_id,
+            "chunk_id": chunk.id,
+            "similarity_score": candidate.get("score"),
+            "display_order": i,
+        }
+        for i, (candidate, chunk) in enumerate(resolved)
+    ]
+
+    return {
+        "answer": answer,
+        "answer_model_name": OLLAMA_MODEL,
+        "chunk_search_results": candidates,
+        "retrieved_sources": sources,
+    }
