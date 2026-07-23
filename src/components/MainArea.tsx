@@ -1,8 +1,14 @@
 // src/components/MainArea.tsx
 import { useEffect, useRef, useState } from "react";
 import { Channel, MemberActivity } from "../types"; // types.ts에서 정식 MemberActivity 타입을 가져옴 (충돌 해결!)
-import { SendIcon, DocumentIcon, MicIcon, PlusIcon, CloseIcon, SparklesIcon, WarningIcon, CheckIcon, UploadIcon, TrashIcon } from "./icons";
+import { SendIcon, DocumentIcon, MicIcon, PlusIcon, CloseIcon, SparklesIcon, WarningIcon, CheckIcon, UploadIcon, TrashIcon, LinkIcon } from "./icons";
 import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRuntime";
+import { useAiChat } from "../hooks/useAiChat";
+import { useRoomFiles } from "../hooks/useRoomFiles";
+import { RoomFile } from "../services/roomFile";
+import { hashAvatarColor } from "../data/avatarColors";
+import DocumentPreviewModal from "./DocumentPreviewModal";
+import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
 
 interface MainAreaProps {
   channel: Channel;
@@ -19,6 +25,30 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatDocDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+const SHARE_MESSAGE_PATTERN = /^문서를 공유했습니다: (.+)$/;
+
+function analysisStatusLabel(status: string): string {
+  switch (status) {
+    case "pending":
+      return "대기";
+    case "processing":
+      return "분석 중";
+    case "completed":
+      return "완료";
+    case "failed":
+      return "실패";
+    case "excluded":
+      return "제외됨";
+    default:
+      return status;
+  }
 }
 
 // 채팅 입력창 - "+"로 문서/음성 업로드 선택
@@ -215,12 +245,16 @@ function MessageTab({
   onSend,
   onDeleteMessage,
   onUploadFiles,
+  roomFiles,
+  onOpenPreview,
   t,
 }: {
   messages: ChatMessage[];
   onSend: (text: string) => void;
   onDeleteMessage: (id: string) => void;
   onUploadFiles: (files: File[], kind: "file" | "voice") => void;
+  roomFiles: RoomFile[];
+  onOpenPreview: (documentId: string, name: string) => void;
   t: any;
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -337,7 +371,26 @@ function MessageTab({
               <div className="h-7 w-7 flex-shrink-0 rounded-full bg-recall-accent/30" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-recall-text">{m.author}</p>
-                <p className="text-sm text-recall-textMuted">{m.text}</p>
+                {(() => {
+                  const shareMatch = m.text.match(SHARE_MESSAGE_PATTERN);
+                  const sharedFile = shareMatch
+                    ? roomFiles.find((f) => f.original_filename === shareMatch[1])
+                    : null;
+
+                  if (shareMatch && sharedFile) {
+                    return (
+                      <button
+                        onClick={() => onOpenPreview(sharedFile.id, sharedFile.original_filename)}
+                        className="mt-0.5 flex items-center gap-1.5 rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-xs text-recall-accent hover:border-recall-accent/50"
+                      >
+                        <DocumentIcon size={13} className="flex-shrink-0" />
+                        <span className="truncate">{sharedFile.original_filename}</span>
+                      </button>
+                    );
+                  }
+
+                  return <p className="text-sm text-recall-textMuted">{m.text}</p>;
+                })()}
               </div>
             </div>
           ))}
@@ -381,11 +434,15 @@ function DocsTab({
   docs,
   onUploadFiles,
   onRemoveDoc,
+  onLinkExisting,
+  onOpenPreview,
   t,
 }: {
   docs: DocItem[];
   onUploadFiles: (fileList: FileList | null, kind: "file" | "voice") => void;
   onRemoveDoc: (id: string) => void;
+  onLinkExisting: () => void;
+  onOpenPreview: (documentId: string, name: string) => void;
   t: any;
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -431,19 +488,31 @@ function DocsTab({
         }}
       />
 
-      <button
-        onClick={() => fileInputRef.current?.click()}
-        className="mb-3 flex flex-col items-center justify-center rounded-lg border border-dashed border-recall-border px-3 py-6 text-center hover:bg-white/5"
-      >
-        <p className="text-sm text-recall-text">{t.docs_tab_msg}</p>
-        <p className="mt-1 text-xs text-recall-textMuted">{t.docs_tab_sub}</p>
-      </button>
+      <div className="mb-3 flex gap-2">
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-recall-border px-3 py-6 text-center hover:bg-white/5"
+        >
+          <p className="text-sm text-recall-text">{t.docs_tab_msg}</p>
+          <p className="mt-1 text-xs text-recall-textMuted">{t.docs_tab_sub}</p>
+        </button>
+        <button
+          onClick={onLinkExisting}
+          className="flex flex-shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-recall-border px-4 py-6 text-center hover:bg-white/5"
+        >
+          <LinkIcon size={16} className="text-recall-textMuted" />
+          <p className="text-xs text-recall-textMuted">기존 문서 연결</p>
+        </button>
+      </div>
 
       <div className="space-y-2">
         {docs.map((doc) => (
           <div
             key={doc.id}
-            className="group flex items-center justify-between rounded-lg border border-recall-border px-3 py-2 text-sm"
+            onClick={() => doc.kind === "file" && onOpenPreview(doc.id, doc.name)}
+            className={`group flex items-center justify-between rounded-lg border border-recall-border px-3 py-2 text-sm ${
+              doc.kind === "file" ? "cursor-pointer hover:border-recall-accent/50" : ""
+            }`}
           >
             <span className="flex min-w-0 items-center gap-2 text-recall-text">
               <span className="flex-shrink-0 text-recall-textMuted">
@@ -452,7 +521,7 @@ function DocsTab({
               <span className="truncate">{doc.name}</span>
             </span>
             <span className="flex flex-shrink-0 items-center gap-2 text-xs text-recall-textMuted">
-              {formatFileSize(doc.size)} · {doc.date}
+              {doc.statusLabel ?? formatFileSize(doc.size)} · {doc.date}
               <span
                 onClick={(e) => {
                   e.stopPropagation();
@@ -470,56 +539,43 @@ function DocsTab({
   );
 }
 
-interface AiMessage {
-  id: string;
-  from: "user" | "ai";
-  text: string;
-}
-
 // AI Chat 탭
-function AiChatTab({ t }: { t: any }) {
-  const [messages, setMessages] = useState<AiMessage[]>([]);
+function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: string; t: any }) {
+  const { messages, isLoading, isSending, sendMessage } = useAiChat(workspaceId, roomId);
   const [input, setInput] = useState("");
-  const [isThinking, setIsThinking] = useState(false);
 
   function handleSend() {
-    if (!input.trim()) return;
-    const question = input;
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), from: "user", text: question }]);
+    if (!input.trim() || isSending) return;
+    sendMessage(input);
     setInput("");
-    setIsThinking(true);
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          from: "ai",
-          text: t.ai_chat_dummy_answer,
-        },
-      ]);
-      setIsThinking(false);
-    }, 900);
   }
 
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex-1 space-y-2 overflow-y-auto">
-        {messages.length === 0 && (
+        {isLoading ? (
+          <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+        ) : messages.length === 0 ? (
           <p className="text-sm text-recall-textMuted">{t.ai_chat_welcome}</p>
+        ) : (
+          messages.map((m) => (
+            <div key={m.id}>
+              <div
+                className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                  m.role === "assistant"
+                    ? "bg-recall-bgSoft text-recall-text"
+                    : "ml-auto bg-recall-accent/20 text-recall-text"
+                } ${m.isPending || m.errorText ? "opacity-60" : ""}`}
+              >
+                {m.content}
+              </div>
+              {m.errorText && (
+                <p className="mt-1 text-right text-[11px] text-recall-danger">⚠️ {m.errorText}</p>
+              )}
+            </div>
+          ))
         )}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
-              m.from === "ai"
-                ? "bg-recall-bgSoft text-recall-text"
-                : "ml-auto bg-recall-accent/20 text-recall-text"
-            }`}
-          >
-            {m.text}
-          </div>
-        ))}
-        {isThinking && <p className="text-xs text-recall-textMuted">{t.ai_chat_thinking}</p>}
+        {isSending && <p className="text-xs text-recall-textMuted">{t.ai_chat_thinking}</p>}
       </div>
       <div className="mt-3 flex gap-2">
         <input
@@ -558,13 +614,58 @@ export default function MainArea({
     memberNameById
   );
 
+  const roomFiles = useRoomFiles(workspaceId, channel.id);
+
+  const mergedDocs: DocItem[] = [
+    ...roomFiles.files.map((f) => ({
+      id: f.id,
+      name: f.original_filename,
+      size: 0,
+      statusLabel: analysisStatusLabel(f.analysis_status),
+      date: formatDocDate(f.created_at),
+      kind: "file" as const,
+    })),
+    ...docs.filter((d) => d.kind === "voice"),
+  ];
+
+  // 채팅창 "+"로 문서를 올리면 실제로 업로드하고(room_id로 자동 연결), 성공하면 공유 메시지를 남김
+  async function handleUploadFromChat(files: File[], kind: "file" | "voice") {
+    if (kind === "voice") {
+      addDocFiles(files, "voice", true);
+      return;
+    }
+    for (const file of files) {
+      const ok = await roomFiles.uploadFile(file);
+      if (ok) sendChatMessage(`문서를 공유했습니다: ${file.name}`);
+    }
+  }
+
+  // 문서보관함 탭의 업로드는 항상 문서(document) 종류
+  async function handleUploadFromDocsTab(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    for (const file of Array.from(fileList)) {
+      await roomFiles.uploadFile(file);
+    }
+  }
+
+  function handleRemoveDoc(id: string) {
+    if (roomFiles.files.some((f) => f.id === id)) {
+      roomFiles.removeFile(id);
+    } else {
+      removeDoc(id);
+    }
+  }
+
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
+
   const tabs: { id: Tab; label: string }[] = [
     { id: "message", label: t.chat_tab_message },
     { id: "docs", label: t.chat_tab_docs },
     { id: "aiChat", label: t.chat_tab_ai },
   ];
 
-  const participants = [t.name_jisu, t.name_nayeon, t.name_seungju, t.name_donghyun];
+  const participants = Object.entries(memberNameById).map(([id, name]) => ({ id, name }));
 
   return (
     <div className="flex h-full flex-1 flex-col bg-recall-bgMain p-3">
@@ -572,15 +673,18 @@ export default function MainArea({
         <p className="truncate text-[13px] font-medium text-recall-text">{channel.name}</p>
         <div className="flex items-center gap-1">
           <div className="flex -space-x-1.5">
-            {participants.map((name) => {
+            {participants.map(({ id, name }) => {
               const isRecording = name === activeRecorderName;
               return (
-                <div key={name} title={isRecording ? `${name} · ${t.sidebar_recording}` : name} className="relative">
+                <div key={id} title={isRecording ? `${name} · ${t.sidebar_recording}` : name} className="relative">
                   <div
-                    className={`h-6 w-6 flex-shrink-0 rounded-full border-2 bg-recall-accent/40 ${
+                    className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 text-[10px] font-semibold text-white ${
                       isRecording ? "border-recall-danger" : "border-recall-bgMain"
                     }`}
-                  />
+                    style={{ backgroundColor: hashAvatarColor(id) }}
+                  >
+                    {name.slice(0, 1).toUpperCase()}
+                  </div>
                   {isRecording && (
                     <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-recall-danger text-white">
                       <MicIcon size={8} />
@@ -615,19 +719,41 @@ export default function MainArea({
           messages={chatMessages}
           onSend={sendChatMessage}
           onDeleteMessage={deleteMessage}
-          onUploadFiles={(files, kind) => addDocFiles(files, kind, true)}
+          onUploadFiles={handleUploadFromChat}
+          roomFiles={roomFiles.files}
+          onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           t={t}
         />
       )}
       {activeTab === "docs" && (
         <DocsTab
-          docs={docs}
-          onUploadFiles={(files, kind) => addDocFiles(files, kind, false)}
-          onRemoveDoc={removeDoc}
+          docs={mergedDocs}
+          onUploadFiles={(fileList) => handleUploadFromDocsTab(fileList)}
+          onRemoveDoc={handleRemoveDoc}
+          onLinkExisting={() => setShowLinkModal(true)}
+          onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           t={t}
         />
       )}
-      {activeTab === "aiChat" && <AiChatTab t={t} />}
+      {activeTab === "aiChat" && <AiChatTab workspaceId={workspaceId} roomId={channel.id} t={t} />}
+
+      {showLinkModal && (
+        <LinkExistingDocumentModal
+          workspaceId={workspaceId}
+          excludeIds={roomFiles.files.map((f) => f.id)}
+          onClose={() => setShowLinkModal(false)}
+          onLink={roomFiles.linkExistingFile}
+        />
+      )}
+
+      {previewDoc && (
+        <DocumentPreviewModal
+          workspaceId={workspaceId}
+          documentId={previewDoc.id}
+          documentName={previewDoc.name}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
     </div>
   );
 }

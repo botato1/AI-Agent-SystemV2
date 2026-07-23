@@ -17,6 +17,7 @@ export interface DocItem {
   id: string;
   name: string;
   size: number;
+  statusLabel?: string; // 실제 문서 파일의 분석 상태 등, 파일 크기 대신 표시할 라벨
   date: string;
   kind: "file" | "voice"; // 문서 업로드인지 음성 업로드인지 구분
 }

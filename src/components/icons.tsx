@@ -30,4 +30,5 @@ export {
   ArrowDown as PriorityLowIcon,
   ChevronLeft as ChevronLeftIcon,
   User as PersonIcon,
+  Link as LinkIcon,
 } from "lucide-react";
