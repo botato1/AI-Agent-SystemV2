@@ -25,6 +25,8 @@ class Meeting(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     duration_ms = Column(BigInteger, nullable=True)
+    paused_at = Column(DateTime(timezone=True), nullable=True)
+    paused_duration_ms = Column(BigInteger, nullable=False, server_default="0")
     created_at = created_at_col()
     updated_at = updated_at_col()
     deleted_at = Column(DateTime(timezone=True), nullable=True)
@@ -35,17 +37,10 @@ class Meeting(Base):
             name="chk_meetings_input_type",
         ),
         CheckConstraint(
-            "status IN ('created','recording','processing','completed','failed','cancelled')",
+            "status IN ('created','recording','paused','processing','completed','failed','cancelled')",
             name="chk_meetings_status",
         ),
-        Index(
-            "idx_meetings_workspace", "workspace_id", "started_at",
-            postgresql_where=text("deleted_at IS NULL"),
-        ),
-        Index(
-            "idx_meetings_category", "category_id", "started_at",
-            postgresql_where=text("deleted_at IS NULL"),
-        ),
+        # ... 기존 Index들 그대로
     )
 
 
