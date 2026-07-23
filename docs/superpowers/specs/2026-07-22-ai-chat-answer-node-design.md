@@ -56,16 +56,14 @@
    - 프롬프트에 (a) 검색된 청크 본문들, (b) `chat_history`의 최근 N턴(N=6, 최근 3턴 왕복), (c) 현재 질문을 넣어 Ollama에 일반 텍스트 생성 요청 (다른 두 노드와 달리 `format: "json"` 강제 안 함 — 채팅 답변은 자연어 그대로 노출).
    - 프롬프트에는 "근거 자료에 없는 내용은 답하지 말고 모른다고 답하라"는 지시를 포함해 환각을 최대한 억제한다 (완벽한 보장은 아니므로 3번의 규칙 기반 zero-result 처리가 1차 방어선, 이 지시문은 2차 방어선).
 
-5. **저장**:
-   - `ai_chat_crud.add_message(db, session_id=session_id, role="assistant", content=answer)`
-   - 유효한 청크마다 `AiMessageSource` 딕셔너리 조립: `{"source_type": "content_chunk", "file_id": chunk.file_id, "chunk_id": chunk.id, "similarity_score": candidate["score"], "display_order": i}` → `ai_chat_crud.add_sources(db, assistant_message.id, sources)`
+5. **저장 — 최신 라우터 코드 확인 결과 노드가 직접 안 함**: 라우터를 다시 확인해보니 이미 `ai_chat_crud.add_ai_exchange(db, *, session_id, user_content, assistant_content, sources, model_name)`가 구현되어 있고, user+assistant 메시지+근거자료를 답변 생성이 **성공한 뒤에만** 한 트랜잭션으로 저장하도록 라우터가 이미 짜여 있다 (실패 시 "답변 없는 질문"만 남는 걸 방지하는 의도). 따라서 노드는 DB에 쓰지 않고, `content_chunk_crud.get_chunk_by_chroma_id`로 청크를 **읽기만** 해서 `(answer, sources)`를 계산해 반환하는 순수 계산 노드로 설계를 수정한다. `sources`의 각 원소는 `{"source_type": "content_chunk", "file_id": chunk.file_id, "chunk_id": chunk.id, "similarity_score": candidate["score"], "display_order": i}` — `add_ai_exchange`의 `sources` 인자와 그대로 호환.
    - `code_fact` 소스 타입은 아직 코드베이스에 `code_fact` 모델/CRUD 자체가 없어(레포 전체 검색으로 확인됨) 이번 스코프에서 제외.
 
-6. **반환 state**: `answer`, `answer_model_name`, `chunk_search_results`(candidates), `assistant_message_id`, `retrieved_sources`, `saved_source_ids`.
+6. **반환 state**: `answer`, `answer_model_name`, `chunk_search_results`(candidates), `retrieved_sources`.
 
 ## 라우터 통합
 
-`send_ai_chat_message`는 오늘처럼 user 메시지를 먼저 저장한 뒤, `run_ai_chat_answer(...)`를 동기 호출한다. 노드가 자체 `SessionLocal()`로 이미 커밋까지 마치므로, 라우터는 `ai_chat_crud.get_session_history(db, session.id)`로 방금 저장된 assistant 메시지를 다시 조회해 응답을 만든다 (라우터의 request-scoped `db` 세션과 노드의 별도 세션 간 read-after-commit이라 정상 조회됨 — 기존 두 그래프도 동일하게 자체 세션을 씀).
+`send_ai_chat_message`는 (a) 답변 생성 전 시점의 `chat_history`를 `get_session_history`로 조회 → (b) `run_ai_chat_answer(...)`를 동기 호출해 `(answer, sources)`를 얻음 → (c) `ai_chat_crud.add_ai_exchange(...)`로 user+assistant+sources를 한 번에 저장. 노드가 DB에 쓰지 않으므로 세션 간 read-after-commit 이슈 자체가 없다.
 
 ## 에러 처리
 
