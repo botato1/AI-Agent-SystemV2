@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import ai_chat_crud, room_crud
+from backend.graphs.ai_chat_graph import run_ai_chat_answer
 from backend.schemas.chat_schema import (
     AIChatSessionSchema,
     AIChatMessageSchema,
@@ -31,12 +32,6 @@ def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
             detail="채팅방을 찾을 수 없습니다.",
         )
     return room
-
-
-# TODO(가동현): RAG 그래프 노드 연결 예정. 지금은 답변 생성 부분만 스텁 처리.
-def _generate_ai_response(session_id: UUID, question: str) -> tuple[str, list[dict]]:
-    """가동현님의 RAG 그래프 노드가 준비되면 이 함수를 실제 호출로 교체."""
-    raise NotImplementedError("AI 답변 생성 그래프가 아직 연결되지 않았습니다.")
 
 
 # 세션 조회/생성
@@ -64,26 +59,40 @@ def send_ai_chat_message(
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    _get_room_or_404(db, room_id, workspace_id)
+    room = _get_room_or_404(db, room_id, workspace_id)
 
     session = ai_chat_crud.get_or_create_session(db, workspace_id, room_id, UUID(current_user_id))
 
+    # 답변 생성 노드에 넘길 대화 이력 — 이번 질문을 저장하기 전 시점의 기록만 사용
+    # (저장 후 조회하면 방금 보낸 질문이 "이전 대화"에 중복으로 들어감)
+    history_rows = ai_chat_crud.get_session_history(db, session.id)
+    chat_history = [
+        {"role": m.role, "content": m.content}
+        for m in history_rows
+        if m.role in ("user", "assistant")
+    ]
+
+    result = run_ai_chat_answer(
+        session_id=str(session.id),
+        workspace_id=str(workspace_id),
+        category_id=str(room.category_id),
+        room_id=str(room_id),
+        user_id=current_user_id,
+        user_message=request.content,
+        chat_history=chat_history,
+    )
+    answer = result.get("answer") or "지금은 답변을 생성할 수 없습니다. 잠시 후 다시 시도해주세요."
+    sources = result.get("retrieved_sources") or []
+
     # 답변 생성을 먼저 시도하고 성공했을 때만 메시지를 저장한다.
     # (실패 시 대화기록에 "답변 없는 질문"만 남는 것을 방지)
-    try:
-        answer, sources = _generate_ai_response(session.id, request.content)
-    except NotImplementedError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI 답변 생성 기능은 아직 사용할 수 없습니다.",
-        )
-
     assistant_message = ai_chat_crud.add_ai_exchange(
         db,
         session_id=session.id,
         user_content=request.content,
         assistant_content=answer,
         sources=sources,
+        model_name=result.get("answer_model_name"),
     )
     return AIChatMessageSchema.model_validate(assistant_message)
 
