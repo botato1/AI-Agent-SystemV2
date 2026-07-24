@@ -5,14 +5,15 @@ import uuid
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import UploadFile
+from fastapi import UploadFile, BackgroundTasks
 import httpx
 from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
 
-from backend.db.crud import content_chunk_crud, document_crud, file_crud, room_crud
+from backend.db.crud import content_chunk_crud, document_crud, file_crud, room_crud, similarity_crud
 from backend.modules.rag.document_loader import load_document
 from backend.modules.rag.chroma_client import delete_document as chroma_delete_document
+from backend.services import similarity_service
 
 
 # 8003 문서 처리 서버 URL
@@ -282,6 +283,7 @@ async def upload_and_process_document(
     db: Session,
     file: UploadFile,
     workspace_id: UUID,
+    background_tasks: BackgroundTasks,
     room_id: str | None = None,
     document_type: str = "document",
     user_id: str | None = None,
@@ -397,6 +399,10 @@ async def upload_and_process_document(
         try:
             load_document(db, workspace_file.id, chunks=chunks)
             file_crud.update_analysis_status(db, workspace_file.id, "completed")
+            background_tasks.add_task(
+                similarity_service.compute_similarities_for_document_background,
+                workspace_id, workspace_file.id,
+            )
         except Exception as e:
             file_crud.update_analysis_status(db, workspace_file.id, "failed", error=repr(e))
             print(f"[document_service] ChromaDB 적재 실패: {repr(e)}")
@@ -433,7 +439,7 @@ async def upload_and_process_document(
         return _build_error_response(room_id, filename, document_type, "문서 업로드 또는 처리 중 오류가 발생했습니다.", repr(e))
 
 # 문서 재분석 (기존 저장 파일로 8003 재호출, 청크 재생성)
-async def retry_document_analysis(db: Session, file_id: UUID) -> dict:
+async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: BackgroundTasks | None = None) -> dict:
     workspace_file = file_crud.get_file(db, file_id)
     if not workspace_file:
         raise PermissionError("재분석할 문서를 찾을 수 없습니다.")
@@ -501,6 +507,11 @@ async def retry_document_analysis(db: Session, file_id: UUID) -> dict:
         try:
             load_document(db, file_id, chunks=chunks)
             file_crud.update_analysis_status(db, file_id, "completed")
+            if background_tasks is not None:
+                background_tasks.add_task(
+                    similarity_service.compute_similarities_for_document_background,
+                    workspace_file.workspace_id, file_id,
+                )
         except Exception as e:
             file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
             print(f"[document_service] 재분석 ChromaDB 적재 실패: {repr(e)}")
@@ -540,6 +551,13 @@ async def analyze_worktree_file_background(file_id: UUID) -> None:
     db = SessionLocal()
     try:
         await retry_document_analysis(db, file_id)
+        # 이미 백그라운드 컨텍스트라 FastAPI BackgroundTasks가 없다 —
+        # retry_document_analysis 안에서는 트리거 안 되므로 여기서 직접 계산한다.
+        workspace_file = file_crud.get_file(db, file_id)
+        if workspace_file:
+            similarity_service.compute_similarities_for_document(
+                db, workspace_file.workspace_id, file_id,
+            )
     except Exception as e:
         print(f"[document_service] 워크트리 파일 자동 분석 실패: file_id={file_id}, error={repr(e)}")
     finally:
@@ -626,6 +644,7 @@ def delete_processed_document(db: Session, file_id: UUID) -> dict:
             chroma_deleted = False
             print(f"[document_service] ChromaDB 벡터 삭제 실패: {repr(e)}")
 
+        similarity_crud.delete_similarities_for_file(db, file_id)
         file_crud.delete_file(db, file_id)
 
         return {

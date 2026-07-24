@@ -58,3 +58,10 @@ def get_similarities_for_workspace(
         )
         .all()
     )
+
+def delete_similarities_for_file(db: Session, file_id: uuid.UUID) -> None:
+    """문서 삭제/재분석 시 관련 유사도 row를 정리한다."""
+    db.query(FileSimilarity).filter(
+        (FileSimilarity.source_file_id == file_id) | (FileSimilarity.target_file_id == file_id)
+    ).delete(synchronize_session=False)
+    db.commit()

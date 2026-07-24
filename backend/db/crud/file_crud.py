@@ -188,6 +188,20 @@ def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str) -> 
         .all()
     )
 
+def list_graph_eligible_files(
+    db: Session, workspace_id: uuid.UUID, exclude_file_id: Optional[uuid.UUID] = None
+) -> list[WorkspaceFile]:
+    """그래프뷰 대상 문서 조회. file_kind=document, analysis_status=completed, is_latest=true."""
+    q = db.query(WorkspaceFile).filter(
+        WorkspaceFile.workspace_id == workspace_id,
+        WorkspaceFile.file_kind == "document",
+        WorkspaceFile.analysis_status == "completed",
+        WorkspaceFile.is_latest.is_(True),
+        WorkspaceFile.deleted_at.is_(None),
+    )
+    if exclude_file_id:
+        q = q.filter(WorkspaceFile.id != exclude_file_id)
+    return q.all()
 
 def link_file_to_room(db: Session, room_id: uuid.UUID, file_id: uuid.UUID, linked_by: uuid.UUID) -> RoomFileLink:
     row = RoomFileLink(room_id=room_id, file_id=file_id, linked_by=linked_by)
