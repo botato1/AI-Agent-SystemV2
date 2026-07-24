@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import re
 import time
+import uuid
 
 import fitz
 import pdfplumber
@@ -17,6 +19,7 @@ from doc_processor.core.models import (
     PageContent,
     PageResult,
     TableBlock,
+    compute_doc_id,
 )
 from doc_processor.core.pdf_classifier import classify_pdf
 from doc_processor.confidence.engine import ConfidenceEngine
@@ -41,6 +44,8 @@ from doc_processor.postprocess.vl_parser import parse as vl_parse
 from doc_processor.parsers.table_parser import extract_tables
 from doc_processor.parsers.text_parser import extract_text_blocks
 from doc_processor.ocr.image_preprocessor import preprocess_for_ocr
+
+_FIGURE_STORAGE_DIR = Path(__file__).parent.parent.parent / "storage" / "uploads" / "documents" / "figures"
 
 
 class DocumentPipeline:
@@ -116,10 +121,6 @@ class DocumentPipeline:
         if self._paddle is None:
             print("[Pipeline] Loading PaddleOCR...")
             self._paddle = PaddleEngine()
-        # surya 비활성화 (surya-ocr 0.20.0 Docker 의존성 문제)
-        # if self._surya is None:
-        #     print("[Pipeline] Loading Surya OCR...")
-        #     self._surya = SuryaEngine()
 
     def run(self, pdf_path: str) -> DocumentResult:
         path = Path(pdf_path)
@@ -158,6 +159,7 @@ class DocumentPipeline:
         self._ocr_stats = OcrStats()
         self._worst_ocr = []                    # worst-20 리스트 초기화
         _pipeline_start = time.perf_counter()   # 전체 처리 시간 측정 시작
+        self._current_doc_id = compute_doc_id(str(path))   # figure 이미지 저장 경로용 doc_id (assembler.py와 동일 공식)
 
         doc = DocumentResult(source=str(path), pdf_type=pdf_type)
 
@@ -236,6 +238,9 @@ class DocumentPipeline:
 
         # 4. 보충 OCR: YOLO/PyMuPDF 처리 후에도 내용이 거의 없으면
         #    전체 페이지 OCR로 누락된 이미지 영역을 보충한다.
+        #    단, VL 큐에 이 페이지의 표/차트 처리가 대기 중이면 스킵한다
+        #    (아직 처리 안 된 것을 "내용 없음"으로 착각해 전체 페이지를
+        #    중복으로 재-OCR하는 버그 수정 — 2026-07-16)
         has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 2
         has_ocr_text  = bool(content.images)
         has_tables    = bool(content.tables)
@@ -485,7 +490,7 @@ class DocumentPipeline:
 
             self._ocr_stats.attempt_count += 1
             self._ocr_stats.success_count += 1
-            self._append_ocr_result(content, ocr_result, list(nb), page_no)
+            self._append_ocr_result(content, ocr_result, list(nb), page_no, cropped_image=cropped)
 
     # ── OCR 경로 B: PyMuPDF 이미지 블록 기반 (Docling 없을 때 폴백) ──────────
 
@@ -534,13 +539,22 @@ class DocumentPipeline:
 
                 self._ocr_stats.attempt_count += 1
                 self._ocr_stats.success_count += 1
-                self._append_ocr_result(content, ocr_result, list(nb), page_no)
+                self._append_ocr_result(content, ocr_result, list(nb), page_no, cropped_image=cropped)
 
         elif not content.text and not content.tables:
             print("  → 텍스트/표 없음, 페이지 전체 OCR")
             self._ocr_full_page(fitz_page, content, page_no=page_no)
         else:
             print("  → 이미지 없음, OCR 스킵")
+
+    def _save_figure_image(self, image, page_no: int) -> str:
+        """크롭된 figure 이미지를 파일로 저장하고, 응답에 실을 상대경로를 반환합니다."""
+        doc_id = self._current_doc_id
+        dir_path = _FIGURE_STORAGE_DIR / doc_id
+        dir_path.mkdir(parents=True, exist_ok=True)
+        filename = f"page{page_no}_{uuid.uuid4().hex[:8]}.png"
+        image.save(dir_path / filename)
+        return f"documents/figures/{doc_id}/{filename}"
 
     # ── 페이지 전체 OCR (스캔 페이지용) ──────────────────────────────────────
 
@@ -552,7 +566,7 @@ class DocumentPipeline:
             return
         self._ocr_stats.success_count += 1   # full_page 성공 집계
         w, h = page_image.size
-        self._append_ocr_result(content, ocr_result, [0.0, 0.0, float(w), float(h)], page_no)
+        self._append_ocr_result(content, ocr_result, [0.0, 0.0, float(w), float(h)], page_no, cropped_image=page_image)
 
     # ── VL 일괄 처리 ─────────────────────────────────────────────────────────
 
@@ -597,7 +611,7 @@ class DocumentPipeline:
                 }
                 self._ocr_stats.success_count += 1
                 self._append_ocr_result(
-                    task["content"], result, task["bbox"], task["page_no"]
+                    task["content"], result, task["bbox"], task["page_no"], cropped_image=task["image"]
                 )
 
         # ── Pass 1: PaddleOCR-VL-1.6 (표) ─────────────────────────────────
@@ -672,9 +686,14 @@ class DocumentPipeline:
         ocr_result: dict,
         bbox: list[float],
         page_no: int,
+        cropped_image=None,
     ) -> None:
         """OCR 결과를 fig_type에 따라 content.images / tables / charts에 추가합니다."""
         vl_fig_type = ocr_result.get("vl_fig_type")
+
+        image_path = ""
+        if cropped_image is not None:
+            image_path = self._save_figure_image(cropped_image, page_no)
 
         if vl_fig_type == "diagram":
             parsed = vl_parse(ocr_result["text"], vl_fig_type, page_no)
@@ -687,6 +706,7 @@ class DocumentPipeline:
                 surya_lines=ocr_result.get("surya_lines", []),
                 quality_score=ocr_result["quality_score"],
                 image_type="diagram",
+                image_path=image_path,
             ))
         elif vl_fig_type in ("table_image", "chart"):
             parsed = vl_parse(ocr_result["text"], vl_fig_type, page_no)
@@ -695,6 +715,7 @@ class DocumentPipeline:
                     data=[],
                     markdown=parsed["markdown"],
                     bbox=bbox,
+                    image_path=image_path,
                 ))
             else:
                 vl_title = parsed.get("title", "")
@@ -708,6 +729,7 @@ class DocumentPipeline:
                         "data":  parsed.get("data", []),
                         "raw_text": parsed["raw_text"],
                     },
+                    image_path=image_path,
                 ))
         else:
             content.images.append(ImageBlock(
@@ -719,6 +741,7 @@ class DocumentPipeline:
                 surya_lines=ocr_result.get("surya_lines", []),
                 quality_score=ocr_result["quality_score"],
                 debug=ocr_result.get("debug"),
+                image_path=image_path,
             ))
 
     # ── OCR 실행 공통 로직 ────────────────────────────────────────────────────

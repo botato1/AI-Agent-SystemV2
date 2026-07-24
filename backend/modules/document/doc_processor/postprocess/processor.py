@@ -37,6 +37,7 @@ class PostProcessor:
                 surya_lines=img.surya_lines,
                 quality_score=img.quality_score,   # 손실 방지: OCR 품질 점수 유지
                 debug=new_debug,                   # 손실 방지: 디버그 정보 유지
+                image_path=img.image_path,         # 손실 방지: figure 이미지 경로 유지
             ))
 
         return PageContent(
