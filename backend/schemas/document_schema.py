@@ -22,10 +22,10 @@ from pydantic import BaseModel, Field
 from backend.schemas.common_schema import TimestampSchema
 from backend.schemas.type_schema import (
     DEFAULT_DOCUMENT_TYPE,
+    DocumentFigureType,
     DocumentType,
     FileAnalysisStatus,
 )
-
 
 # =============================================================================
 # Legacy: 기존 문서 처리 결과 스키마
@@ -198,3 +198,19 @@ class DocumentAnalysisSchema(TimestampSchema):
         default=None,
         max_length=100,
     )
+
+# =============================================================================
+# Re:Call: document_figures
+# =============================================================================
+
+class DocumentFigureSchema(BaseModel):
+    """문서에서 감지된 표/차트/다이어그램 크롭 이미지 참조 하나를 표현한다."""
+
+    figure_id: UUID
+    page_number: int = Field(..., ge=1)
+    type: DocumentFigureType
+    image_url: str
+
+
+class DocumentFigureListResponse(BaseModel):
+    figures: list[DocumentFigureSchema] = Field(default_factory=list)

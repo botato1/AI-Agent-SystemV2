@@ -12,7 +12,8 @@ from backend.services.document_service import (
     get_document_detail,
     retry_document_analysis,
 )
-from backend.db.crud import file_crud
+from backend.db.crud import document_crud, file_crud
+from backend.schemas.document_schema import DocumentFigureListResponse
 from backend.db.session import get_db
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 
@@ -228,3 +229,22 @@ def delete_document_api(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="문서 삭제 중 오류가 발생했습니다.",
         )
+    
+    
+@router.get("/{document_id}/figures", response_model=DocumentFigureListResponse)
+def get_document_figures_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    figures = document_crud.list_figures_by_file(db, document_id)
+    return DocumentFigureListResponse(
+        figures=[
+            {"figure_id": f.id, "page_number": f.page_number, "type": f.figure_type, "image_url": f.image_url}
+            for f in figures
+        ]
+    )

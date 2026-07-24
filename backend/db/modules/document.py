@@ -1,6 +1,9 @@
 """일반 문서 / 이미지 OCR 분석 결과"""
 
-from sqlalchemy import BigInteger, Column, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger, CheckConstraint, Column, ForeignKey, Index,
+    Integer, Numeric, String, Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 
 from backend.db.base import Base
@@ -29,3 +32,24 @@ class DocumentAnalysis(Base):
     model_name = Column(String(100), nullable=True)
     created_at = created_at_col()
     updated_at = updated_at_col()
+
+class DocumentFigure(Base):
+    """문서 분석 시 감지된 표/차트/다이어그램의 크롭 이미지 참조."""
+
+    __tablename__ = "document_figures"
+
+    id = uuid_pk()
+    file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=False)
+    page_number = Column(Integer, nullable=False)
+    figure_type = Column(String(20), nullable=False)
+    image_url = Column(Text, nullable=False)
+    display_order = Column(Integer, nullable=False, server_default="0")
+    created_at = created_at_col()
+
+    __table_args__ = (
+        CheckConstraint(
+            "figure_type IN ('table','chart','image','diagram')",
+            name="chk_document_figures_type",
+        ),
+        Index("idx_document_figures_file", "file_id", "page_number"),
+    )

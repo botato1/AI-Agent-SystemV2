@@ -144,6 +144,12 @@ FileAnalysisStatus = Literal[
     "excluded",
 ]
 
+DocumentFigureType = Literal[
+    "table",
+    "chart",
+    "image",
+    "diagram",
+]
 
 # 코드 및 설정 파일 분석
 CodeFileRole = Literal[

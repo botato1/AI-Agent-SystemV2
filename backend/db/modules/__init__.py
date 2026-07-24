@@ -15,7 +15,7 @@ from .auth import RefreshToken, User
 from .workspace import Workspace, WorkspaceMember
 from .room import Category, Room, RoomMessage
 from .file import RoomFileLink, Worktree, WorkspaceFile
-from .document import DocumentAnalysis
+from .document import DocumentAnalysis, DocumentFigure
 from .code import CodeAnalysis, CodeFact, CodeSymbol
 from .content_chunk import ContentChunk
 from .similarity import FileSimilarity
@@ -30,7 +30,7 @@ __all__ = [
     "Workspace", "WorkspaceMember",
     "Category", "Room", "RoomMessage",
     "Worktree", "WorkspaceFile", "RoomFileLink",
-    "DocumentAnalysis",
+    "DocumentAnalysis", "DocumentFigure",
     "CodeAnalysis", "CodeSymbol", "CodeFact",
     "ContentChunk",
     "FileSimilarity",
