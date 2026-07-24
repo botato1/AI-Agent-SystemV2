@@ -4,7 +4,8 @@ __pycache__/
 .env
 *.pyc
 .DS_Store
-frontend/node_modules/
+node_modules/
+**/node_modules/
 
 # 테스트 파일
 test_file/
@@ -15,6 +16,7 @@ data/raw/
 data/processed/
 data/knowledge/
 data/uploads/
+backend/modules/document/dataset/
 
 # 자동 생성 저장소
 storage/
