@@ -361,7 +361,7 @@ def search_hybrid(
             semantic_score = 1.0 - distance
             raw_bm25       = bm25_score_map.get(doc_id, 0.0)
             keyword_score  = min(raw_bm25 / max_bm25, 1.0)
-            final_score    = (semantic_score * 0.7) + (keyword_score * 0.3)
+            final_score    = float((semantic_score * 0.7) + (keyword_score * 0.3))
 
             all_results.append({
                 "id":          doc_id,
