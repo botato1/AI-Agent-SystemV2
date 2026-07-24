@@ -29,6 +29,21 @@ def _load():
     return _model, _processor
 
 
+def unload() -> None:
+    """모델을 GPU 메모리에서 실제로 내립니다 (모듈 전역 참조까지 해제).
+
+    _load()가 모델을 모듈 전역변수(_model)에 캐싱해두기 때문에,
+    VLEngine 인스턴스를 del 해도 이 전역 참조가 남아있으면
+    GPU 메모리가 절대 해제되지 않는다. 반드시 이 함수로 전역변수까지 None 처리해야 함.
+    """
+    global _model, _processor
+    if _model is not None:
+        del _model
+        del _processor
+        _model = None
+        _processor = None
+
+
 class VLEngine:
     """표/차트 이미지를 Markdown 텍스트로 변환합니다."""
 

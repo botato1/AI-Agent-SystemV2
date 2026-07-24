@@ -38,8 +38,8 @@ from doc_processor.parsers.image_parser import (
     render_page,
 )
 from doc_processor.ocr.table_ocr import get_or_create_tsr, run_table_ocr
-from doc_processor.ocr.vl_engine import VLEngine as QwenVLEngine
-from doc_processor.ocr.paddle_vl_1_6_engine import PaddleVL16Engine
+from doc_processor.ocr.vl_engine import VLEngine as QwenVLEngine, unload as _unload_qwen_vl
+from doc_processor.ocr.paddle_vl_1_6_engine import PaddleVL16Engine, unload as _unload_paddle_vl
 from doc_processor.postprocess.vl_parser import parse as vl_parse
 from doc_processor.parsers.table_parser import extract_tables
 from doc_processor.parsers.text_parser import extract_text_blocks
@@ -620,6 +620,7 @@ class DocumentPipeline:
             paddle_engine = PaddleVL16Engine()
             _process_tasks(paddle_engine, table_tasks, "paddle-vl-1.6")
             del paddle_engine
+            _unload_paddle_vl()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print("[VL] Paddle-VL 언로드 완료")
@@ -634,6 +635,7 @@ class DocumentPipeline:
             _process_tasks(qwen_engine, chart_tasks, "qwen3-vl")
             _process_tasks(qwen_engine, diagram_tasks, "qwen3-vl-diagram")
             del qwen_engine
+            _unload_qwen_vl()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print("[VL] Qwen3-VL 언로드 완료")
