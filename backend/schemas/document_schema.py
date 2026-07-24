@@ -214,3 +214,29 @@ class DocumentFigureSchema(BaseModel):
 
 class DocumentFigureListResponse(BaseModel):
     figures: list[DocumentFigureSchema] = Field(default_factory=list)
+
+
+# =============================================================================
+# Re:Call: documents graph view
+# =============================================================================
+
+class DocumentGraphNodeSchema(BaseModel):
+    file_id: UUID
+    filename: str
+
+
+class DocumentGraphEdgeSchema(BaseModel):
+    source_file_id: UUID
+    target_file_id: UUID
+    similarity_score: Decimal = Field(
+        ...,
+        ge=0,
+        le=1,
+        max_digits=5,
+        decimal_places=4,
+    )
+
+
+class DocumentGraphResponse(BaseModel):
+    nodes: list[DocumentGraphNodeSchema] = Field(default_factory=list)
+    edges: list[DocumentGraphEdgeSchema] = Field(default_factory=list)
