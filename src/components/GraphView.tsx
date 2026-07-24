@@ -507,8 +507,8 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
   return (
     <div className="flex h-full w-full flex-col bg-recall-bgMain p-4 text-recall-text">
       <div className="mb-4">
-        <p className="text-sm font-semibold">{t.graph_title || "지식 그래프 시각화"}</p>
-        <p className="text-xs text-recall-textMuted">
+        <p className="text-base font-semibold">{t.graph_title || "지식 그래프 시각화"}</p>
+        <p className="text-sm text-recall-textMuted">
           {t.graph_sub || "문서 내용 유사도 기반 지식 네트워크"}
           {isLoadingEdges && " · 연관성 분석 중..."}
         </p>
@@ -516,7 +516,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
 
       {analyzedDocs.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-recall-border bg-recall-bgSoft">
-          <p className="text-sm text-recall-textMuted">{t.graph_no_docs || "분석 완료된 문서가 없습니다."}</p>
+          <p className="text-base text-recall-textMuted">{t.graph_no_docs || "분석 완료된 문서가 없습니다."}</p>
         </div>
       ) : (
         <div className="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
@@ -550,7 +550,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
               >
                 <div className="h-0 w-0 border-x-4 border-x-transparent border-b-4 border-b-recall-bgMain" />
                 <div className="whitespace-nowrap rounded-md border border-recall-border bg-recall-bgMain px-2.5 py-1 text-center shadow-xl">
-                  <p className="text-[11px] font-semibold text-recall-text">{hoveredNode.name}</p>
+                  <p className="text-xs font-semibold text-recall-text">{hoveredNode.name}</p>
                 </div>
               </div>
             )}
@@ -558,22 +558,22 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
 
           <div className="flex flex-col gap-4 overflow-hidden">
             <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-              <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
+              <p className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">
                 <SparklesIcon size={14} className="text-recall-accent" />
                 연관 문서 {selectedDoc ? `- ${selectedDoc.name}` : ""}
               </p>
               {relatedToSelected.length === 0 ? (
-                <p className="text-xs text-recall-textMuted">연관된 문서가 없습니다.</p>
+                <p className="text-sm text-recall-textMuted">연관된 문서가 없습니다.</p>
               ) : (
                 <div className="space-y-1.5">
                   {relatedToSelected.map(({ doc, strength }) => (
                     <button
                       key={doc!.id}
                       onClick={() => setSelectedDocId(doc!.id)}
-                      className="flex w-full items-center justify-between rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-left text-xs hover:border-recall-accent/50"
+                      className="flex w-full items-center justify-between rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-left text-sm hover:border-recall-accent/50"
                     >
                       <span className="truncate text-recall-text">{doc!.name}</span>
-                      <span className="ml-2 flex-shrink-0 text-[10px] text-recall-textMuted">
+                      <span className="ml-2 flex-shrink-0 text-[11px] text-recall-textMuted">
                         {Math.round(strength * 100)}%
                       </span>
                     </button>
@@ -583,7 +583,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
             </div>
 
             <div className="flex-1 rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-y-auto">
-              <p className="mb-3 text-xs font-semibold text-recall-textMuted uppercase">
+              <p className="mb-3 text-sm font-semibold text-recall-textMuted uppercase">
                 전체 문서 목록 ({analyzedDocs.length})
               </p>
 
@@ -595,7 +595,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
                     <div
                       key={doc.id}
                       onClick={() => setSelectedDocId(doc.id)}
-                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-xs transition ${
+                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-sm transition ${
                         isSelected
                           ? "border-recall-accent bg-recall-accent/10 shadow-sm"
                           : "border-recall-border bg-recall-bgMain hover:border-recall-accent/50"
@@ -609,7 +609,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
                           e.stopPropagation();
                           onGoToAnalysis(doc.id);
                         }}
-                        className="shrink-0 rounded-lg bg-recall-accent/15 px-2.5 py-1.5 text-[11px] font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
+                        className="shrink-0 rounded-lg bg-recall-accent/15 px-2.5 py-1.5 text-xs font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
                       >
                         상세보기 →
                       </button>

@@ -146,7 +146,7 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm font-semibold text-recall-text">{t.modal_add_task_title}</p>
+          <p className="text-base font-semibold text-recall-text">{t.modal_add_task_title}</p>
           <button onClick={onClose} className="flex h-6 w-6 items-center justify-center rounded hover:bg-white/5">
             <CloseIcon size={14} className="text-recall-textMuted" />
           </button>
@@ -155,32 +155,32 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
         <div className="flex flex-col gap-3">
           {/* 업무 제목 */}
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">
+            <label className="mb-1 block text-sm text-recall-textMuted">
               {t.modal_task_content} <span className="text-recall-danger">*</span>
             </label>
             <input
               value={form.task}
               onChange={(e) => handleChange("task", e.target.value)}
               placeholder={t.modal_task_content_placeholder}
-              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
           </div>
 
           {/* 부가 설명 (상세 내용) */}
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">상세 설명</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">상세 설명</label>
             <textarea
               rows={3}
               value={form.description}
               onChange={(e) => handleChange("description", e.target.value)}
               placeholder="업무에 필요한 추가 내용이나 설명글을 적어주세요."
-              className="w-full resize-none rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+              className="w-full resize-none rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
           </div>
 
           {/* 담당자 */}
           <div className="relative" ref={assigneeRef}>
-            <label className="mb-1 block text-xs text-recall-textMuted">{t.modal_assignee}</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_assignee}</label>
             <input
               value={form.assignee}
               onFocus={() => setIsAssigneeOpen(true)}
@@ -195,7 +195,7 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
                 }
               }}
               placeholder={t.modal_assignee_placeholder}
-              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
 
             {isAssigneeOpen && filteredMembers.length > 0 && (
@@ -208,7 +208,7 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
                       handleChange("assignee", memberName);
                       setIsAssigneeOpen(false);
                     }}
-                    className="flex w-full items-center px-3 py-2 text-left text-xs hover:bg-white/5 transition"
+                    className="flex w-full items-center px-3 py-2 text-left text-sm hover:bg-white/5 transition"
                   >
                     <span>{memberName}</span>
                   </button>
@@ -219,10 +219,10 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
 
           {/* 마감일 */}
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">{t.modal_deadline}</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_deadline}</label>
             <div
               onClick={handleOpenDatePicker}
-              className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
+              className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
             >
               <span className={form.deadline ? "text-recall-text" : "text-recall-textMuted"}>
                 {form.deadline
@@ -246,11 +246,11 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
 
           {/* 우선순위 */}
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">{t.modal_priority}</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_priority}</label>
             <select
               value={form.priority}
               onChange={(e) => handleChange("priority", e.target.value as TaskPriority)}
-              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text focus:outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
             >
               <option value="high">{t.priority_high}</option>
               <option value="medium">{t.priority_medium}</option>
@@ -259,18 +259,18 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
           </div>
         </div>
 
-        {error && <p className="mt-3 text-xs text-recall-danger">{error}</p>}
+        {error && <p className="mt-3 text-sm text-recall-danger">{error}</p>}
 
         <div className="mt-5 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded-lg border border-recall-border px-4 py-2 text-xs text-recall-textMuted hover:bg-white/5"
+            className="rounded-lg border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5"
           >
             {t.task_cancel}
           </button>
           <button
             onClick={handleSubmit}
-            className="rounded-lg bg-recall-accent px-4 py-2 text-xs text-white hover:opacity-90 font-medium"
+            className="rounded-lg bg-recall-accent px-4 py-2 text-sm text-white hover:opacity-90 font-medium"
           >
             {t.modal_btn_add}
           </button>

@@ -67,11 +67,11 @@ export default function Settings({
       <div className="flex h-[520px] w-[500px] flex-col rounded-2xl border border-recall-border bg-recall-bg text-recall-text shadow-2xl">
         {/* 헤더 */}
         <div className="flex items-center justify-between border-b border-recall-border px-6 py-4">
-          <p className="text-base font-bold">{t.settings_title || "설정"}</p>
+          <p className="text-lg font-bold">{t.settings_title || "설정"}</p>
           <button
             type="button"
             onClick={onClose}
-            className="text-xs text-recall-textMuted hover:text-recall-text transition"
+            className="text-sm text-recall-textMuted hover:text-recall-text transition"
           >
             {t.btn_close || "닫기"}
           </button>
@@ -81,14 +81,14 @@ export default function Settings({
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           {/* 1. 워크스페이스 구역 */}
           <div>
-            <p className="mb-2 text-xs font-semibold text-recall-textMuted">
+            <p className="mb-2 text-sm font-semibold text-recall-textMuted">
               {t.workspace || "워크스페이스"}
             </p>
             <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
               {workspaceSectionItems.map((item) => (
                 <div
                   key={item.label}
-                  className="flex items-center justify-between border-b border-recall-border last:border-b-0 px-4 py-3 text-sm"
+                  className="flex items-center justify-between border-b border-recall-border last:border-b-0 px-4 py-3 text-base"
                 >
                   <span className="text-recall-text font-medium">{item.label}</span>
                   <span className="text-recall-textMuted font-medium">{item.value}</span>
@@ -99,14 +99,14 @@ export default function Settings({
 
           {/* 2. 알림 구역 */}
           <div>
-            <p className="mb-2 text-xs font-semibold text-recall-textMuted">
+            <p className="mb-2 text-sm font-semibold text-recall-textMuted">
               {t.settings_notif || "알림"}
             </p>
             <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
               {notificationSectionItems.map((item) => (
                 <div
                   key={item.label}
-                  className="flex items-center justify-between border-b border-recall-border last:border-b-0 px-4 py-3 text-sm"
+                  className="flex items-center justify-between border-b border-recall-border last:border-b-0 px-4 py-3 text-base"
                 >
                   <span className="text-recall-text font-medium">{item.label}</span>
                   <span className="text-recall-textMuted">{item.value}</span>
@@ -117,7 +117,7 @@ export default function Settings({
 
           {/* 3. 화면 구역 */}
           <div>
-            <p className="mb-2 text-xs font-semibold text-recall-textMuted">
+            <p className="mb-2 text-sm font-semibold text-recall-textMuted">
               {t.settings_display || "화면"}
             </p>
             <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
@@ -125,7 +125,7 @@ export default function Settings({
               <button
                 type="button"
                 onClick={onToggleTheme}
-                className="flex w-full items-center justify-between border-b border-recall-border px-4 py-3 text-sm hover:bg-white/5 transition"
+                className="flex w-full items-center justify-between border-b border-recall-border px-4 py-3 text-base hover:bg-white/5 transition"
               >
                 <span className="flex items-center gap-2 text-recall-text font-medium">
                   {theme === "dark" ? <MoonIcon size={14} /> : <SunIcon size={14} />}
@@ -148,7 +148,7 @@ export default function Settings({
               <button
                 type="button"
                 onClick={() => onChangeLang(lang === "ko" ? "en" : "ko")}
-                className="flex w-full items-center justify-between px-4 py-3 text-sm hover:bg-white/5 transition"
+                className="flex w-full items-center justify-between px-4 py-3 text-base hover:bg-white/5 transition"
               >
                 <span className="text-recall-text font-medium">{t.settings_lang || "언어"}</span>
                 <span className="font-semibold text-recall-accent">
@@ -160,7 +160,7 @@ export default function Settings({
 
           {/* 4. 계정 관리 구역 */}
           <div>
-            <p className="mb-2 text-xs font-semibold text-recall-textMuted">
+            <p className="mb-2 text-sm font-semibold text-recall-textMuted">
               계정 관리
             </p>
             <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
@@ -173,7 +173,7 @@ export default function Settings({
                     else onLogout();
                   }
                 }}
-                className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-recall-danger hover:bg-recall-danger/10 transition"
+                className="flex w-full items-center justify-between px-4 py-3 text-base font-medium text-recall-danger hover:bg-recall-danger/10 transition"
               >
                 <span>회원 탈퇴</span>
               </button>

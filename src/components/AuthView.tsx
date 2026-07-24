@@ -297,8 +297,8 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-recall-bg p-4 text-recall-text">
       <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-lg">
-        <p className="mb-1 text-lg font-semibold text-recall-text">Re:Call</p>
-        <p className="mb-5 text-sm text-recall-textMuted">
+        <p className="mb-1 text-xl font-semibold text-recall-text">Re:Call</p>
+        <p className="mb-5 text-base text-recall-textMuted">
           {mode === "login" ? "다시 오셨네요! 로그인해주세요." : "회원가입하고 팀과 함께 시작해보세요."}
         </p>
 
@@ -326,11 +326,11 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
                   />
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-xs text-recall-text hover:bg-white/5"
+                    className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-sm text-recall-text hover:bg-white/5"
                   >
                     내 사진 업로드
                   </button>
-                  <p className="mb-1.5 text-[11px] text-recall-textMuted">또는 색상 선택</p>
+                  <p className="mb-1.5 text-xs text-recall-textMuted">또는 색상 선택</p>
                   <div className="flex flex-wrap gap-1.5">
                     {AVATAR_COLORS.map((color) => (
                       <button
@@ -360,33 +360,33 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
           {/* 이름 입력 (회원가입) */}
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-xs text-recall-textMuted">이름</label>
+              <label className="mb-1 block text-sm text-recall-textMuted">이름</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="이름을 입력하세요"
-                className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+                className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
               />
             </div>
           )}
 
           {/* 아이디 입력 */}
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">아이디</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">아이디</label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="아이디를 입력하세요"
-              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
             {mode === "signup" && (
               <div className="mt-1 min-h-[18px]">
                 {isUserIdChecking ? (
-                  <p className="text-xs text-recall-textMuted">중복 확인 중...</p>
+                  <p className="text-sm text-recall-textMuted">중복 확인 중...</p>
                 ) : userIdMessage ? (
-                  <p className={`text-xs ${isUserIdAvailable ? "text-emerald-400" : "text-recall-danger"}`}>
+                  <p className={`text-sm ${isUserIdAvailable ? "text-emerald-400" : "text-recall-danger"}`}>
                     {userIdMessage}
                   </p>
                 ) : null}
@@ -397,20 +397,20 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
           {/* 이메일 입력 (회원가입 분할 드롭다운) */}
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-xs text-recall-textMuted">이메일</label>
+              <label className="mb-1 block text-sm text-recall-textMuted">이메일</label>
               <div className="flex items-center gap-1.5">
                 <input
                   type="text"
                   value={emailUser}
                   onChange={(e) => setEmailUser(e.target.value)}
                   placeholder="이메일 주소"
-                  className="w-1/2 rounded-lg border border-recall-border bg-transparent px-2.5 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+                  className="w-1/2 rounded-lg border border-recall-border bg-transparent px-2.5 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
                 />
-                <span className="text-xs text-recall-textMuted">@</span>
+                <span className="text-sm text-recall-textMuted">@</span>
                 <select
                   value={emailDomain}
                   onChange={(e) => setEmailDomain(e.target.value)}
-                  className="w-1/2 rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-2 text-xs text-recall-text focus:outline-none focus:border-recall-accent"
+                  className="w-1/2 rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-2 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
                 >
                   <option value="gmail.com">gmail.com</option>
                   <option value="naver.com">naver.com</option>
@@ -425,15 +425,15 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
                   value={customDomain}
                   onChange={(e) => setCustomDomain(e.target.value)}
                   placeholder="도메인 입력 (예: company.com)"
-                  className="mt-1.5 w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+                  className="mt-1.5 w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
                 />
               )}
 
               <div className="mt-1 min-h-[18px]">
                 {isEmailChecking ? (
-                  <p className="text-xs text-recall-textMuted">중복 확인 중...</p>
+                  <p className="text-sm text-recall-textMuted">중복 확인 중...</p>
                 ) : emailMessage ? (
-                  <p className={`text-xs ${isEmailAvailable ? "text-emerald-400" : "text-recall-danger"}`}>
+                  <p className={`text-sm ${isEmailAvailable ? "text-emerald-400" : "text-recall-danger"}`}>
                     {emailMessage}
                   </p>
                 ) : null}
@@ -443,14 +443,14 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
 
           {/* 비밀번호 입력 */}
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">비밀번호</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">비밀번호</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               onKeyDown={(e) => e.key === "Enter" && mode === "login" && handleLogIn()}
-              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
             {mode === "login" && (
               <button
@@ -460,7 +460,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
                   setResetMessage(null);
                   setResetEmail("");
                 }}
-                className="mt-1.5 text-xs text-recall-textMuted hover:text-recall-accent hover:underline transition"
+                className="mt-1.5 text-sm text-recall-textMuted hover:text-recall-accent hover:underline transition"
               >
                 비밀번호를 잊으셨습니까?
               </button>
@@ -470,28 +470,28 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
           {/* 비밀번호 확인 (회원가입) */}
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-xs text-recall-textMuted">비밀번호 확인</label>
+              <label className="mb-1 block text-sm text-recall-textMuted">비밀번호 확인</label>
               <input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="••••••••"
                 onKeyDown={(e) => e.key === "Enter" && handleSignUp()}
-                className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+                className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
               />
               {confirmPassword && password !== confirmPassword && (
-                <p className="mt-1 text-xs text-recall-danger">비밀번호가 일치하지 않아요.</p>
+                <p className="mt-1 text-sm text-recall-danger">비밀번호가 일치하지 않아요.</p>
               )}
             </div>
           )}
         </div>
 
-        {error && <p className="mt-3 text-xs text-recall-danger">{error}</p>}
+        {error && <p className="mt-3 text-sm text-recall-danger">{error}</p>}
 
         <button
           onClick={mode === "login" ? handleLogIn : handleSignUp}
           disabled={isSubmitting}
-          className="mt-5 w-full rounded-lg bg-recall-accent py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
+          className="mt-5 w-full rounded-lg bg-recall-accent py-2 text-base font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
         >
           {isSubmitting
             ? "처리 중..."
@@ -502,13 +502,13 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
 
         <div className="my-4 flex items-center gap-3">
           <div className="h-px flex-1 bg-recall-border" />
-          <span className="text-xs text-recall-textMuted">또는</span>
+          <span className="text-sm text-recall-textMuted">또는</span>
           <div className="h-px flex-1 bg-recall-border" />
         </div>
 
         {/* 하단 모드 전환 영역 */}
         {mode === "login" ? (
-          <p className="text-center text-sm text-recall-textMuted">
+          <p className="text-center text-base text-recall-textMuted">
             계정이 없으신가요?{" "}
             <button
               onClick={() => switchMode("signup")}
@@ -518,7 +518,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
             </button>
           </p>
         ) : (
-          <p className="text-center text-sm text-recall-textMuted">
+          <p className="text-center text-base text-recall-textMuted">
             이미 계정이 있으신가요?{" "}
             <button
               onClick={() => switchMode("login")}
@@ -535,7 +535,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-xl text-recall-text">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold">비밀번호 재설정</h2>
+              <h2 className="text-lg font-bold">비밀번호 재설정</h2>
               <button
                 onClick={() => setShowResetModal(false)}
                 className="text-recall-textMuted hover:text-recall-text"
@@ -544,13 +544,13 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
               </button>
             </div>
 
-            <p className="mb-4 text-xs text-recall-textMuted leading-relaxed">
+            <p className="mb-4 text-sm text-recall-textMuted leading-relaxed">
               가입하신 이메일 주소를 입력하시면 비밀번호 재설정 링크를 보내드립니다.
             </p>
 
             <form onSubmit={handlePasswordResetSubmit} className="flex flex-col gap-3">
               <div>
-                <label className="mb-1 block text-xs text-recall-textMuted">
+                <label className="mb-1 block text-sm text-recall-textMuted">
                   이메일 주소
                 </label>
                 <input
@@ -558,13 +558,13 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
                   value={resetEmail}
                   onChange={(e) => setResetEmail(e.target.value)}
                   placeholder="example@email.com"
-                  className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:border-recall-accent focus:outline-none"
+                  className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:border-recall-accent focus:outline-none"
                 />
               </div>
 
               {resetMessage && (
                 <p
-                  className={`text-xs leading-relaxed ${
+                  className={`text-sm leading-relaxed ${
                     isResetError ? "text-recall-danger" : "text-emerald-400 font-medium"
                   }`}
                 >
@@ -577,14 +577,14 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
                 <button
                   type="button"
                   onClick={() => setShowResetModal(false)}
-                  className="rounded-lg border border-recall-border px-3.5 py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
+                  className="rounded-lg border border-recall-border px-3.5 py-1.5 text-sm text-recall-textMuted hover:bg-white/5"
                 >
                   취소
                 </button>
                 <button
                   type="submit"
                   disabled={isResetSubmitting}
-                  className="rounded-lg bg-recall-accent px-3.5 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
+                  className="rounded-lg bg-recall-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
                 >
                   {isResetSubmitting ? "전송 중..." : "재설정 링크 발송"}
                 </button>

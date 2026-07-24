@@ -48,16 +48,16 @@ export default function LinkExistingDocumentModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
-          <p className="text-sm font-semibold">기존 문서 연결</p>
+          <p className="text-base font-semibold">기존 문서 연결</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
             <CloseIcon size={16} />
           </button>
         </div>
 
         {isLoading ? (
-          <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+          <p className="text-base text-recall-textMuted">불러오는 중...</p>
         ) : availableDocs.length === 0 ? (
-          <p className="text-sm text-recall-textMuted">
+          <p className="text-base text-recall-textMuted">
             연결할 수 있는 문서가 없습니다. "문서 분석"에서 먼저 업로드해 보세요.
           </p>
         ) : (
@@ -65,7 +65,7 @@ export default function LinkExistingDocumentModal({
             {availableDocs.map((doc) => (
               <div
                 key={doc.document_id}
-                className="flex items-center justify-between rounded-lg border border-recall-border px-3 py-2 text-xs"
+                className="flex items-center justify-between rounded-lg border border-recall-border px-3 py-2 text-sm"
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <DocumentIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
@@ -74,7 +74,7 @@ export default function LinkExistingDocumentModal({
                 <button
                   onClick={() => handleLink(doc.document_id)}
                   disabled={linkingId === doc.document_id}
-                  className="flex-shrink-0 rounded-lg bg-recall-accent/15 px-2.5 py-1 text-[11px] font-semibold text-recall-accent hover:bg-recall-accent hover:text-white disabled:opacity-50"
+                  className="flex-shrink-0 rounded-lg bg-recall-accent/15 px-2.5 py-1 text-xs font-semibold text-recall-accent hover:bg-recall-accent hover:text-white disabled:opacity-50"
                 >
                   {linkingId === doc.document_id ? "연결 중..." : "연결"}
                 </button>

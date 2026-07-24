@@ -45,12 +45,12 @@ export default function InviteMemberModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-2xl text-recall-text">
         <div className="flex items-center justify-between border-b border-recall-border pb-3 mb-4">
-          <h3 className="text-base font-bold">
-            팀원 초대 <span className="text-xs font-normal text-recall-textMuted">({workspaceName})</span>
+          <h3 className="text-lg font-bold">
+            팀원 초대 <span className="text-sm font-normal text-recall-textMuted">({workspaceName})</span>
           </h3>
           <button
             onClick={onClose}
-            className="text-recall-textMuted hover:text-recall-text transition text-lg"
+            className="text-recall-textMuted hover:text-recall-text transition text-xl"
           >
             ✕
           </button>
@@ -58,7 +58,7 @@ export default function InviteMemberModal({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-recall-textMuted mb-1.5">
+            <label className="block text-sm font-semibold text-recall-textMuted mb-1.5">
               이메일 주소 <span className="text-recall-accent">*</span>
             </label>
             <input
@@ -67,18 +67,18 @@ export default function InviteMemberModal({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="초대할 팀원의 이메일을 입력하세요"
-              className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-recall-textMuted mb-1.5">
+            <label className="block text-sm font-semibold text-recall-textMuted mb-1.5">
               권한 설정 (Role)
             </label>
             <select
               value={role}
               onChange={(e) => setRole(e.target.value as "member" | "owner")}
-              className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
             >
               <option value="member">일반 멤버 (Member)</option>
               <option value="owner">소유자 (Owner)</option>
@@ -86,13 +86,13 @@ export default function InviteMemberModal({
           </div>
 
           {errorMessage && (
-            <div className="rounded-lg bg-recall-danger/10 border border-recall-danger/30 p-2.5 text-xs text-recall-danger">
+            <div className="rounded-lg bg-recall-danger/10 border border-recall-danger/30 p-2.5 text-sm text-recall-danger">
               ⚠️ {errorMessage}
             </div>
           )}
 
           {successMessage && (
-            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2.5 text-xs text-emerald-400">
+            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2.5 text-sm text-emerald-400">
               ✅ {successMessage}
             </div>
           )}
@@ -101,14 +101,14 @@ export default function InviteMemberModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-recall-border px-4 py-2 text-xs text-recall-textMuted hover:bg-white/5 transition"
+              className="rounded-lg border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
             >
               취소
             </button>
             <button
               type="submit"
               disabled={isLoading || !email.trim()}
-              className="rounded-lg bg-recall-accent px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50 transition"
+              className="rounded-lg bg-recall-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition"
             >
               {isLoading ? "초대 중..." : "초대하기"}
             </button>

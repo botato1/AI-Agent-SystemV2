@@ -34,7 +34,7 @@ export default function VoiceMeetingView({
   return (
     <div className="flex h-full w-full flex-col bg-recall-bgMain text-recall-text">
       <div className="flex items-center border-b border-recall-border p-3">
-        <p className="text-sm font-medium">{t.sidebar_voice_meeting}</p>
+        <p className="text-base font-medium">{t.sidebar_voice_meeting}</p>
       </div>
 
       <MeetingsPanel

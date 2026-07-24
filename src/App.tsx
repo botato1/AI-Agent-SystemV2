@@ -363,7 +363,7 @@ export default function App() {
 
   if (isAuthChecking) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-sm">
+      <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
         로그인 정보를 확인 중입니다...
       </div>
     );
@@ -457,7 +457,7 @@ export default function App() {
         />
       ) : (
         <div className="flex h-full flex-1 items-center justify-center bg-recall-bgMain">
-          <p className="text-sm text-recall-textMuted">
+          <p className="text-base text-recall-textMuted">
             "{PLACEHOLDER_LABELS[selection.key]}" 화면은 아직 준비 중이에요.
           </p>
         </div>

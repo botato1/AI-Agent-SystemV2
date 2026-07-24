@@ -240,7 +240,7 @@ function TaskDetailModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
-          <p className="text-sm font-semibold text-recall-text">업무 상세 및 수정</p>
+          <p className="text-base font-semibold text-recall-text">업무 상세 및 수정</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
             <CloseIcon size={16} />
           </button>
@@ -248,32 +248,32 @@ function TaskDetailModal({
 
         <div className="flex flex-col gap-4 max-h-[75vh] overflow-y-auto pr-1">
           <div>
-            <label className="mb-1 block text-xs font-semibold text-recall-textMuted">업무 제목</label>
+            <label className="mb-1 block text-sm font-semibold text-recall-textMuted">업무 제목</label>
             <input
               value={form.task}
               onChange={(e) => setForm({ ...form, task: e.target.value })}
-              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text font-medium outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-base text-recall-text font-medium outline-none focus:border-recall-accent"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-semibold text-recall-textMuted">상세 설명</label>
+            <label className="mb-1 block text-sm font-semibold text-recall-textMuted">상세 설명</label>
             <textarea
               rows={3}
               value={form.description || ""}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="업무 세부 내용이나 메모를 입력하세요."
-              className="w-full resize-none rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent leading-relaxed"
+              className="w-full resize-none rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent leading-relaxed"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">진행 상태</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">진행 상태</label>
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}
-                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
               >
                 <option value="todo">{t.status_todo}</option>
                 <option value="in_progress">{t.status_in_progress}</option>
@@ -282,11 +282,11 @@ function TaskDetailModal({
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">우선순위</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">우선순위</label>
               <select
                 value={form.priority}
                 onChange={(e) => setForm({ ...form, priority: e.target.value as TaskPriority })}
-                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
               >
                 <option value="high">{t.priority_high}</option>
                 <option value="medium">{t.priority_medium}</option>
@@ -297,7 +297,7 @@ function TaskDetailModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="relative" ref={assigneeRef}>
-              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">담당자</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">담당자</label>
               <input
                 value={form.assignee || ""}
                 onFocus={() => setIsAssigneeOpen(true)}
@@ -312,7 +312,7 @@ function TaskDetailModal({
                   }
                 }}
                 placeholder="담당자 검색 또는 입력"
-                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs text-recall-text outline-none focus:border-recall-accent"
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
               />
 
               {isAssigneeOpen && filteredMembers.length > 0 && (
@@ -325,7 +325,7 @@ function TaskDetailModal({
                         setForm({ ...form, assignee: memberName });
                         setIsAssigneeOpen(false);
                       }}
-                      className="flex w-full items-center px-3 py-2 text-left text-xs hover:bg-white/5 transition"
+                      className="flex w-full items-center px-3 py-2 text-left text-sm hover:bg-white/5 transition"
                     >
                       <span>{memberName}</span>
                     </button>
@@ -335,10 +335,10 @@ function TaskDetailModal({
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-semibold text-recall-textMuted">마감일</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">마감일</label>
               <div
                 onClick={handleOpenDatePicker}
-                className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-xs min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
+                className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
               >
                 <span className={form.deadline ? "text-recall-text" : "text-recall-textMuted"}>
                   {form.deadline || "마감일 선택"}
@@ -365,7 +365,7 @@ function TaskDetailModal({
               onDelete(task.id);
               onClose();
             }}
-            className="flex items-center gap-1 rounded-lg border border-recall-danger/40 px-3 py-1.5 text-xs text-recall-danger hover:bg-recall-danger/10 transition"
+            className="flex items-center gap-1 rounded-lg border border-recall-danger/40 px-3 py-1.5 text-sm text-recall-danger hover:bg-recall-danger/10 transition"
           >
             <TrashIcon size={13} />
             {t.task_delete}
@@ -374,14 +374,14 @@ function TaskDetailModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-recall-border px-3.5 py-1.5 text-xs text-recall-textMuted hover:bg-white/5 transition"
+              className="rounded-lg border border-recall-border px-3.5 py-1.5 text-sm text-recall-textMuted hover:bg-white/5 transition"
             >
               취소
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="rounded-lg bg-recall-accent px-4 py-1.5 text-xs text-white font-medium hover:opacity-90 transition"
+              className="rounded-lg bg-recall-accent px-4 py-1.5 text-sm text-white font-medium hover:opacity-90 transition"
             >
               저장
             </button>
@@ -471,11 +471,11 @@ function DraggableCard({
                 isDone ? "opacity-40" : ""
               }`}
             />
-            <span className="text-xs text-recall-textMuted">{priorityLabel[task.priority]}</span>
+            <span className="text-sm text-recall-textMuted">{priorityLabel[task.priority]}</span>
           </div>
 
           {overdue && (
-            <span className="flex items-center gap-1 rounded-full bg-recall-danger/15 px-2 py-0.5 text-[10px] font-semibold text-recall-danger">
+            <span className="flex items-center gap-1 rounded-full bg-recall-danger/15 px-2 py-0.5 text-[11px] font-semibold text-recall-danger">
               <WarningIcon size={10} className="flex-shrink-0" />
               지연
             </span>
@@ -484,7 +484,7 @@ function DraggableCard({
       </div>
 
       <p
-        className={`mb-3 text-xs font-medium leading-relaxed ${
+        className={`mb-3 text-sm font-medium leading-relaxed ${
           isDone ? "text-recall-textMuted line-through" : "text-recall-text"
         }`}
       >
@@ -492,8 +492,8 @@ function DraggableCard({
       </p>
 
       <div className="flex items-center justify-between">
-        <span className="text-xs text-recall-textMuted">{task.assignee ?? "-"}</span>
-        <span className={`text-xs ${overdue ? "font-semibold text-recall-danger" : "text-recall-textMuted"}`}>
+        <span className="text-sm text-recall-textMuted">{task.assignee ?? "-"}</span>
+        <span className={`text-sm ${overdue ? "font-semibold text-recall-danger" : "text-recall-textMuted"}`}>
           {formatDeadline(task.deadline)}
         </span>
       </div>
@@ -614,7 +614,7 @@ export default function TaskBoard({
         <div className="relative" ref={sortMenuRef}>
           <button
             onClick={() => setSortMenuOpen((v) => !v)}
-            className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
+            className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-textMuted hover:bg-white/5"
           >
             {sortOptions.find((o) => o.value === sortMode)?.label}
             <ChevronDownIcon size={12} className={sortMenuOpen ? "rotate-180" : ""} />
@@ -629,7 +629,7 @@ export default function TaskBoard({
                     setSortMode(opt.value);
                     setSortMenuOpen(false);
                   }}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-recall-text hover:bg-white/5"
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-recall-text hover:bg-white/5"
                 >
                   {opt.label}
                   {sortMode === opt.value && <CheckIcon size={11} className="text-recall-accent" />}
@@ -647,8 +647,8 @@ export default function TaskBoard({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <div className={`h-3.5 w-[3px] rounded-sm ${col.barColorClass}`} />
-                  <span className="text-xs font-medium text-recall-textMuted">{col.title}</span>
-                  <span className="text-xs text-recall-textMuted">{col.tasks.length}</span>
+                  <span className="text-sm font-medium text-recall-textMuted">{col.title}</span>
+                  <span className="text-sm text-recall-textMuted">{col.tasks.length}</span>
                 </div>
                 <button
                   onClick={() => onOpenModal(col.id)}
@@ -674,7 +674,7 @@ export default function TaskBoard({
 
                 <button
                   onClick={() => onOpenModal(col.id)}
-                  className="mt-2 w-full rounded-xl border border-dashed border-recall-border py-2 text-xs text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
+                  className="mt-2 w-full rounded-xl border border-dashed border-recall-border py-2 text-sm text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
                 >
                   {t.task_add_btn}
                 </button>
@@ -686,10 +686,10 @@ export default function TaskBoard({
         <DragOverlay>
           {activeTask && (
             <div className="w-52 rounded-xl border border-recall-accent bg-recall-bgSoft p-3 opacity-95 shadow-xl">
-              <p className="text-xs font-medium text-recall-text">{activeTask.task}</p>
+              <p className="text-sm font-medium text-recall-text">{activeTask.task}</p>
               <div className="mt-2 flex items-center justify-between">
-                <span className="text-xs text-recall-textMuted">{activeTask.assignee ?? "-"}</span>
-                <span className="text-xs text-recall-textMuted">{formatDeadline(activeTask.deadline)}</span>
+                <span className="text-sm text-recall-textMuted">{activeTask.assignee ?? "-"}</span>
+                <span className="text-sm text-recall-textMuted">{formatDeadline(activeTask.deadline)}</span>
               </div>
             </div>
           )}

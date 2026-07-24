@@ -49,41 +49,41 @@ export default function PasswordResetConfirmView({
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-recall-bg p-4 text-recall-text">
       <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-lg">
-        <h1 className="mb-1 text-lg font-semibold">새 비밀번호 설정</h1>
-        <p className="mb-5 text-xs text-recall-textMuted">
+        <h1 className="mb-1 text-xl font-semibold">새 비밀번호 설정</h1>
+        <p className="mb-5 text-sm text-recall-textMuted">
           새로 사용할 비밀번호를 입력해 주세요.
         </p>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">새 비밀번호</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호</label>
             <input
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="새 비밀번호 입력"
-              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:border-recall-accent focus:outline-none"
+              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:border-recall-accent focus:outline-none"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">새 비밀번호 확인</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호 확인</label>
             <input
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="새 비밀번호 다시 입력"
-              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:border-recall-accent focus:outline-none"
+              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:border-recall-accent focus:outline-none"
             />
           </div>
 
-          {error && <p className="text-xs text-recall-danger">{error}</p>}
-          {successMsg && <p className="text-xs text-emerald-400 font-medium">{successMsg}</p>}
+          {error && <p className="text-sm text-recall-danger">{error}</p>}
+          {successMsg && <p className="text-sm text-emerald-400 font-medium">{successMsg}</p>}
 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="mt-3 w-full rounded-lg bg-recall-accent py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
+            className="mt-3 w-full rounded-lg bg-recall-accent py-2 text-base font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
           >
             {isSubmitting ? "변경 중..." : "비밀번호 변경하기"}
           </button>

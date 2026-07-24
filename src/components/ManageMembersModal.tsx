@@ -97,16 +97,16 @@ export default function ManageMembersModal({
         {/* 헤더 */}
         <div className="flex items-center justify-between border-b border-recall-border pb-3 mb-4">
           <div>
-            <h3 className="text-base font-bold">
-              팀원 관리 <span className="text-xs font-normal text-recall-textMuted">({workspaceName})</span>
+            <h3 className="text-lg font-bold">
+              팀원 관리 <span className="text-sm font-normal text-recall-textMuted">({workspaceName})</span>
             </h3>
-            <p className="text-xs text-recall-textMuted mt-0.5">
+            <p className="text-sm text-recall-textMuted mt-0.5">
               총 {members.length}명의 팀원이 참여 중입니다.
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-recall-textMuted hover:text-recall-text transition text-lg"
+            className="text-recall-textMuted hover:text-recall-text transition text-xl"
           >
             ✕
           </button>
@@ -114,9 +114,9 @@ export default function ManageMembersModal({
 
         {/* 에러 메시지 알림 */}
         {errorMessage && (
-          <div className="mb-3 rounded-lg bg-recall-danger/10 border border-recall-danger/30 p-2.5 text-xs text-recall-danger flex items-center justify-between">
+          <div className="mb-3 rounded-lg bg-recall-danger/10 border border-recall-danger/30 p-2.5 text-sm text-recall-danger flex items-center justify-between">
             <span>⚠️ {errorMessage}</span>
-            <button onClick={() => setErrorMessage(null)} className="text-recall-danger text-xs font-bold ml-2">
+            <button onClick={() => setErrorMessage(null)} className="text-recall-danger text-sm font-bold ml-2">
               ✕
             </button>
           </div>
@@ -124,7 +124,7 @@ export default function ManageMembersModal({
 
         {/* 본문 (멤버 목록) */}
         {isLoading ? (
-          <div className="py-12 text-center text-xs text-recall-textMuted">
+          <div className="py-12 text-center text-sm text-recall-textMuted">
             멤버 목록을 불러오는 중입니다...
           </div>
         ) : (
@@ -142,16 +142,16 @@ export default function ManageMembersModal({
                 >
                   {/* 팀원 정보 영역 */}
                   <div className="flex items-center gap-3 min-w-0 pr-2">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-recall-accent/20 text-recall-accent font-bold text-sm">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-recall-accent/20 text-recall-accent font-bold text-base">
                       {displayName.slice(0, 1).toUpperCase()}
                     </div>
 
                     <div className="flex flex-col min-w-0">
-                      <span className="truncate text-sm font-bold text-recall-text leading-tight">
+                      <span className="truncate text-base font-bold text-recall-text leading-tight">
                         {displayName}
-                        {isSelf && <span className="ml-1 text-[10px] font-normal text-recall-textMuted">(나)</span>}
+                        {isSelf && <span className="ml-1 text-[11px] font-normal text-recall-textMuted">(나)</span>}
                       </span>
-                      <span className="truncate text-xs text-recall-textMuted mt-0.5">
+                      <span className="truncate text-sm text-recall-textMuted mt-0.5">
                         @{m.username}
                       </span>
                     </div>
@@ -167,13 +167,13 @@ export default function ManageMembersModal({
                           handleRoleChange(targetUserId, e.target.value as "owner" | "member")
                         }
                         title="역할 변경"
-                        className="rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-1 text-xs text-recall-text outline-none focus:border-recall-accent disabled:opacity-50"
+                        className="rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-1 text-sm text-recall-text outline-none focus:border-recall-accent disabled:opacity-50"
                       >
                         <option value="member">일반 멤버</option>
                         <option value="owner">소유자</option>
                       </select>
                     ) : (
-                      <span className="rounded-lg bg-recall-accent/10 px-2 py-1 text-[11px] font-semibold text-recall-accent">
+                      <span className="rounded-lg bg-recall-accent/10 px-2 py-1 text-xs font-semibold text-recall-accent">
                         {m.role === "owner" ? "소유자" : "일반 멤버"}
                       </span>
                     )}
@@ -203,14 +203,14 @@ export default function ManageMembersModal({
                 onClose();
                 onOpenInviteModal();
               }}
-              className="rounded-lg bg-recall-accent/15 px-3.5 py-2 text-xs font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
+              className="rounded-lg bg-recall-accent/15 px-3.5 py-2 text-sm font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
             >
               + 팀원 초대하기
             </button>
           )}
           <button
             onClick={onClose}
-            className="ml-auto rounded-lg border border-recall-border px-4 py-2 text-xs text-recall-textMuted hover:bg-white/5 transition"
+            className="ml-auto rounded-lg border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
           >
             닫기
           </button>
@@ -222,13 +222,13 @@ export default function ManageMembersModal({
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-5 text-recall-text shadow-2xl animate-in fade-in zoom-in duration-150">
             <div className="flex items-center gap-3 text-recall-danger mb-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-recall-danger/10 text-lg">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-recall-danger/10 text-xl">
                 🗑️
               </div>
-              <h4 className="text-base font-bold text-recall-text">팀원 제거</h4>
+              <h4 className="text-lg font-bold text-recall-text">팀원 제거</h4>
             </div>
 
-            <p className="text-xs text-recall-textMuted leading-relaxed mb-5">
+            <p className="text-sm text-recall-textMuted leading-relaxed mb-5">
               <span className="font-bold text-recall-text">'{deleteTarget.name}'</span> 님을 워크스페이스에서 제거하시겠습니까? 이 작업은 즉시 반영됩니다.
             </p>
 
@@ -236,14 +236,14 @@ export default function ManageMembersModal({
               <button
                 type="button"
                 onClick={() => setDeleteTarget(null)}
-                className="rounded-lg border border-recall-border px-3.5 py-2 text-xs text-recall-textMuted hover:bg-white/5 transition"
+                className="rounded-lg border border-recall-border px-3.5 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
               >
                 취소
               </button>
               <button
                 type="button"
                 onClick={executeDeleteMember}
-                className="rounded-lg bg-recall-danger px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 transition shadow-md shadow-recall-danger/20"
+                className="rounded-lg bg-recall-danger px-3.5 py-2 text-sm font-semibold text-white hover:opacity-90 transition shadow-md shadow-recall-danger/20"
               >
                 제거하기
               </button>

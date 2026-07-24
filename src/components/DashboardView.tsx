@@ -28,7 +28,7 @@ function severityBadge(severity: Contradiction["severity"]) {
     low: { label: "낮음", className: "bg-recall-textMuted/15 text-recall-textMuted" },
   } as const;
   const { label, className } = map[severity];
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] ${className}`}>{label}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-xs ${className}`}>{label}</span>;
 }
 
 function formatDate(iso: string): string {
@@ -61,7 +61,7 @@ function ContradictionLog({ workspaceId }: { workspaceId: string }) {
           <button
             key={tab.key}
             onClick={() => setStatusFilter(tab.key)}
-            className={`rounded-lg px-2.5 py-1 text-xs ${
+            className={`rounded-lg px-2.5 py-1 text-sm ${
               statusFilter === tab.key
                 ? "bg-recall-accent/15 text-recall-accent"
                 : "text-recall-textMuted hover:bg-white/5"
@@ -73,22 +73,22 @@ function ContradictionLog({ workspaceId }: { workspaceId: string }) {
       </div>
 
       {isLoading ? (
-        <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+        <p className="text-base text-recall-textMuted">불러오는 중...</p>
       ) : contradictions.length === 0 ? (
-        <p className="text-sm text-recall-textMuted">표시할 항목이 없습니다.</p>
+        <p className="text-base text-recall-textMuted">표시할 항목이 없습니다.</p>
       ) : (
         <div className="space-y-2">
           {contradictions.map((c) => (
             <div key={c.id} className="rounded-lg border border-recall-border p-3">
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-medium text-recall-textMuted">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-recall-textMuted">
                   <WarningIcon size={12} className="text-recall-danger" />
                   {c.source_type === "meeting_segment" ? "회의 발언" : "채팅 메시지"}
                 </span>
-                <span className="text-[11px] text-recall-textMuted">{formatDate(c.detected_at)}</span>
+                <span className="text-xs text-recall-textMuted">{formatDate(c.detected_at)}</span>
               </div>
 
-              <div className="mb-1.5 space-y-1 text-sm">
+              <div className="mb-1.5 space-y-1 text-base">
                 <p className="text-recall-text">
                   <span className="text-recall-textMuted">발언: </span>
                   {c.statement_text_snapshot}
@@ -99,12 +99,12 @@ function ContradictionLog({ workspaceId }: { workspaceId: string }) {
                 </p>
               </div>
 
-              {c.reason && <p className="mb-2 text-xs text-recall-textMuted">{c.reason}</p>}
+              {c.reason && <p className="mb-2 text-sm text-recall-textMuted">{c.reason}</p>}
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   {severityBadge(c.severity)}
-                  <span className="text-[11px] text-recall-textMuted">
+                  <span className="text-xs text-recall-textMuted">
                     신뢰도 {Math.round(c.confidence_score * 100)}%
                   </span>
                 </div>
@@ -113,19 +113,19 @@ function ContradictionLog({ workspaceId }: { workspaceId: string }) {
                   <div className="flex gap-1.5">
                     <button
                       onClick={() => dismiss(c.id)}
-                      className="rounded-lg border border-recall-border px-2.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
+                      className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-textMuted hover:bg-white/5"
                     >
                       무시
                     </button>
                     <button
                       onClick={() => resolve(c.id, "keep_reference")}
-                      className="rounded-lg border border-recall-border px-2.5 py-1 text-xs text-recall-text hover:bg-white/5"
+                      className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-text hover:bg-white/5"
                     >
                       기준 유지
                     </button>
                     <button
                       onClick={() => resolve(c.id, "change_acknowledged")}
-                      className="rounded-lg bg-recall-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                      className="rounded-lg bg-recall-accent px-2.5 py-1 text-sm font-medium text-white hover:opacity-90"
                     >
                       변경 인지
                     </button>
@@ -166,7 +166,7 @@ export default function DashboardView({
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1.5 text-sm ${
+            className={`px-3 py-1.5 text-base ${
               activeTab === tab.id
                 ? "border-b-2 border-recall-accent text-recall-text"
                 : "text-recall-textMuted hover:text-recall-text"

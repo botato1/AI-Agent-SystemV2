@@ -93,7 +93,7 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
       {/* 왼쪽 목록 */}
       <div className="flex h-full w-64 flex-shrink-0 flex-col border-r border-recall-border p-3">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-wide text-recall-textMuted">워크트리</p>
+          <p className="text-sm font-medium uppercase tracking-wide text-recall-textMuted">워크트리</p>
           <input
             ref={folderInputRef}
             type="file"
@@ -107,7 +107,7 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
           <button
             onClick={() => folderInputRef.current?.click()}
             disabled={isUploading}
-            className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1 text-xs hover:bg-white/5 disabled:opacity-50"
+            className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1 text-sm hover:bg-white/5 disabled:opacity-50"
           >
             <UploadIcon size={12} />
             {isUploading ? "업로드 중..." : "폴더 업로드"}
@@ -116,9 +116,9 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
 
         <div className="flex-1 space-y-1.5 overflow-y-auto">
           {isLoading ? (
-            <p className="text-xs text-recall-textMuted">불러오는 중...</p>
+            <p className="text-sm text-recall-textMuted">불러오는 중...</p>
           ) : worktrees.length === 0 ? (
-            <p className="text-xs text-recall-textMuted">아직 업로드된 폴더가 없습니다.</p>
+            <p className="text-sm text-recall-textMuted">아직 업로드된 폴더가 없습니다.</p>
           ) : (
             worktrees.map((w) => {
               const isSelected = w.id === selectedWorktreeId;
@@ -133,14 +133,14 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
                       : "border-recall-border hover:bg-white/5"
                   }`}
                 >
-                  <span className="truncate text-xs font-medium text-recall-text">{w.root_folder_name}</span>
+                  <span className="truncate text-sm font-medium text-recall-text">{w.root_folder_name}</span>
                   <span className="flex items-center gap-1.5">
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${badge.className}`}>
+                    <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${badge.className}`}>
                       {badge.label}
                     </span>
-                    <span className="text-[11px] text-recall-textMuted">{formatDate(w.created_at)}</span>
+                    <span className="text-xs text-recall-textMuted">{formatDate(w.created_at)}</span>
                   </span>
-                  <span className="text-[11px] text-recall-textMuted">
+                  <span className="text-xs text-recall-textMuted">
                     파일 {w.completed_file_count}/{w.total_file_count}
                     {w.failed_file_count > 0 ? ` · 실패 ${w.failed_file_count}` : ""}
                   </span>
@@ -156,15 +156,15 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
         {!selectedWorktree ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2">
             <UploadIcon size={24} className="text-recall-textMuted" />
-            <p className="text-sm text-recall-textMuted">
+            <p className="text-base text-recall-textMuted">
               왼쪽에서 폴더를 선택하거나, "폴더 업로드"로 코드 폴더를 올려보세요.
             </p>
           </div>
         ) : (
           <>
             <div className="mb-3">
-              <p className="text-sm font-medium text-recall-text">{selectedWorktree.root_folder_name}</p>
-              <p className="text-xs text-recall-textMuted">
+              <p className="text-base font-medium text-recall-text">{selectedWorktree.root_folder_name}</p>
+              <p className="text-sm text-recall-textMuted">
                 {statusBadge(selectedWorktree.status).label} · 총 {selectedWorktree.total_file_count}개 파일 ·{" "}
                 {formatDate(selectedWorktree.created_at)}
               </p>
@@ -172,21 +172,21 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
 
             <div className="flex-1 overflow-y-auto rounded-lg border border-recall-border">
               {isFilesLoading ? (
-                <p className="p-3 text-sm text-recall-textMuted">불러오는 중...</p>
+                <p className="p-3 text-base text-recall-textMuted">불러오는 중...</p>
               ) : files.length === 0 ? (
-                <p className="p-3 text-sm text-recall-textMuted">파일이 없습니다.</p>
+                <p className="p-3 text-base text-recall-textMuted">파일이 없습니다.</p>
               ) : (
                 <div className="divide-y divide-recall-border">
                   {files.map((f) => (
-                    <div key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <div key={f.id} className="flex items-center gap-2 px-3 py-2 text-base">
                       <DocumentIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
                       <span className="min-w-0 flex-1 truncate text-recall-text">
                         {f.relative_path || f.original_filename}
                       </span>
-                      <span className="flex-shrink-0 text-xs text-recall-textMuted">
+                      <span className="flex-shrink-0 text-sm text-recall-textMuted">
                         {formatFileSize(f.file_size_bytes)}
                       </span>
-                      <span className="flex-shrink-0 rounded bg-recall-textMuted/10 px-1.5 py-0.5 text-[10px] text-recall-textMuted">
+                      <span className="flex-shrink-0 rounded bg-recall-textMuted/10 px-1.5 py-0.5 text-[11px] text-recall-textMuted">
                         {analysisStatusLabel(f.analysis_status)}
                       </span>
                     </div>

@@ -84,7 +84,7 @@ function ContentBlocks({ text }: { text: string }) {
 
           return (
             <div key={blockIndex} className="overflow-x-auto rounded-lg border border-recall-border">
-              <table className="w-full border-collapse text-xs">
+              <table className="w-full border-collapse text-sm">
                 <tbody>
                   {rows.map((row, rowIndex) => (
                     <tr key={rowIndex} className={rowIndex === 0 ? "bg-recall-bgMain" : ""}>
@@ -110,7 +110,7 @@ function ContentBlocks({ text }: { text: string }) {
         if (!cleaned) return null;
 
         return (
-          <p key={blockIndex} className="whitespace-pre-wrap text-xs leading-relaxed text-recall-textMuted">
+          <p key={blockIndex} className="whitespace-pre-wrap text-sm leading-relaxed text-recall-textMuted">
             {cleaned}
           </p>
         );
@@ -167,7 +167,7 @@ export default function DocumentPreviewModal({
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
           <div className="flex min-w-0 items-center gap-2">
             <DocumentIcon size={16} className="flex-shrink-0 text-recall-accent" />
-            <p className="truncate text-sm font-semibold">{documentName}</p>
+            <p className="truncate text-base font-semibold">{documentName}</p>
           </div>
           <button onClick={onClose} className="flex-shrink-0 text-recall-textMuted hover:text-recall-text">
             <CloseIcon size={16} />
@@ -175,26 +175,26 @@ export default function DocumentPreviewModal({
         </div>
 
         {isLoading ? (
-          <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+          <p className="text-base text-recall-textMuted">불러오는 중...</p>
         ) : !detail ? (
-          <p className="text-sm text-recall-danger">문서를 불러오지 못했습니다.</p>
+          <p className="text-base text-recall-danger">문서를 불러오지 못했습니다.</p>
         ) : detail.analysis_status !== "completed" ? (
-          <p className="text-sm text-recall-textMuted">
+          <p className="text-base text-recall-textMuted">
             {detail.analysis_status === "failed" ? "문서 분석에 실패했습니다." : "아직 분석이 완료되지 않았습니다."}
           </p>
         ) : (
           <div className="flex-1 space-y-4 overflow-y-auto">
             {detail.analysis.summary && (
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">요약</p>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-recall-text">
+                <p className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">요약</p>
+                <p className="whitespace-pre-wrap text-base leading-relaxed text-recall-text">
                   {detail.analysis.summary}
                 </p>
               </div>
             )}
 
             {(detail.analysis.table_count || detail.analysis.graph_count) ? (
-              <div className="flex flex-wrap gap-1.5 text-[11px] text-recall-textMuted">
+              <div className="flex flex-wrap gap-1.5 text-xs text-recall-textMuted">
                 {!!detail.analysis.table_count && (
                   <span className="rounded-full border border-recall-border bg-recall-bgMain px-2 py-0.5">
                     표 {detail.analysis.table_count}개
@@ -210,7 +210,7 @@ export default function DocumentPreviewModal({
 
             {sortedChunks.length > 0 ? (
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">원문</p>
+                <p className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">원문</p>
                 <div className="space-y-3">
                   {sortedChunks.map((chunk, i) => {
                     const showPageLabel =
@@ -219,7 +219,7 @@ export default function DocumentPreviewModal({
                     return (
                       <div key={chunk.chunk_index} className="space-y-2">
                         {showPageLabel && (
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
                             {chunk.page_number}페이지
                           </p>
                         )}
@@ -231,7 +231,7 @@ export default function DocumentPreviewModal({
               </div>
             ) : detail.raw.original_text ? (
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">원문</p>
+                <p className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">원문</p>
                 <div className="space-y-2">
                   <ContentBlocks text={detail.raw.original_text} />
                 </div>
@@ -239,7 +239,7 @@ export default function DocumentPreviewModal({
             ) : null}
 
             {!detail.analysis.summary && sortedChunks.length === 0 && !detail.raw.original_text && (
-              <p className="text-sm text-recall-textMuted">표시할 내용이 없습니다.</p>
+              <p className="text-base text-recall-textMuted">표시할 내용이 없습니다.</p>
             )}
           </div>
         )}

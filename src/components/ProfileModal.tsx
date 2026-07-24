@@ -127,7 +127,7 @@ export default function ProfileModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-xl text-recall-text">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold">프로필 설정</h2>
+          <h2 className="text-xl font-bold">프로필 설정</h2>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
             ✕
           </button>
@@ -156,11 +156,11 @@ export default function ProfileModal({
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-xs text-recall-text hover:bg-white/5"
+                  className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-sm text-recall-text hover:bg-white/5"
                 >
                   내 사진 업로드
                 </button>
-                <p className="mb-1.5 text-[11px] text-recall-textMuted">또는 색상 선택</p>
+                <p className="mb-1.5 text-xs text-recall-textMuted">또는 색상 선택</p>
                 <div className="flex flex-wrap gap-1.5">
                   {AVATAR_COLORS.map((color) => (
                     <button
@@ -187,23 +187,23 @@ export default function ProfileModal({
         {/* 입력 폼 영역 */}
         <div className="flex flex-col gap-3.5">
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">아이디</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">아이디</label>
             <input
               type="text"
               value={user.username}
               disabled
-              className="w-full rounded-lg border border-recall-border bg-white/5 px-3 py-2 text-sm text-recall-textMuted cursor-not-allowed"
+              className="w-full rounded-lg border border-recall-border bg-white/5 px-3 py-2 text-base text-recall-textMuted cursor-not-allowed"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-recall-textMuted">이름</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">이름</label>
             <input
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="이름 입력"
-              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-recall-accent"
+              className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
             />
           </div>
 
@@ -216,7 +216,7 @@ export default function ProfileModal({
                 setError(null);
                 setSuccessMessage(null);
               }}
-              className="flex items-center gap-1.5 text-xs text-recall-text font-medium hover:opacity-80 transition"
+              className="flex items-center gap-1.5 text-sm text-recall-text font-medium hover:opacity-80 transition"
             >
               <ChevronIcon open={showPasswordSection} />
               <span>비밀번호 변경</span>
@@ -225,39 +225,39 @@ export default function ProfileModal({
             {showPasswordSection && (
               <div className="mt-3.5 flex flex-col gap-3">
                 <div>
-                  <label className="mb-1 block text-xs text-recall-textMuted">현재 비밀번호</label>
+                  <label className="mb-1 block text-sm text-recall-textMuted">현재 비밀번호</label>
                   <input
                     type="password"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     placeholder="현재 비밀번호 입력"
-                    className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-recall-accent"
+                    className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
                   />
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs text-recall-textMuted">새 비밀번호</label>
+                  <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호</label>
                   <input
                     type="password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="새 비밀번호 입력"
-                    className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-recall-accent"
+                    className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
                   />
-                  <div className="mt-1 flex items-center gap-1 text-[11px] text-recall-textMuted">
+                  <div className="mt-1 flex items-center gap-1 text-xs text-recall-textMuted">
                     <InfoIcon />
                     <span>8자 이상, 영문·숫자 포함</span>
                   </div>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs text-recall-textMuted">새 비밀번호 확인</label>
+                  <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호 확인</label>
                   <input
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="새 비밀번호 다시 입력"
-                    className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-sm focus:outline-none focus:border-recall-accent"
+                    className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
                   />
                 </div>
               </div>
@@ -267,22 +267,22 @@ export default function ProfileModal({
 
         {/* 에러 및 성공 메시지 */}
         <div className="mt-2 min-h-[18px]">
-          {error && <p className="text-xs text-recall-danger leading-relaxed">{error}</p>}
-          {successMessage && <p className="text-xs text-emerald-400 font-medium leading-relaxed">{successMessage}</p>}
+          {error && <p className="text-sm text-recall-danger leading-relaxed">{error}</p>}
+          {successMessage && <p className="text-sm text-emerald-400 font-medium leading-relaxed">{successMessage}</p>}
         </div>
 
         {/* 하단 취소 / 저장 버튼 */}
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded-lg border border-recall-border px-4 py-2 text-xs text-recall-textMuted hover:bg-white/5"
+            className="rounded-lg border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5"
           >
             취소
           </button>
           <button
             onClick={handleSaveProfile}
             disabled={isSubmitting}
-            className="rounded-lg bg-recall-accent px-4 py-2 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
+            className="rounded-lg bg-recall-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
           >
             {isSubmitting ? "저장 중..." : "저장"}
           </button>

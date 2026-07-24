@@ -194,7 +194,7 @@ export default function Sidebar({
           onClick={() => setIsWorkspaceMenuOpen((v) => !v)}
           className="flex w-full items-center justify-between rounded-lg px-1 py-1 text-left hover:bg-white/5"
         >
-          <span className="truncate text-sm font-semibold">{currentWorkspace?.name}</span>
+          <span className="truncate text-base font-semibold">{currentWorkspace?.name}</span>
           <ChevronDownIcon
             size={14}
             className={`flex-shrink-0 text-recall-textMuted transition-transform ${
@@ -220,7 +220,7 @@ export default function Sidebar({
                       onFocus={(e) => e.target.select()}
                       onBlur={commitRenameWorkspace}
                       onKeyDown={(e) => e.key === "Enter" && commitRenameWorkspace()}
-                      className="min-w-0 flex-1 rounded border border-recall-border bg-transparent px-2 py-1.5 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
+                      className="min-w-0 flex-1 rounded border border-recall-border bg-transparent px-2 py-1.5 text-base text-recall-text focus:outline-none focus:border-recall-accent"
                     />
                   ) : (
                     <>
@@ -229,7 +229,7 @@ export default function Sidebar({
                           onSelectWorkspace(ws.id);
                           setIsWorkspaceMenuOpen(false);
                         }}
-                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base text-recall-text hover:bg-white/5"
                       >
                         <span className="min-w-0 flex-1 truncate">{ws.name}</span>
                         {isCurrent && <CheckIcon size={13} className="flex-shrink-0 text-recall-accent" />}
@@ -256,7 +256,7 @@ export default function Sidebar({
                           {/* 1. 이름 변경 */}
                           <button
                             onClick={() => startRenameWorkspace(ws)}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-text hover:bg-white/5"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
                           >
                             <PencilIcon size={13} />
                             이름 변경
@@ -269,7 +269,7 @@ export default function Sidebar({
                               setIsWorkspaceMenuOpen(false);
                               setManagingWorkspace(ws);
                             }}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-text hover:bg-white/5"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
                           >
                             ⚙️ 팀원 관리
                           </button>
@@ -285,7 +285,7 @@ export default function Sidebar({
                                 setIsWorkspaceMenuOpen(false);
                                 onDeleteWorkspace(ws.id);
                               }}
-                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-danger hover:bg-white/5"
+                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
                             >
                               <TrashIcon size={13} />
                               삭제하기
@@ -306,7 +306,7 @@ export default function Sidebar({
                 onCreateWorkspace();
                 setIsWorkspaceMenuOpen(true);
               }}
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
             >
               <PlusIcon size={15} className="flex-shrink-0" />
               {t.sidebar_new_workspace}
@@ -318,14 +318,14 @@ export default function Sidebar({
       {/* 2. 중앙 메인 스크롤 영역 */}
       <div className="flex-1 overflow-y-auto px-3">
         {/* 메인 그룹 */}
-        <p className="mb-1.5 px-2 text-[11px] font-medium uppercase tracking-wide text-recall-textMuted">
+        <p className="mb-1.5 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
           {t.main_group}
         </p>
 
         {/* 대시보드 */}
         <button
           onClick={() => onSelectPlaceholder("dashboard")}
-          className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
+          className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base ${
             activePlaceholder === "dashboard"
               ? "bg-recall-accent/15 text-recall-text"
               : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
@@ -338,7 +338,7 @@ export default function Sidebar({
         {/* 채팅방 (채널 목록) */}
         <button
           onClick={() => setIsChannelsExpanded((v) => !v)}
-          className="mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+          className="mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
         >
           {isChannelsExpanded ? (
             <ChevronDownIcon size={13} className="flex-shrink-0" />
@@ -365,13 +365,13 @@ export default function Sidebar({
                       onFocus={(e) => e.target.select()}
                       onBlur={commitRename}
                       onKeyDown={(e) => e.key === "Enter" && commitRename()}
-                      className="min-w-0 flex-1 rounded-lg border border-recall-border bg-transparent px-2 py-1.5 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
+                      className="min-w-0 flex-1 rounded-lg border border-recall-border bg-transparent px-2 py-1.5 text-base text-recall-text focus:outline-none focus:border-recall-accent"
                     />
                   ) : (
                     <>
                       <button
                         onClick={() => onSelectChannel(channel)}
-                        className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm ${
+                        className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-base ${
                           isSelected
                             ? "bg-recall-accent/15 text-recall-text"
                             : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
@@ -397,7 +397,7 @@ export default function Sidebar({
                         >
                           <button
                             onClick={() => startRename(channel)}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-text hover:bg-white/5"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
                           >
                             <PencilIcon size={13} />
                             이름 변경
@@ -407,7 +407,7 @@ export default function Sidebar({
                               setOpenMenuChannelId(null);
                               onDeleteChannel(channel.id);
                             }}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-recall-danger hover:bg-white/5"
+                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
                           >
                             <TrashIcon size={13} />
                             삭제
@@ -422,7 +422,7 @@ export default function Sidebar({
 
             <button
               onClick={onCreateChannel}
-              className="mt-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+              className="mt-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
             >
               <PlusIcon size={15} className="flex-shrink-0" />
               <span>{t.sidebar_create_channel}</span>
@@ -433,7 +433,7 @@ export default function Sidebar({
         {/* 음성 회의 */}
         <button
           onClick={() => onSelectPlaceholder("voiceMeeting")}
-          className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
+          className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base ${
             activePlaceholder === "voiceMeeting"
               ? "bg-recall-accent/15 text-recall-text"
               : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
@@ -452,7 +452,7 @@ export default function Sidebar({
         </button>
 
         {/* 분석 그룹 */}
-        <p className="mb-1.5 mt-4 px-2 text-[11px] font-medium uppercase tracking-wide text-recall-textMuted">
+        <p className="mb-1.5 mt-4 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
           {t.analysis_group}
         </p>
         {ANALYSIS_ITEMS.map((item) => {
@@ -461,7 +461,7 @@ export default function Sidebar({
             <button
               key={item.key}
               onClick={() => onSelectPlaceholder(item.key)}
-              className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
+              className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base ${
                 activePlaceholder === item.key
                   ? "bg-recall-accent/15 text-recall-text"
                   : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"

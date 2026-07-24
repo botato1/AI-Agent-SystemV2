@@ -61,14 +61,14 @@ export default function ProfilePopup({
                 item.onClick();
                 setIsOpen(false);
               }}
-              className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-sm text-recall-text hover:bg-white/5"
+              className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-base text-recall-text hover:bg-white/5"
             >
               {item.label}
             </button>
           ))}
           <button
             onClick={onToggleTheme}
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-recall-text hover:bg-white/5"
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-base text-recall-text hover:bg-white/5"
           >
             {theme === "dark" ? <MoonIcon size={14} /> : <SunIcon size={14} />}
             {theme === "dark" ? t.settings_theme_dark : t.settings_theme_light}
@@ -79,7 +79,7 @@ export default function ProfilePopup({
               onLogout();
               setIsOpen(false);
             }}
-            className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-sm text-recall-danger hover:bg-white/5"
+            className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-base text-recall-danger hover:bg-white/5"
           >
             {t.logout}
           </button>
@@ -92,8 +92,8 @@ export default function ProfilePopup({
       >
         <Avatar user={user} size={28} />
         <div className="min-w-0 flex-1 text-left">
-          <p className="truncate text-sm font-medium text-recall-text">{user.name}</p>
-          <p className="truncate text-xs text-recall-textMuted">
+          <p className="truncate text-base font-medium text-recall-text">{user.name}</p>
+          <p className="truncate text-sm text-recall-textMuted">
             {getStatusLabel(user.status)}
           </p>
         </div>

@@ -42,13 +42,13 @@ export default function DocumentAnalysisView({
         <div className="flex gap-0.5 border-b border-recall-border p-3 pb-0">
           <button
             onClick={() => setTab("document")}
-            className="px-2 pb-2 text-xs text-recall-textMuted hover:text-recall-text"
+            className="px-2 pb-2 text-sm text-recall-textMuted hover:text-recall-text"
           >
             개별 문서
           </button>
           <button
             onClick={() => setTab("worktree")}
-            className="border-b-2 border-recall-accent px-2 pb-2 text-xs text-recall-accent"
+            className="border-b-2 border-recall-accent px-2 pb-2 text-sm text-recall-accent"
           >
             코드 폴더
           </button>
@@ -63,13 +63,13 @@ export default function DocumentAnalysisView({
       <div className="flex gap-0.5 border-b border-recall-border p-3 pb-0">
         <button
           onClick={() => setTab("document")}
-          className="border-b-2 border-recall-accent px-2 pb-2 text-xs text-recall-accent"
+          className="border-b-2 border-recall-accent px-2 pb-2 text-sm text-recall-accent"
         >
           개별 문서
         </button>
         <button
           onClick={() => setTab("worktree")}
-          className="px-2 pb-2 text-xs text-recall-textMuted hover:text-recall-text"
+          className="px-2 pb-2 text-sm text-recall-textMuted hover:text-recall-text"
         >
           코드 폴더
         </button>
@@ -78,7 +78,7 @@ export default function DocumentAnalysisView({
       {/* 왼쪽 문서 목록 */}
       <div className="flex h-full w-64 flex-shrink-0 flex-col border-r border-recall-border p-3">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+          <p className="text-sm font-medium uppercase tracking-wide text-recall-textMuted">
             {t.doc_list_title}
           </p>
           <input
@@ -90,7 +90,7 @@ export default function DocumentAnalysisView({
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="rounded-lg border border-recall-border px-2.5 py-1 text-xs hover:bg-white/5"
+            className="rounded-lg border border-recall-border px-2.5 py-1 text-sm hover:bg-white/5"
           >
             {t.doc_btn_upload}
           </button>
@@ -108,7 +108,7 @@ export default function DocumentAnalysisView({
                     : "border-recall-border hover:bg-white/5"
                 }`}
               >
-                <span className="flex items-center gap-1.5 text-xs font-medium">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
                   {doc.status === "analyzing" && (
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-recall-accent" />
                   )}
@@ -117,7 +117,7 @@ export default function DocumentAnalysisView({
                   )}
                   <span className="truncate">{doc.name}</span>
                 </span>
-                <span className="text-[10px] text-recall-textMuted">
+                <span className="text-[11px] text-recall-textMuted">
                   {doc.status === "analyzing"
                     ? t.analyzing_msg
                     : doc.status === "failed"
@@ -135,14 +135,14 @@ export default function DocumentAnalysisView({
         <div className="flex flex-1 flex-col p-4 overflow-hidden">
           <div className="mb-3 flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium">{activeDoc.name}</p>
-              <p className="text-xs text-recall-textMuted">DOCUMENT</p>
+              <p className="text-base font-medium">{activeDoc.name}</p>
+              <p className="text-sm text-recall-textMuted">DOCUMENT</p>
             </div>
             <div className="flex gap-1.5">
               {activeDoc.status === "failed" && retryDocument && (
                 <button
                   onClick={() => retryDocument(activeDoc.id)}
-                  className="rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-text hover:bg-white/5"
+                  className="rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-text hover:bg-white/5"
                 >
                   재분석
                 </button>
@@ -150,7 +150,7 @@ export default function DocumentAnalysisView({
               {deleteDocument && (
                 <button
                   onClick={() => deleteDocument(activeDoc.id)}
-                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-textMuted hover:border-recall-danger hover:text-recall-danger"
+                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-textMuted hover:border-recall-danger hover:text-recall-danger"
                 >
                   <TrashIcon size={13} />
                   삭제
@@ -162,25 +162,25 @@ export default function DocumentAnalysisView({
           {activeDoc.status === "analyzing" ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-recall-border border-t-recall-accent" />
-              <p className="text-sm text-recall-textMuted">{t.analyzing_msg}</p>
+              <p className="text-base text-recall-textMuted">{t.analyzing_msg}</p>
             </div>
           ) : activeDoc.status === "failed" ? (
             <div className="flex flex-1 items-center justify-center rounded-lg border border-recall-danger/30 bg-recall-danger/5">
-              <p className="text-sm text-recall-danger">문서 분석에 실패했습니다.</p>
+              <p className="text-base text-recall-danger">문서 분석에 실패했습니다.</p>
             </div>
           ) : isDetailLoading ? (
             <div className="flex flex-1 items-center justify-center">
-              <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+              <p className="text-base text-recall-textMuted">불러오는 중...</p>
             </div>
           ) : (
             <div className="grid flex-1 grid-cols-2 gap-4 overflow-hidden">
               {/* 요약 패널 */}
               <div className="flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-                <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
                   <SparklesIcon size={14} className="text-recall-accent" />
                   {t.doc_tab_summary}
                 </p>
-                <p className="flex-1 overflow-y-auto text-sm leading-relaxed whitespace-pre-wrap">
+                <p className="flex-1 overflow-y-auto text-base leading-relaxed whitespace-pre-wrap">
                   {activeDocDetail?.analysis.summary || "요약이 없습니다."}
                 </p>
               </div>
@@ -188,10 +188,10 @@ export default function DocumentAnalysisView({
               {/* 분석 정보 & 원본 미리보기 패널 */}
               <div className="flex flex-col gap-4 overflow-hidden">
                 <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+                  <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
                     분석 정보
                   </p>
-                  <div className="flex flex-wrap gap-1.5 text-xs text-recall-textMuted">
+                  <div className="flex flex-wrap gap-1.5 text-sm text-recall-textMuted">
                     <span className="rounded-full border border-recall-border bg-recall-bgMain px-2.5 py-1">
                       페이지 {activeDocDetail?.analysis.page_count ?? "-"}
                     </span>
@@ -205,18 +205,18 @@ export default function DocumentAnalysisView({
                 </div>
 
                 <div className="flex flex-1 flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-hidden">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+                  <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
                     {t.doc_tab_original}
                   </p>
                   {activeDocDetail?.raw.original_text ? (
-                    <p className="flex-1 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-recall-textMuted">
+                    <p className="flex-1 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-recall-textMuted">
                       {activeDocDetail.raw.original_text}
                     </p>
                   ) : (
                     <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-recall-border bg-recall-bgMain p-4 text-center">
                       <div>
                         <DocumentIcon size={24} className="mx-auto mb-2 text-recall-textMuted" />
-                        <p className="text-xs text-recall-textMuted">{t.original_not_supported}</p>
+                        <p className="text-sm text-recall-textMuted">{t.original_not_supported}</p>
                       </div>
                     </div>
                   )}
@@ -228,7 +228,7 @@ export default function DocumentAnalysisView({
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-2">
           <UploadIcon size={24} className="text-recall-textMuted" />
-          <p className="text-sm text-recall-textMuted">{t.doc_not_selected}</p>
+          <p className="text-base text-recall-textMuted">{t.doc_not_selected}</p>
         </div>
       )}
       </div>
