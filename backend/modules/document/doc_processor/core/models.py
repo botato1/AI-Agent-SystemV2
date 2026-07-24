@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+
+def compute_doc_id(source: str) -> str:
+    return "doc_" + hashlib.md5(source.encode()).hexdigest()[:12]
 
 
 @dataclass
@@ -34,6 +39,7 @@ class TableBlock:
     data: list[list[Any]]
     markdown: str
     bbox: list[float]
+    image_path: str = ""
 
 
 @dataclass
@@ -47,6 +53,7 @@ class ImageBlock:
     quality_score: float = -1.0   # OCR 품질 점수 (0.0~1.0, -1.0=미계산)
     debug: dict | None = None     # debug_ocr=True 일 때만 채워짐
     image_type: str = "image"     # "image" | "diagram" (인포그래픽/다이어그램)
+    image_path: str = ""
 
 
 @dataclass
@@ -54,6 +61,7 @@ class ChartBlock:
     bbox: list[float]
     description: str = ""
     extracted_data: dict[str, Any] = field(default_factory=dict)
+    image_path: str = ""
 
 
 @dataclass
