@@ -18,6 +18,7 @@ from backend.schemas.chat_schema import (
     RoomFileListResponse,
 )
 from backend.schemas.workspace_schema import RoomResponse, RoomListResponse
+from backend.services import judgment_service
 
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/rooms", tags=["Rooms"])
@@ -161,6 +162,16 @@ def send_room_message(
             source_type="room_message",
             statement_text=statement_text,
             room_message_id=str(message.id),
+        )
+        background_tasks.add_task(
+            judgment_service.run_judgment_pipeline,
+            workspace_id=str(workspace_id),
+            category_id=str(room.category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            notify_user_id=current_user_id,
+            room_message_id=str(message.id),
+            session_room_id=str(room_id),
         )
 
     return RoomMessageSchema.model_validate(message)

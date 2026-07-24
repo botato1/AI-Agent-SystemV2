@@ -17,6 +17,7 @@ from backend.db.session import get_db
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.services.stt_stream_client import SttStreamClient
+from backend.services import judgment_service
 
 router = APIRouter(tags=["Meetings (Realtime)"])
 
@@ -46,6 +47,44 @@ def _spawn_background_task(coro) -> asyncio.Task:
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task
+
+async def _detect_and_push_contradiction(
+    websocket: WebSocket, send_lock: asyncio.Lock,
+    workspace_id: uuid.UUID, category_id: uuid.UUID,
+    statement_text: str, meeting_segment_id: str,
+) -> None:
+    """모순 감지를 실행하고, 실제로 발견되면 실시간 회의 화면(WS)으로 바로 push한다."""
+    try:
+        result = await asyncio.to_thread(
+            run_contradiction_detection,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="meeting_segment",
+            statement_text=statement_text,
+            meeting_segment_id=meeting_segment_id,
+        )
+    except Exception as e:
+        print(f"[meeting_ws_router] 모순 감지 실행 실패: {repr(e)}")
+        return
+
+    detected = result.get("detected_contradictions") or []
+    saved_ids = result.get("saved_contradiction_ids") or []
+    if not detected:
+        return
+
+    try:
+        async with send_lock:
+            for contradiction, contradiction_id in zip(detected, saved_ids):
+                await websocket.send_json({
+                    "type": "contradiction_alert",
+                    "contradiction_id": contradiction_id,
+                    "statement_text": statement_text,
+                    "reason": contradiction["reason"],
+                    "severity": contradiction["severity"],
+                    "confidence_score": contradiction["confidence_score"],
+                })
+    except Exception as e:
+        print(f"[meeting_ws_router] 모순 알림 전송 실패: {repr(e)}")
 
 
 def _open_recording_file(meeting_id: uuid.UUID):
@@ -114,12 +153,14 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
     meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID, next_index: int,
+    meeting_started_by: uuid.UUID, send_lock: asyncio.Lock,
 ) -> None:
     async for data in stt_client.receive():
         msg_type = data.get("type")
 
         if msg_type == "partial":
-            await websocket.send_json(data)
+            async with send_lock:
+                await websocket.send_json(data)
             
         elif msg_type == "final":
             for seg in data.get("final", {}).get("segments", []):
@@ -140,22 +181,31 @@ async def _relay_stt_to_frontend(
                     print(f"[meeting_ws_router] 세그먼트 저장 실패: {repr(e)}")
                     continue
 
-                # 발화 하나 저장될 때마다 모순 탐지를 백그라운드로 실행.
-                # run_contradiction_detection도 동기 함수라 to_thread로 감싼다.
+                # 발화 하나 저장될 때마다 모순 탐지를 실행하고, 실제로 발견되면 WS로 실시간 push한다.
                 statement_text = (segment_row.content or "").strip()
                 if statement_text:
+                    _spawn_background_task(_detect_and_push_contradiction(
+                        websocket, send_lock,
+                        workspace_id, category_id,
+                        statement_text, str(segment_row.id),
+                    ))
+                    # 결정 리마인더/문서 추천/반복논의 판단 파이프라인도 같이 실행.
                     _spawn_background_task(asyncio.to_thread(
-                        run_contradiction_detection,
+                        judgment_service.run_judgment_pipeline,
                         workspace_id=str(workspace_id),
                         category_id=str(category_id),
                         source_type="meeting_segment",
                         statement_text=statement_text,
+                        notify_user_id=str(meeting_started_by),
                         meeting_segment_id=str(segment_row.id),
+                        session_meeting_id=str(meeting_id),
                     ))
-            await websocket.send_json(data)
+            async with send_lock:
+                await websocket.send_json(data)
 
         elif msg_type == "session_end":
-            await websocket.send_json(data)
+            async with send_lock:
+                await websocket.send_json(data)
             return
 
 
@@ -205,6 +255,7 @@ async def meeting_stream_ws(
     # set()되면 오디오를 저장/전송하지 않고 버림 (일시정지 상태).
     paused_event = asyncio.Event()
     _PAUSED_STREAMS[meeting_id] = paused_event
+    send_lock = asyncio.Lock()  # 여러 백그라운드 작업이 동시에 websocket.send_json 하는 것 방지
 
     # 이 등록 전(WS 핸드셰이크/STT 서버 연결 대기 중)에 /pause REST가 먼저
     # 처리됐을 수 있다 — 그 경우 set_stream_paused는 아직 없는 이벤트를 조용히
@@ -221,6 +272,7 @@ async def meeting_stream_ws(
         _relay_stt_to_frontend(
             websocket, stt_client, db, meeting_id,
             meeting.workspace_id, meeting.category_id, next_index,
+            meeting.started_by, send_lock,
         )
     )
 
