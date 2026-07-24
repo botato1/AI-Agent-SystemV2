@@ -1,0 +1,31 @@
+# 가상환경
+venv/
+.venv/
+
+# 환경변수 (보안)
+.env
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 깃
+.git/
+.gitignore
+
+# 로컬 DB 및 저장 파일
+storage/
+
+# IDE
+.vscode/
+.idea/
+
+# 테스트
+tests/
+pytest.ini
+
+# 기타
+*.md
+.dockerignore

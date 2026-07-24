@@ -1,0 +1,129 @@
+# backend/routers/auth_router.py
+
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy.orm import Session
+
+from backend.core.dependencies import get_access_token
+from backend.db.session import get_db
+from backend.schemas.auth_schema import (
+    SignupRequest,
+    LoginRequest,
+    RefreshTokenRequest,
+    LogoutRequest,
+    ProfileUpdateRequest,
+    SignupResponse,
+    LoginResponse,
+    RefreshTokenResponse,
+    LogoutResponse,
+    ProfileResponse,
+    CheckUserIdResponse,
+    EmailCheckResponse,
+    PasswordResetRequestRequest,
+    PasswordResetRequestResponse,
+    PasswordResetConfirmRequest,
+    PasswordResetConfirmResponse,
+    AccountDeleteRequest,
+    AccountDeleteResponse,
+)
+from backend.services.auth_service import (
+    signup,
+    login,
+    refresh_access_token,
+    logout,
+    get_profile,
+    update_profile,
+    check_user_id_available,
+    check_email_available,
+    request_password_reset,
+    confirm_password_reset,
+    delete_account,
+)
+
+
+router = APIRouter(
+    prefix="/api/auth",
+    tags=["Auth"],
+)
+
+
+# 회원가입
+@router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
+def signup_api(request: SignupRequest, db: Session = Depends(get_db)):
+    return signup(db, request)
+
+
+# 아이디 중복 확인
+@router.get("/check-user-id", response_model=CheckUserIdResponse)
+def check_user_id_api(
+    username: str = Query(..., min_length=1, max_length=50, title="id"),
+    db: Session = Depends(get_db),
+):
+    return check_user_id_available(db, username)
+
+
+# 이메일 중복 확인
+@router.get("/check-email", response_model=EmailCheckResponse)
+def check_email_api(
+    email: str = Query(..., min_length=1, max_length=255),
+    db: Session = Depends(get_db),
+):
+    return check_email_available(db, email)
+
+
+# 로그인
+@router.post("/login", response_model=LoginResponse)
+def login_api(request: LoginRequest, db: Session = Depends(get_db)):
+    return login(db, request)
+
+
+# Refresh Token으로 Access Token 재발급
+@router.post("/refresh", response_model=RefreshTokenResponse)
+def refresh_api(request: RefreshTokenRequest, db: Session = Depends(get_db)):
+    return refresh_access_token(db, request)
+
+
+# 로그아웃
+@router.post("/logout", response_model=LogoutResponse)
+def logout_api(request: LogoutRequest, db: Session = Depends(get_db)):
+    return logout(db, request)
+
+
+# 사용자 정보 조회
+@router.get("/profile", response_model=ProfileResponse)
+def get_profile_api(
+    access_token: str = Depends(get_access_token),
+    db: Session = Depends(get_db),
+):
+    return get_profile(db, access_token)
+
+
+# 사용자 정보 수정
+@router.patch("/profile", response_model=ProfileResponse)
+def update_profile_api(
+    request: ProfileUpdateRequest,
+    access_token: str = Depends(get_access_token),
+    db: Session = Depends(get_db),
+):
+    return update_profile(db, access_token, request)
+
+
+# 비밀번호 재설정 요청
+@router.post("/password-reset/request", response_model=PasswordResetRequestResponse)
+def request_password_reset_api(request: PasswordResetRequestRequest, db: Session = Depends(get_db)):
+    return request_password_reset(db, request)
+
+
+# 비밀번호 재설정 확인
+@router.post("/password-reset/confirm", response_model=PasswordResetConfirmResponse)
+def confirm_password_reset_api(request: PasswordResetConfirmRequest, db: Session = Depends(get_db)):
+    return confirm_password_reset(db, request)
+
+
+# 회원 탈퇴
+@router.delete("/account", response_model=AccountDeleteResponse)
+def delete_account_api(
+    request: AccountDeleteRequest,
+    access_token: str = Depends(get_access_token),
+    db: Session = Depends(get_db),
+):
+    return delete_account(db, access_token, request)
