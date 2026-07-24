@@ -36,6 +36,14 @@ export function useContradictions(workspaceId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, statusFilter]);
 
+  // 새로 감지된 모순을 반영하기 위해 백그라운드에서 주기적으로 조용히 재조회 (로딩 스피너 없이)
+  useEffect(() => {
+    if (!workspaceId) return;
+    const timer = setInterval(loadList, 8000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, statusFilter]);
+
   useEffect(() => {
     async function loadChangeSummary() {
       if (!workspaceId || !selected || selected.status !== "resolved") {
