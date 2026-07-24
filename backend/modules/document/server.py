@@ -25,11 +25,20 @@ _DATA_DIR      = _REPO_ROOT / "data" / "uploads" / "documents"
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from doc_processor.core.pipeline import DocumentPipeline
 from doc_processor.output.assembler import assemble
 
 app = FastAPI(title="Document Processor API", version="1.0.0")
+
+# StaticFiles는 마운트 시점에 디렉토리가 존재해야 함 — 없으면 서버 시작이 실패함
+(_STORAGE_DIR / "figures").mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/documents/figures",
+    StaticFiles(directory=_STORAGE_DIR / "figures"),
+    name="figures",
+)
 
 app.add_middleware(
     CORSMiddleware,

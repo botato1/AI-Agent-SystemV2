@@ -73,11 +73,13 @@ def _build_tables(doc: DocumentResult) -> list[dict]:
                     "page": page.page,
                     "data": table.data,
                     "markdown": table.markdown.strip(),
+                    "image_path": table.image_path,
                 })
             elif table.markdown.strip():
                 tables.append({
                     "page": page.page,
                     "markdown": table.markdown.strip(),
+                    "image_path": table.image_path,
                 })
     return tables
 
@@ -210,6 +212,7 @@ def _build_charts(doc: DocumentResult) -> list[dict]:
                 "page": page.page,
                 "raw_text": chart.description.strip(),
                 "title": title,
+                "image_path": chart.image_path,
             }
             if chart.extracted_data.get("data"):
                 entry["data"] = _dedupe_rows(chart.extracted_data["data"])
@@ -230,6 +233,7 @@ def _build_diagrams(doc: DocumentResult) -> list[dict]:
             diagrams.append({
                 "page": page.page,
                 "raw_text": raw_text,
+                "image_path": img.image_path,
             })
     return diagrams
 
