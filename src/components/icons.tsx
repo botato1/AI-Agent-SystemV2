@@ -31,4 +31,5 @@ export {
   ChevronLeft as ChevronLeftIcon,
   User as PersonIcon,
   Link as LinkIcon,
+  Bell as BellIcon,
 } from "lucide-react";

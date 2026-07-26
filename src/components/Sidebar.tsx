@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Channel, User, Workspace } from "../types";
 import { Theme } from "../hooks/useTheme";
 import ProfilePopup from "./ProfilePopup";
+import NotificationBell from "./NotificationBell";
 import InviteMemberModal from "./InviteMemberModal";
 import ManageMembersModal from "./ManageMembersModal";
 import {
@@ -475,6 +476,9 @@ export default function Sidebar({
       </div>
 
       {/* 3. 하단 프로필 영역 */}
+      <div className="flex items-center gap-1.5 border-t border-recall-border px-3 pt-2">
+        <NotificationBell workspaceId={currentWorkspaceId} />
+      </div>
       <ProfilePopup
         user={user}
         onOpenProfile={onOpenProfile}
