@@ -22,6 +22,7 @@ import { useContradictions } from "../hooks/useContradictions";
 import { RoomFile } from "../services/roomFile";
 import { Contradiction, ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
 import { hashAvatarColor } from "../data/avatarColors";
+import Avatar from "./Avatar";
 
 function severityBadge(severity: ContradictionSeverity) {
   const map = {
@@ -38,10 +39,28 @@ import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
 interface MainAreaProps {
   channel: Channel;
   workspaceId: string;
-  currentUser: { id: string; name: string };
+  currentUser: { id: string; name: string; avatarColor: string; avatarImageUrl: string | null };
   memberNameById: Record<string, string>;
+  memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
   t: any; // 번역 객체 타입
+}
+
+// 메시지 발신자의 아바타 표시용 정보를 구성한다 - 내 메시지면 내 프로필,
+// 다른 멤버면 멤버 목록에서 가져온 이미지 + 이름 해시 기반 색상으로 대체
+function resolveSenderAvatar(
+  m: ChatMessage,
+  currentUser: MainAreaProps["currentUser"],
+  memberAvatarById: Record<string, string | null>
+) {
+  if (m.isMine) {
+    return { name: currentUser.name, avatarColor: currentUser.avatarColor, avatarImageUrl: currentUser.avatarImageUrl };
+  }
+  return {
+    name: m.author,
+    avatarColor: hashAvatarColor(m.senderId || m.author),
+    avatarImageUrl: m.senderId ? memberAvatarById[m.senderId] ?? null : null,
+  };
 }
 
 type Tab = "message" | "docs" | "aiChat";
@@ -332,6 +351,8 @@ function MessageTab({
   contradictions,
   onResolveContradiction,
   onDismissContradiction,
+  currentUser,
+  memberAvatarById,
   t,
 }: {
   messages: ChatMessage[];
@@ -343,6 +364,8 @@ function MessageTab({
   contradictions: Contradiction[];
   onResolveContradiction: (id: string, resolutionType: ContradictionResolutionType) => void;
   onDismissContradiction: (id: string) => void;
+  currentUser: MainAreaProps["currentUser"];
+  memberAvatarById: Record<string, string | null>;
   t: any;
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -456,7 +479,7 @@ function MessageTab({
                 setContextMenu({ messageId: m.id, x: e.clientX, y: e.clientY });
               }}
             >
-              <div className="h-7 w-7 flex-shrink-0 rounded-full bg-recall-accent/30" />
+              <Avatar user={resolveSenderAvatar(m, currentUser, memberAvatarById)} size={28} />
               <div className="min-w-0 flex-1">
                 <p className="text-base font-medium text-recall-text">{m.author}</p>
                 {(() => {
@@ -632,6 +655,16 @@ function DocsTab({
 }
 
 // AI Chat 탭
+function ThinkingDots() {
+  return (
+    <span className="flex items-center gap-1">
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-recall-textMuted [animation-delay:-0.3s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-recall-textMuted [animation-delay:-0.15s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-recall-textMuted" />
+    </span>
+  );
+}
+
 function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: string; t: any }) {
   const { messages, isLoading, isSending, sendMessage } = useAiChat(workspaceId, roomId);
   const [input, setInput] = useState("");
@@ -644,43 +677,70 @@ function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: st
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className="flex-1 space-y-2 overflow-y-auto">
+      <div className="flex-1 space-y-4 overflow-y-auto px-1 py-2">
         {isLoading ? (
           <p className="text-base text-recall-textMuted">불러오는 중...</p>
         ) : messages.length === 0 ? (
-          <p className="text-base text-recall-textMuted">{t.ai_chat_welcome}</p>
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-recall-accent/15">
+              <SparklesIcon size={18} className="text-recall-accent" />
+            </div>
+            <p className="text-base text-recall-textMuted">{t.ai_chat_welcome}</p>
+          </div>
         ) : (
           messages.map((m) => (
-            <div key={m.id}>
-              <div
-                className={`max-w-[80%] rounded-lg px-3 py-2 text-base ${
-                  m.role === "assistant"
-                    ? "bg-recall-bgSoft text-recall-text"
-                    : "ml-auto bg-recall-accent/20 text-recall-text"
-                } ${m.isPending || m.errorText ? "opacity-60" : ""}`}
-              >
-                {m.content}
-              </div>
-              {m.errorText && (
-                <p className="mt-1 text-right text-xs text-recall-danger">⚠️ {m.errorText}</p>
+            <div
+              key={m.id}
+              className={`flex items-end gap-2 ${m.role === "assistant" ? "" : "flex-row-reverse"}`}
+            >
+              {m.role === "assistant" && (
+                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent/15">
+                  <SparklesIcon size={13} className="text-recall-accent" />
+                </div>
               )}
+              <div className={`flex max-w-[75%] flex-col gap-1 ${m.role === "assistant" ? "items-start" : "items-end"}`}>
+                <div
+                  className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-base leading-relaxed shadow-sm ${
+                    m.role === "assistant"
+                      ? "rounded-bl-md bg-recall-bgSoft text-recall-text"
+                      : "rounded-br-md bg-recall-accent text-white"
+                  } ${m.isPending || m.errorText ? "opacity-60" : ""}`}
+                >
+                  {m.content}
+                </div>
+                {m.errorText && (
+                  <p className="flex items-center gap-1 text-xs text-recall-danger">
+                    <WarningIcon size={12} /> {m.errorText}
+                  </p>
+                )}
+              </div>
             </div>
           ))
         )}
-        {isSending && <p className="text-sm text-recall-textMuted">{t.ai_chat_thinking}</p>}
+        {isSending && (
+          <div className="flex items-end gap-2">
+            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent/15">
+              <SparklesIcon size={13} className="text-recall-accent" />
+            </div>
+            <div className="rounded-2xl rounded-bl-md bg-recall-bgSoft px-3.5 py-2.5 shadow-sm">
+              <ThinkingDots />
+            </div>
+          </div>
+        )}
       </div>
-      <div className="mt-3 flex gap-2">
+      <div className="relative mt-3 flex items-center gap-2 rounded-2xl border border-recall-border bg-recall-bgSoft p-2 shadow-sm">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
           placeholder={t.ai_input_placeholder}
-          className="flex-1 rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
+          className="flex-1 bg-transparent px-2 py-1.5 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none"
         />
         <button
           onClick={handleSend}
+          disabled={!input.trim() || isSending}
           aria-label="Send"
-          className="flex flex-shrink-0 items-center justify-center rounded-lg border border-recall-border px-3 py-2 text-base text-recall-text hover:bg-white/5"
+          className="flex flex-shrink-0 items-center justify-center rounded-full bg-recall-accent p-2 text-white transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           <SendIcon size={14} />
         </button>
@@ -694,6 +754,7 @@ export default function MainArea({
   workspaceId,
   currentUser,
   memberNameById,
+  memberAvatarById,
   activeRecorderName,
   t,
 }: MainAreaProps) {
@@ -824,6 +885,8 @@ export default function MainArea({
           contradictions={roomContradictions}
           onResolveContradiction={resolveContradiction}
           onDismissContradiction={dismissContradiction}
+          currentUser={currentUser}
+          memberAvatarById={memberAvatarById}
           t={t}
         />
       )}
