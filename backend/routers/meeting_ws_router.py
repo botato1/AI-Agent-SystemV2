@@ -86,6 +86,32 @@ async def _detect_and_push_contradiction(
     except Exception as e:
         print(f"[meeting_ws_router] 모순 알림 전송 실패: {repr(e)}")
 
+async def _process_segment_analysis(
+    websocket: WebSocket, send_lock: asyncio.Lock, processing_lock: asyncio.Lock,
+    workspace_id: uuid.UUID, category_id: uuid.UUID,
+    statement_text: str, meeting_segment_id: str,
+    meeting_id: uuid.UUID, meeting_started_by: uuid.UUID,
+) -> None:
+    """모순 감지 + 판단 파이프라인을 세그먼트 단위로 직렬 처리한다.
+    둘 다 LLM 호출 동안 DB 커넥션을 물고 있어서, 여러 세그먼트가 동시에
+    실행되면 커넥션 풀이 고갈된다 (업로드 음성 경로가 순차 처리하는 것과 같은 이유)."""
+    async with processing_lock:
+        await _detect_and_push_contradiction(
+            websocket, send_lock,
+            workspace_id, category_id,
+            statement_text, meeting_segment_id,
+        )
+        await asyncio.to_thread(
+            judgment_service.run_judgment_pipeline,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="meeting_segment",
+            statement_text=statement_text,
+            notify_user_id=str(meeting_started_by),
+            meeting_segment_id=meeting_segment_id,
+            session_meeting_id=str(meeting_id),
+        )
+
 
 def _open_recording_file(meeting_id: uuid.UUID):
     MEETING_RECORDING_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -153,7 +179,7 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
     meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID, next_index: int,
-    meeting_started_by: uuid.UUID, send_lock: asyncio.Lock,
+    meeting_started_by: uuid.UUID, send_lock: asyncio.Lock, processing_lock: asyncio.Lock,
 ) -> None:
     async for data in stt_client.receive():
         msg_type = data.get("type")
@@ -184,21 +210,13 @@ async def _relay_stt_to_frontend(
                 # 발화 하나 저장될 때마다 모순 탐지를 실행하고, 실제로 발견되면 WS로 실시간 push한다.
                 statement_text = (segment_row.content or "").strip()
                 if statement_text:
-                    _spawn_background_task(_detect_and_push_contradiction(
-                        websocket, send_lock,
+                    # 모순감지+판단파이프라인은 processing_lock으로 직렬화 —
+                    # 둘 다 LLM 호출 동안 DB 커넥션을 물고 있어서 동시 실행 시 풀 고갈됨.
+                    _spawn_background_task(_process_segment_analysis(
+                        websocket, send_lock, processing_lock,
                         workspace_id, category_id,
                         statement_text, str(segment_row.id),
-                    ))
-                    # 결정 리마인더/문서 추천/반복논의 판단 파이프라인도 같이 실행.
-                    _spawn_background_task(asyncio.to_thread(
-                        judgment_service.run_judgment_pipeline,
-                        workspace_id=str(workspace_id),
-                        category_id=str(category_id),
-                        source_type="meeting_segment",
-                        statement_text=statement_text,
-                        notify_user_id=str(meeting_started_by),
-                        meeting_segment_id=str(segment_row.id),
-                        session_meeting_id=str(meeting_id),
+                        meeting_id, meeting_started_by,
                     ))
             async with send_lock:
                 await websocket.send_json(data)
@@ -256,6 +274,7 @@ async def meeting_stream_ws(
     paused_event = asyncio.Event()
     _PAUSED_STREAMS[meeting_id] = paused_event
     send_lock = asyncio.Lock()  # 여러 백그라운드 작업이 동시에 websocket.send_json 하는 것 방지
+    processing_lock = asyncio.Lock()  # 세그먼트별 모순감지+판단파이프라인 직렬화 (DB 커넥션 풀 고갈 방지)
 
     # 이 등록 전(WS 핸드셰이크/STT 서버 연결 대기 중)에 /pause REST가 먼저
     # 처리됐을 수 있다 — 그 경우 set_stream_paused는 아직 없는 이벤트를 조용히
@@ -272,7 +291,7 @@ async def meeting_stream_ws(
         _relay_stt_to_frontend(
             websocket, stt_client, db, meeting_id,
             meeting.workspace_id, meeting.category_id, next_index,
-            meeting.started_by, send_lock,
+            meeting.started_by, send_lock, processing_lock,
         )
     )
 
