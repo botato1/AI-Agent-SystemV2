@@ -16,7 +16,7 @@ import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
 import { useRealTasks } from "./hooks/useRealTasks";
 import { Language, translations } from "./data/translations";
 import { hashAvatarColor, loadAvatarColor, saveAvatarColor } from "./data/avatarColors";
-import { getProfileApi, logoutApi } from "./services/auth";
+import { getProfileApi, logoutApi, uploadProfileImageApi, resolveAvatarUrl } from "./services/auth";
 import {
   createWorkspaceApi,
   getWorkspaceListApi,
@@ -64,6 +64,8 @@ export default function App() {
 
   // 워크스페이스 멤버 id → 표시 이름 매핑 (채팅 메시지 발신자 이름 표시용)
   const [memberNameById, setMemberNameById] = useState<Record<string, string>>({});
+  // 워크스페이스 멤버 id → 프로필 이미지 URL 매핑 (채팅 메시지 발신자 아바타 표시용)
+  const [memberAvatarById, setMemberAvatarById] = useState<Record<string, string | null>>({});
 
   // 채팅방별 데이터 상태
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, Channel[]>>({});
@@ -99,7 +101,7 @@ export default function App() {
           username: profileResult.user.username,
           status: "online",
           avatarColor: fixedAvatarColor,
-          avatarImageUrl: null,
+          avatarImageUrl: resolveAvatarUrl(profileResult.user.profile_image_url),
         });
       } else {
         localStorage.removeItem("access_token");
@@ -157,18 +159,24 @@ export default function App() {
     async function loadMembers() {
       if (!currentWorkspaceId) {
         setMemberNameById({});
+        setMemberAvatarById({});
         return;
       }
 
       const res = await getWorkspaceMembersApi(currentWorkspaceId);
 
       if (res.status === "success") {
-        const nextMap: Record<string, string> = {};
+        const nextNameMap: Record<string, string> = {};
+        const nextAvatarMap: Record<string, string | null> = {};
         res.members.forEach((m) => {
           const userId = m.user_id || m.id;
-          if (userId) nextMap[userId] = m.display_name || m.username;
+          if (userId) {
+            nextNameMap[userId] = m.display_name || m.username;
+            nextAvatarMap[userId] = resolveAvatarUrl(m.profile_image_url);
+          }
         });
-        setMemberNameById(nextMap);
+        setMemberNameById(nextNameMap);
+        setMemberAvatarById(nextAvatarMap);
       }
     }
 
@@ -225,8 +233,19 @@ export default function App() {
     });
   }
 
-  function handleChangeAvatarImage(imageUrl: string) {
-    setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: imageUrl } : prev));
+  async function handleChangeAvatarImage(file: File) {
+    // 업로드 응답 기다리는 동안에도 바로 반응이 보이도록 로컬 미리보기부터 반영
+    const previewUrl = URL.createObjectURL(file);
+    setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: previewUrl } : prev));
+
+    const res = await uploadProfileImageApi(file);
+    if (res.status === "success" && res.user) {
+      setCurrentUser((prev) =>
+        prev ? { ...prev, avatarImageUrl: resolveAvatarUrl(res.user!.profile_image_url) } : prev
+      );
+    } else {
+      alert(`프로필 이미지 변경 실패: ${res.message}`);
+    }
   }
 
   // 워크스페이스 생성 API
@@ -411,8 +430,14 @@ export default function App() {
         <MainArea
           channel={selection.channel}
           workspaceId={currentWorkspaceId}
-          currentUser={{ id: currentUser.id, name: currentUser.name }}
+          currentUser={{
+            id: currentUser.id,
+            name: currentUser.name,
+            avatarColor: currentUser.avatarColor,
+            avatarImageUrl: currentUser.avatarImageUrl,
+          }}
           memberNameById={memberNameById}
+          memberAvatarById={memberAvatarById}
           activeRecorderName={activeRecorderName}
           t={t}
         />
@@ -423,6 +448,7 @@ export default function App() {
           meeting={liveMeeting.meeting}
           segments={liveMeeting.segments}
           partial={liveMeeting.partial}
+          contradictionAlerts={liveMeeting.contradictionAlerts}
           errorMessage={liveMeeting.errorMessage}
           onStart={liveMeeting.start}
           onPause={liveMeeting.pause}

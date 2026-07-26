@@ -9,6 +9,7 @@ import {
 export interface ChatMessage {
   id: string;
   author: string;
+  senderId: string | null;
   text: string;
   isMine: boolean;
 }
@@ -87,6 +88,7 @@ export function useChannelRuntime(
   const chatMessages: ChatMessage[] = roomMessages.map((m) => ({
     id: m.id,
     author: resolveAuthor(m.sender_user_id),
+    senderId: m.sender_user_id,
     text: m.content,
     isMine: m.sender_user_id === currentUser.id,
   }));
