@@ -1,9 +1,11 @@
 // src/components/DocumentAnalysisView.tsx
 import { useRef, useState } from "react";
 import { AnalyzedDocument } from "../types"; // 전역 types.ts로부터 직접 가져와 충돌 원천 차단
-import { DocumentDetail } from "../services/document";
+import { DocumentDetail, DocumentFigure } from "../services/document";
 import { DocumentIcon, SparklesIcon, UploadIcon, TrashIcon } from "./icons";
 import WorktreePanel from "./WorktreePanel";
+import { cleanExtractedText } from "./DocumentContentBlocks";
+import DocumentOriginalPages from "./DocumentOriginalPages";
 
 type AnalysisTab = "document" | "worktree";
 
@@ -12,6 +14,7 @@ interface DocumentAnalysisViewProps {
   documents: AnalyzedDocument[];
   activeDocId: string | null;
   activeDocDetail?: DocumentDetail | null;
+  activeDocFigures?: DocumentFigure[];
   isDetailLoading?: boolean;
   uploadDocument: (fileList: FileList | null) => void;
   selectDocument: (id: string | null) => void;
@@ -25,6 +28,7 @@ export default function DocumentAnalysisView({
   documents,
   activeDocId,
   activeDocDetail,
+  activeDocFigures,
   isDetailLoading,
   uploadDocument,
   selectDocument,
@@ -173,19 +177,31 @@ export default function DocumentAnalysisView({
               <p className="text-base text-recall-textMuted">불러오는 중...</p>
             </div>
           ) : (
-            <div className="grid flex-1 grid-cols-2 gap-4 overflow-hidden">
-              {/* 요약 패널 */}
-              <div className="flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
-                  <SparklesIcon size={14} className="text-recall-accent" />
-                  {t.doc_tab_summary}
+            <div className="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
+              {/* 원본 패널 (메인, 2/3 폭) */}
+              <div className="col-span-2 flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-hidden">
+                <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
+                  {t.doc_tab_original}
                 </p>
-                <p className="flex-1 overflow-y-auto text-base leading-relaxed whitespace-pre-wrap">
-                  {activeDocDetail?.analysis.summary || "요약이 없습니다."}
-                </p>
+                {activeDocDetail?.raw.original_text || activeDocDetail?.raw.chunks?.length || activeDocFigures?.length ? (
+                  <div className="flex-1 space-y-2 overflow-y-auto text-sm leading-relaxed text-recall-textMuted">
+                    <DocumentOriginalPages
+                      chunks={activeDocDetail?.raw.chunks ?? []}
+                      originalText={activeDocDetail?.raw.original_text ?? null}
+                      figures={activeDocFigures ?? []}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-recall-border bg-recall-bgMain p-4 text-center">
+                    <div>
+                      <DocumentIcon size={24} className="mx-auto mb-2 text-recall-textMuted" />
+                      <p className="text-sm text-recall-textMuted">{t.original_not_supported}</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* 분석 정보 & 원본 미리보기 패널 */}
+              {/* 분석 정보 / 이미지 / 요약 패널 (보조, 1/3 폭) */}
               <div className="flex flex-col gap-4 overflow-hidden">
                 <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
                   <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
@@ -204,22 +220,16 @@ export default function DocumentAnalysisView({
                   </div>
                 </div>
 
-                <div className="flex flex-1 flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-hidden">
-                  <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
-                    {t.doc_tab_original}
+                <div className="max-h-48 flex-shrink-0 overflow-y-auto rounded-xl border border-recall-border bg-recall-bgSoft p-4">
+                  <p className="mb-2 flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
+                    <SparklesIcon size={14} className="text-recall-accent" />
+                    {t.doc_tab_summary}
                   </p>
-                  {activeDocDetail?.raw.original_text ? (
-                    <p className="flex-1 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-recall-textMuted">
-                      {activeDocDetail.raw.original_text}
-                    </p>
-                  ) : (
-                    <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-recall-border bg-recall-bgMain p-4 text-center">
-                      <div>
-                        <DocumentIcon size={24} className="mx-auto mb-2 text-recall-textMuted" />
-                        <p className="text-sm text-recall-textMuted">{t.original_not_supported}</p>
-                      </div>
-                    </div>
-                  )}
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {activeDocDetail?.analysis.summary
+                      ? cleanExtractedText(activeDocDetail.analysis.summary)
+                      : "요약이 없습니다."}
+                  </p>
                 </div>
               </div>
             </div>

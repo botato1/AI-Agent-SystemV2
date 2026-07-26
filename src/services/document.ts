@@ -93,6 +93,33 @@ export interface GetDocumentGraphResponse {
   error: string | null;
 }
 
+// =============================================================================
+// Re:Call: document_figures (표/차트/다이어그램 크롭 이미지)
+// =============================================================================
+
+export type DocumentFigureType = "table" | "chart" | "image" | "diagram";
+
+export interface DocumentFigure {
+  figure_id: string;
+  page_number: number;
+  type: DocumentFigureType;
+  image_url: string;
+}
+
+export interface GetDocumentFiguresResponse {
+  status: "success" | "error";
+  figures: DocumentFigure[];
+  message: string;
+  error: string | null;
+}
+
+// image_url이 절대 URL(문서 처리 서버 origin)로 오는 경우와, 상대 경로로 오는 경우를 모두 지원
+export function resolveFigureUrl(imageUrl: string): string {
+  if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  return `${API_BASE_URL}${imageUrl}`;
+}
+
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -496,6 +523,68 @@ export async function getDocumentGraphApi(
       status: "error",
       nodes: [],
       edges: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 7. 문서 표/차트/다이어그램 이미지 목록 조회 API (GET /api/workspaces/{workspace_id}/documents/{document_id}/figures)
+ */
+export async function getDocumentFiguresApi(
+  workspaceId: string,
+  documentId: string
+): Promise<GetDocumentFiguresResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      figures: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/documents/${documentId}/figures`,
+      { method: "GET" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      let defaultMsg = "이미지 목록을 불러오지 못했습니다.";
+      if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스이거나 문서입니다.";
+      }
+
+      return {
+        status: "error",
+        figures: [],
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      figures: data.figures || [],
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getDocumentFiguresApi error:", error);
+    return {
+      status: "error",
+      figures: [],
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

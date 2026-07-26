@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import {
   DocumentDetail,
+  DocumentFigure,
   getDocumentListApi,
   uploadDocumentApi,
   getDocumentApi,
+  getDocumentFiguresApi,
   deleteDocumentApi,
   retryDocumentApi,
 } from "../services/document";
@@ -22,6 +24,7 @@ export function useDocumentAnalysis(workspaceId: string) {
   const [documents, setDocuments] = useState<AnalyzedDocument[]>([]);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [activeDocDetail, setActiveDocDetail] = useState<DocumentDetail | null>(null);
+  const [activeDocFigures, setActiveDocFigures] = useState<DocumentFigure[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
 
@@ -63,12 +66,17 @@ export function useDocumentAnalysis(workspaceId: string) {
     async function loadDetail() {
       if (!workspaceId || !activeDocId) {
         setActiveDocDetail(null);
+        setActiveDocFigures([]);
         return;
       }
       setIsDetailLoading(true);
-      const res = await getDocumentApi(workspaceId, activeDocId);
+      const [detailRes, figuresRes] = await Promise.all([
+        getDocumentApi(workspaceId, activeDocId),
+        getDocumentFiguresApi(workspaceId, activeDocId),
+      ]);
       setIsDetailLoading(false);
-      setActiveDocDetail(res.status === "success" ? res.document : null);
+      setActiveDocDetail(detailRes.status === "success" ? detailRes.document : null);
+      setActiveDocFigures(figuresRes.status === "success" ? figuresRes.figures : []);
     }
 
     loadDetail();
@@ -116,7 +124,8 @@ export function useDocumentAnalysis(workspaceId: string) {
       setDocuments((prev) => prev.filter((d) => d.id !== id));
       setActiveDocId((prev) => (prev === id ? null : prev));
     } else {
-      alert(`문서 삭제 실패: ${res.message}`);
+      const detail = res.error && res.error !== "UNAUTHORIZED" ? `\n(${res.error})` : "";
+      alert(`문서 삭제 실패: ${res.message}${detail}`);
     }
   }
 
@@ -126,8 +135,12 @@ export function useDocumentAnalysis(workspaceId: string) {
     if (res.status === "success") {
       await loadDocuments();
       if (activeDocId === id) {
-        const detailRes = await getDocumentApi(workspaceId, id);
+        const [detailRes, figuresRes] = await Promise.all([
+          getDocumentApi(workspaceId, id),
+          getDocumentFiguresApi(workspaceId, id),
+        ]);
         setActiveDocDetail(detailRes.status === "success" ? detailRes.document : null);
+        setActiveDocFigures(figuresRes.status === "success" ? figuresRes.figures : []);
       }
     } else {
       setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, status: "failed" } : d)));
@@ -143,6 +156,7 @@ export function useDocumentAnalysis(workspaceId: string) {
     documents,
     activeDocId,
     activeDocDetail,
+    activeDocFigures,
     isLoading,
     isDetailLoading,
     uploadDocument,
