@@ -92,5 +92,6 @@ export function useContradictions(workspaceId: string) {
     isChangeSummaryLoading,
     resolve,
     dismiss,
+    refresh: loadList,
   };
 }

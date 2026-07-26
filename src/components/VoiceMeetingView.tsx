@@ -1,4 +1,4 @@
-import { LiveMeetingStatus, LiveSegment } from "../hooks/useLiveMeeting";
+import { LiveMeetingStatus, LiveSegment, ContradictionAlert } from "../hooks/useLiveMeeting";
 import { Meeting } from "../services/meeting";
 import MeetingsPanel from "./MeetingsPanel";
 
@@ -8,6 +8,7 @@ interface VoiceMeetingViewProps {
   meeting: Meeting | null;
   segments: LiveSegment[];
   partial: { confirmed: string; tentative: string };
+  contradictionAlerts: ContradictionAlert[];
   errorMessage: string | null;
   onStart: (title: string) => void;
   onPause: () => void;
@@ -23,6 +24,7 @@ export default function VoiceMeetingView({
   meeting,
   segments,
   partial,
+  contradictionAlerts,
   errorMessage,
   onStart,
   onPause,
@@ -43,6 +45,7 @@ export default function VoiceMeetingView({
         liveMeeting={meeting}
         liveSegments={segments}
         livePartial={partial}
+        liveContradictionAlerts={contradictionAlerts}
         liveError={errorMessage}
         onStartLive={onStart}
         onPauseLive={onPause}

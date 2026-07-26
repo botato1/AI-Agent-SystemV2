@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
-import { LiveMeetingStatus, LiveSegment } from "../hooks/useLiveMeeting";
+import { LiveMeetingStatus, LiveSegment, ContradictionAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { Meeting, MeetingStatus } from "../services/meeting";
 import { ContradictionSeverity } from "../services/contradiction";
@@ -30,7 +30,13 @@ function severityBadge(severity: ContradictionSeverity) {
 type DetailTab = "summary" | "decisions" | "script";
 
 const ACCEPTED_EXTENSIONS = ".mp3,.wav,.m4a,.webm";
-const LIVE_ACTIVE_STATUSES: LiveMeetingStatus[] = ["connecting", "recording", "paused", "ending"];
+const LIVE_ACTIVE_STATUSES: LiveMeetingStatus[] = [
+  "connecting",
+  "recording",
+  "paused",
+  "reconnecting",
+  "ending",
+];
 
 function formatDate(iso?: string | null): string {
   if (!iso) return "-";
@@ -74,6 +80,8 @@ function liveStatusLabel(status: LiveMeetingStatus): string {
       return "녹음 중";
     case "paused":
       return "일시정지";
+    case "reconnecting":
+      return "재연결 중...";
     case "ending":
       return "종료 처리 중...";
     default:
@@ -158,6 +166,7 @@ interface MeetingsPanelProps {
   liveMeeting: Meeting | null;
   liveSegments: LiveSegment[];
   livePartial: { confirmed: string; tentative: string };
+  liveContradictionAlerts: ContradictionAlert[];
   liveError: string | null;
   onStartLive: (title: string) => void;
   onPauseLive: () => void;
@@ -172,6 +181,7 @@ export default function MeetingsPanel({
   liveMeeting,
   liveSegments,
   livePartial,
+  liveContradictionAlerts,
   liveError,
   onStartLive,
   onPauseLive,
@@ -195,7 +205,23 @@ export default function MeetingsPanel({
     reload,
   } = useRealMeetings(workspaceId);
 
-  const { contradictions, isLoading: isContradictionsLoading, resolve, dismiss } = useContradictions(workspaceId);
+  const {
+    contradictions,
+    isLoading: isContradictionsLoading,
+    resolve,
+    dismiss,
+    refresh: refreshContradictions,
+  } = useContradictions(workspaceId);
+
+  // 실시간 회의 중 모순 감지 WS 알림이 오면, 8초 폴링을 기다리지 않고 즉시 목록을 새로고침
+  const prevAlertCountRef = useRef(liveContradictionAlerts.length);
+  useEffect(() => {
+    if (liveContradictionAlerts.length > prevAlertCountRef.current) {
+      refreshContradictions();
+    }
+    prevAlertCountRef.current = liveContradictionAlerts.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveContradictionAlerts.length]);
 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
@@ -401,6 +427,12 @@ export default function MeetingsPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto rounded-lg border border-recall-border p-3">
+              {liveStatus === "reconnecting" && (
+                <div className="mb-2 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+                  <div className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-400" />
+                  연결이 끊겨 재연결을 시도하고 있습니다...
+                </div>
+              )}
               {liveStatus === "connecting" || liveStatus === "ending" ? (
                 <div className="flex h-full flex-col items-center justify-center gap-2">
                   <div className="h-5 w-5 animate-spin rounded-full border-2 border-recall-border border-t-recall-accent" />

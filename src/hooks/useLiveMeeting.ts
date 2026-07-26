@@ -6,6 +6,7 @@ export type LiveMeetingStatus =
   | "connecting"
   | "recording"
   | "paused"
+  | "reconnecting"
   | "ending"
   | "ended"
   | "error";
@@ -17,6 +18,14 @@ export interface LiveSegment {
   end_ms: number;
 }
 
+export interface ContradictionAlert {
+  contradiction_id: string;
+  statement_text: string;
+  reason: string;
+  severity: "low" | "medium" | "high";
+  confidence_score: number;
+}
+
 interface CurrentUserInfo {
   id: string;
   name: string;
@@ -26,6 +35,11 @@ interface CurrentUserInfo {
 // 출력(webm/opus)은 쓸 수 없다. AudioWorklet에서 직접 리샘플링 + PCM 변환해서 스트리밍한다.
 const TARGET_SAMPLE_RATE = 16000;
 const CHUNK_MS = 200;
+
+// WS가 예기치 않게 끊겼을 때(터널/와이파이 순단 등) 재연결을 시도하는 유예 시간 —
+// STT 서버가 이 시간 안에 같은 세션으로 재접속하면 회의를 안 끊고 이어준다.
+const RECONNECT_WINDOW_MS = 20000;
+const RECONNECT_RETRY_INTERVAL_MS = 1500;
 
 const PCM_WORKLET_SOURCE = `
 class PCMProcessor extends AudioWorkletProcessor {
@@ -86,7 +100,13 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     confirmed: "",
     tentative: "",
   });
+  const [contradictionAlerts, setContradictionAlerts] = useState<ContradictionAlert[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const statusRef = useRef<LiveMeetingStatus>(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -94,6 +114,19 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   const micStreamRef = useRef<MediaStream | null>(null);
   const isSendingRef = useRef(false);
   const sessionEndResolverRef = useRef<(() => void) | null>(null);
+
+  // 재연결 관련 상태 — 전부 ref로 관리 (WS 이벤트 핸들러는 리렌더 없이도 최신 값을 읽어야 함)
+  const isIntentionalCloseRef = useRef(false);
+  const reconnectDeadlineRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusBeforeDisconnectRef = useRef<LiveMeetingStatus>("recording");
+
+  function clearReconnectTimer() {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }
 
   function cleanupAudio() {
     try {
@@ -110,7 +143,10 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     audioContextRef.current = null;
   }
 
-  async function setupAudioCapture(ws: WebSocket) {
+  // ws 인스턴스를 직접 클로저로 캡처하지 않고 wsRef.current를 통해 매번 참조한다 —
+  // 재연결 시 새 WebSocket으로 wsRef만 교체하면, 마이크 캡처를 다시 세팅하지 않아도
+  // (권한 재요청 없이) 이 워클릿이 자동으로 새 소켓에 오디오를 이어 보낸다.
+  async function setupAudioCapture() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStreamRef.current = stream;
 
@@ -130,7 +166,8 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     workletNodeRef.current = workletNode;
 
     workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      if (isSendingRef.current && ws.readyState === WebSocket.OPEN) {
+      const ws = wsRef.current;
+      if (isSendingRef.current && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(event.data);
       }
     };
@@ -151,6 +188,10 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     setStatus("connecting");
     setSegments([]);
     setPartial({ confirmed: "", tentative: "" });
+    setContradictionAlerts([]);
+    isIntentionalCloseRef.current = false;
+    reconnectDeadlineRef.current = null;
+    clearReconnectTimer();
 
     const res = await startMeetingApi(workspaceId, title, relatedRoomId);
     if (res.status !== "success" || !res.meeting) {
@@ -159,28 +200,14 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       return;
     }
 
-    setMeeting(res.meeting);
+    // 재연결 시에도 그대로 재사용할 값 — React state(meeting)는 비동기라 클로저에서
+    // 참조하면 오래된 값을 읽을 위험이 있어, 여기 지역 변수로 직접 들고 있는다.
+    const meetingData = res.meeting;
+    setMeeting(meetingData);
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || window.location.origin;
-    const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, res.meeting.id, res.meeting.ws_ticket);
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = async () => {
-      try {
-        await setupAudioCapture(ws);
-        isSendingRef.current = true;
-        setStatus("recording");
-      } catch (err) {
-        console.error("마이크 캡처 실패:", err);
-        setErrorMessage("마이크 접근에 실패했습니다. 브라우저 권한을 확인해 주세요.");
-        setStatus("error");
-        ws.close();
-      }
-    };
-
-    ws.onmessage = (event: MessageEvent<string>) => {
+    function handleMessage(event: MessageEvent<string>) {
       let data: any;
       try {
         data = JSON.parse(event.data);
@@ -201,22 +228,101 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
           setSegments((prev) => [...prev, ...newSegments]);
         }
         setPartial({ confirmed: "", tentative: "" });
+      } else if (data.type === "contradiction_alert") {
+        const alert: ContradictionAlert = {
+          contradiction_id: data.contradiction_id,
+          statement_text: data.statement_text || "",
+          reason: data.reason || "",
+          severity: data.severity || "low",
+          confidence_score: data.confidence_score ?? 0,
+        };
+        setContradictionAlerts((prev) => [...prev, alert]);
       } else if (data.type === "session_end") {
         sessionEndResolverRef.current?.();
         sessionEndResolverRef.current = null;
       }
-    };
+    }
 
-    ws.onerror = () => {
-      setErrorMessage("실시간 녹음 연결에 문제가 발생했습니다.");
-    };
-
-    ws.onclose = () => {
+    function giveUpAndEnd() {
+      reconnectDeadlineRef.current = null;
+      clearReconnectTimer();
       isSendingRef.current = false;
       cleanupAudio();
       wsRef.current = null;
-      setStatus((prev) => (prev === "error" ? "error" : "ended"));
-    };
+      setStatus("ended");
+    }
+
+    // WS가 의도치 않게 끊겼을 때 호출 — 20초 안에서 계속 재시도한다.
+    function scheduleReconnect() {
+      if (reconnectDeadlineRef.current === null) {
+        // 이 재연결 사이클에서 처음 끊긴 순간 — 되돌아갈 상태(recording/paused)와
+        // 마감 시각을 여기서 한 번만 기록한다.
+        statusBeforeDisconnectRef.current = statusRef.current === "paused" ? "paused" : "recording";
+        reconnectDeadlineRef.current = Date.now() + RECONNECT_WINDOW_MS;
+      }
+
+      if (Date.now() >= reconnectDeadlineRef.current) {
+        giveUpAndEnd();
+        return;
+      }
+
+      setStatus("reconnecting");
+      clearReconnectTimer();
+      reconnectTimerRef.current = setTimeout(connect, RECONNECT_RETRY_INTERVAL_MS);
+    }
+
+    function connect() {
+      const isReconnectAttempt = reconnectDeadlineRef.current !== null;
+      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, meetingData.ws_ticket);
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = async () => {
+        if (isReconnectAttempt) {
+          reconnectDeadlineRef.current = null;
+          clearReconnectTimer();
+          wsRef.current = ws;
+          isSendingRef.current = statusBeforeDisconnectRef.current === "recording";
+          setStatus(statusBeforeDisconnectRef.current);
+          return;
+        }
+
+        wsRef.current = ws;
+        try {
+          await setupAudioCapture();
+          isSendingRef.current = true;
+          setStatus("recording");
+        } catch (err) {
+          console.error("마이크 캡처 실패:", err);
+          setErrorMessage("마이크 접근에 실패했습니다. 브라우저 권한을 확인해 주세요.");
+          setStatus("error");
+          isIntentionalCloseRef.current = true;
+          ws.close();
+        }
+      };
+
+      ws.onmessage = handleMessage;
+
+      ws.onerror = () => {
+        if (!isReconnectAttempt) {
+          setErrorMessage("실시간 녹음 연결에 문제가 발생했습니다.");
+        }
+      };
+
+      ws.onclose = () => {
+        if (isIntentionalCloseRef.current) {
+          isSendingRef.current = false;
+          cleanupAudio();
+          wsRef.current = null;
+          setStatus((prev) => (prev === "error" ? "error" : "ended"));
+          return;
+        }
+        // 의도치 않은 종료(네트워크 순단 등) — 재연결 시도
+        isSendingRef.current = false;
+        scheduleReconnect();
+      };
+    }
+
+    connect();
   }
 
   async function pause() {
@@ -247,6 +353,9 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
 
     setStatus("ending");
     isSendingRef.current = false;
+    isIntentionalCloseRef.current = true;
+    reconnectDeadlineRef.current = null;
+    clearReconnectTimer();
 
     const waitForSessionEnd = new Promise<void>((resolve) => {
       sessionEndResolverRef.current = resolve;
@@ -265,11 +374,17 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     setMeeting(null);
     setSegments([]);
     setPartial({ confirmed: "", tentative: "" });
+    setContradictionAlerts([]);
     setErrorMessage(null);
+    isIntentionalCloseRef.current = false;
+    reconnectDeadlineRef.current = null;
+    clearReconnectTimer();
   }
 
   useEffect(() => {
     return () => {
+      isIntentionalCloseRef.current = true;
+      clearReconnectTimer();
       wsRef.current?.close();
       cleanupAudio();
     };
@@ -280,6 +395,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     meeting,
     segments,
     partial,
+    contradictionAlerts,
     errorMessage,
     start,
     pause,
