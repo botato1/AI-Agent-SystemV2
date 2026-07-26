@@ -74,6 +74,25 @@ export interface RetryDocumentResponse {
   error: string | null;
 }
 
+export interface DocumentGraphNode {
+  file_id: string;
+  filename: string;
+}
+
+export interface DocumentGraphEdge {
+  source_file_id: string;
+  target_file_id: string;
+  similarity_score: number;
+}
+
+export interface GetDocumentGraphResponse {
+  status: "success" | "error";
+  nodes: DocumentGraphNode[];
+  edges: DocumentGraphEdge[];
+  message: string;
+  error: string | null;
+}
+
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -408,6 +427,75 @@ export async function retryDocumentApi(
     return {
       status: "error",
       summary: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 6. 문서 유사도 그래프 조회 API (GET /api/workspaces/{workspace_id}/documents/graph)
+ *
+ * nodes: file_kind=document, analysis_status=completed, is_latest=true 인 파일 전부 포함
+ * (고립 노드도 포함). edges: min_score 이상인 유사도 쌍만 포함.
+ */
+export async function getDocumentGraphApi(
+  workspaceId: string,
+  minScore: number = 0.5
+): Promise<GetDocumentGraphResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      nodes: [],
+      edges: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/documents/graph?min_score=${minScore}`,
+      { method: "GET" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "문서 유사도 그래프를 불러오지 못했습니다.";
+      if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스입니다.";
+      }
+
+      return {
+        status: "error",
+        nodes: [],
+        edges: [],
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      nodes: data.nodes || [],
+      edges: data.edges || [],
+      message: data.message || "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getDocumentGraphApi error:", error);
+    return {
+      status: "error",
+      nodes: [],
+      edges: [],
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

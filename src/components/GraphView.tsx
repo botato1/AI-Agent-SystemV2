@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
-import { getDocumentApi } from "../services/document";
+import { getDocumentGraphApi } from "../services/document";
 import { SparklesIcon } from "./icons";
 
 interface GraphViewProps {
@@ -24,64 +24,6 @@ interface Edge {
   a: string;
   b: string;
   strength: number; // 0~1
-}
-
-const STOPWORDS = new Set([
-  "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be", "been",
-  "to", "of", "in", "on", "for", "with", "as", "at", "by", "from", "this", "that",
-  "it", "its", "and", "or", "not", "have", "has", "had", "will", "would", "can",
-  "이", "그", "저", "것", "수", "등", "및", "을", "를", "은", "는", "이다", "있다",
-  "하다", "위해", "대한", "그리고", "하는", "합니다", "있습니다", "때문에",
-]);
-
-// 원문 텍스트를 의미있는 단어 집합으로 변환 (자카드 유사도 계산용)
-function toWordSet(text: string): Set<string> {
-  const words = text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((w) => w.length >= 2 && !STOPWORDS.has(w));
-  return new Set(words);
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let intersection = 0;
-  const [small, large] = a.size < b.size ? [a, b] : [b, a];
-  small.forEach((w) => {
-    if (large.has(w)) intersection += 1;
-  });
-  const union = a.size + b.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
-// 각 노드마다 가장 비슷한 문서 몇 개와 연결 (전역 임계값만 쓰면 대부분 0개로 끊길 수 있어서)
-function buildEdges(docIds: string[], wordSets: Map<string, Set<string>>): Edge[] {
-  const MIN_SIMILARITY = 0.03;
-  const TOP_K = 3;
-  const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
-  const edgeMap = new Map<string, Edge>();
-
-  docIds.forEach((idA) => {
-    const setA = wordSets.get(idA);
-    if (!setA) return;
-
-    const scored = docIds
-      .filter((idB) => idB !== idA)
-      .map((idB) => ({ idB, score: jaccardSimilarity(setA, wordSets.get(idB) || new Set()) }))
-      .filter((s) => s.score >= MIN_SIMILARITY)
-      .sort((x, y) => y.score - x.score)
-      .slice(0, TOP_K);
-
-    scored.forEach(({ idB, score }) => {
-      const key = edgeKey(idA, idB);
-      const existing = edgeMap.get(key);
-      if (!existing || existing.strength < score) {
-        edgeMap.set(key, { a: idA, b: idB, strength: score });
-      }
-    });
-  });
-
-  return Array.from(edgeMap.values());
 }
 
 export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }: GraphViewProps) {
@@ -110,37 +52,39 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
 
   const selectedDoc = analyzedDocs.find((d) => d.id === selectedDocId) || analyzedDocs[0];
 
-  // 문서 원문을 가져와서 유사도 기반 엣지 계산
+  // 백엔드 문서 유사도 그래프 API에서 엣지 조회 (코사인 유사도 기반, min_score=0.5 기본)
   useEffect(() => {
     let cancelled = false;
 
-    async function computeEdges() {
+    async function loadGraph() {
       if (analyzedDocs.length === 0) {
         edgesRef.current = [];
         return;
       }
 
       setIsLoadingEdges(true);
-      const wordSets = new Map<string, Set<string>>();
-
-      await Promise.all(
-        analyzedDocs.map(async (doc) => {
-          const res = await getDocumentApi(workspaceId, doc.id);
-          const text =
-            res.document?.raw.original_text || res.document?.analysis.summary || doc.name;
-          wordSets.set(doc.id, toWordSet(text));
-        })
-      );
-
+      const res = await getDocumentGraphApi(workspaceId);
       if (cancelled) return;
-      edgesRef.current = buildEdges(
-        analyzedDocs.map((d) => d.id),
-        wordSets
-      );
+
+      if (res.status === "success") {
+        // API의 nodes 기준(=file_kind=document 전체)과 화면에 실제 그려지는
+        // analyzedDocs가 완전히 일치하지 않을 수 있어, 양쪽에 다 존재하는
+        // 문서 쌍만 엣지로 사용한다.
+        const knownIds = new Set(analyzedDocs.map((d) => d.id));
+        edgesRef.current = res.edges
+          .filter((e) => knownIds.has(e.source_file_id) && knownIds.has(e.target_file_id))
+          .map((e) => ({
+            a: e.source_file_id,
+            b: e.target_file_id,
+            strength: e.similarity_score,
+          }));
+      } else {
+        edgesRef.current = [];
+      }
       setIsLoadingEdges(false);
     }
 
-    computeEdges();
+    loadGraph();
     return () => {
       cancelled = true;
     };
