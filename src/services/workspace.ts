@@ -15,6 +15,7 @@ export interface WorkspaceMemberInfo {
   user_id: string;
   username: string;
   display_name?: string;
+  profile_image_url?: string | null;
   role: "owner" | "member";
   joined_at?: string;
 }

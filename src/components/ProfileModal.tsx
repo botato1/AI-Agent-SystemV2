@@ -9,7 +9,7 @@ interface ProfileModalProps {
   user: User;
   onClose: () => void;
   onChangeAvatarColor: (color: string) => void;
-  onChangeAvatarImage: (imageUrl: string) => void;
+  onChangeAvatarImage: (file: File) => void;
   onUpdateSuccess: (updatedUser: User) => void;
   t: any;
 }
@@ -65,7 +65,7 @@ export default function ProfileModal({
   function handlePickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    onChangeAvatarImage(URL.createObjectURL(file));
+    onChangeAvatarImage(file);
     setShowAvatarMenu(false);
   }
 

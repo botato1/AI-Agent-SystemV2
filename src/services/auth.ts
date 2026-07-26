@@ -1,5 +1,12 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
+// profile_image_url은 백엔드가 상대 경로(/static/profile_images/...)로만 내려주므로,
+// 화면에 표시하려면 백엔드 origin을 붙여야 한다.
+export function resolveAvatarUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  return `${API_BASE_URL}${path}`;
+}
+
 // 로그인 API 응답 타입
 export interface LoginResponse {
   status: "success" | "error";
@@ -11,6 +18,7 @@ export interface LoginResponse {
     account_status: string;
     last_login_at: string;
     created_at: string;
+    profile_image_url: string | null;
   } | null;
   token: {
     access_token: string;
@@ -48,6 +56,7 @@ export interface ProfileResponse {
     account_status: string;
     last_login_at: string;
     created_at: string;
+    profile_image_url: string | null;
   } | null;
   message: string;
   error: string | null;
@@ -389,6 +398,52 @@ export async function updateProfileApi(params: UpdateProfileParams): Promise<Pro
     return data;
   } catch (error) {
     console.error("updateProfileApi error:", error);
+    return {
+      status: "error",
+      user: null,
+      message: "서버와 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+// 9-1. 프로필 이미지 설정/변경 API (PATCH /api/auth/profile/image, multipart/form-data)
+// 최초 등록/이후 교체 모두 같은 엔드포인트를 재사용한다.
+export async function uploadProfileImageApi(file: File): Promise<ProfileResponse> {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    // multipart/form-data는 브라우저가 boundary 포함해서 Content-Type을 자동 설정해야 하므로
+    // 여기서 직접 헤더를 지정하지 않는다.
+    const response = await authFetch(`${API_BASE_URL}/api/auth/profile/image`, {
+      method: "PATCH",
+      body: formData,
+    });
+
+    const data: ProfileResponse = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "프로필 이미지 변경에 실패했습니다.";
+      if (response.status === 400) {
+        defaultMsg = "지원하지 않는 이미지 형식입니다 (png/jpg/jpeg만 가능).";
+      } else if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 404) {
+        defaultMsg = "사용자를 찾을 수 없습니다.";
+      }
+
+      return {
+        status: "error",
+        user: null,
+        message: data.message || data.detail || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return data;
+  } catch (error) {
+    console.error("uploadProfileImageApi error:", error);
     return {
       status: "error",
       user: null,

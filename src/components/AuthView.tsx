@@ -8,6 +8,7 @@ import {
   checkUserId,
   loginApi,
   requestPasswordResetApi,
+  resolveAvatarUrl,
   signUpApi,
 } from "../services/auth";
 
@@ -259,7 +260,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
         username: result.user.username,
         status: "online",
         avatarColor: fixedAvatarColor,
-        avatarImageUrl: null,
+        avatarImageUrl: resolveAvatarUrl(result.user.profile_image_url),
       };
 
       onLogIn(loggedInUser);
