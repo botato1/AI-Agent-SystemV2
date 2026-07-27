@@ -132,6 +132,29 @@ def create_contradiction(
     db.refresh(row)
     return row
 
+def delete_contradictions_by_reference_file(db: Session, file_id: uuid.UUID) -> int:
+    """해당 파일의 청크를 참조하는 contradictions를 하위 레코드(변경요약 초안,
+    해결 이력)까지 포함해 전부 삭제한다. 문서 삭제 시 FK 위반
+    (contradictions_reference_chunk_id_fkey)을 막기 위해 청크 삭제 전에 호출해야 한다."""
+    contradiction_ids = [
+        c.id for c in
+        db.query(Contradiction).filter(Contradiction.reference_file_id == file_id).all()
+    ]
+    if not contradiction_ids:
+        return 0
+
+    db.query(ChangeSummaryDraft).filter(
+        ChangeSummaryDraft.contradiction_id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.query(ContradictionResolution).filter(
+        ContradictionResolution.contradiction_id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.query(Contradiction).filter(
+        Contradiction.id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+    return len(contradiction_ids)
+
 
 def list_unresolved(db: Session, workspace_id: uuid.UUID) -> list[Contradiction]:
     return (

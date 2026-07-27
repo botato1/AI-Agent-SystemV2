@@ -1,3 +1,5 @@
+# backend/db/crud/file_crud.py
+
 """워크트리/파일 CRUD (정승현 파트 — 기본 템플릿)"""
 
 import uuid
@@ -177,11 +179,14 @@ def get_file(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
 
 
 def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str) -> list[WorkspaceFile]:
+    """일반 문서 목록 조회용. 워크트리(코드 폴더) 업로드로 들어온 파일은
+    워크트리 화면에서만 보여야 하므로 제외한다."""
     return (
         db.query(WorkspaceFile)
         .filter(
             WorkspaceFile.workspace_id == workspace_id,
             WorkspaceFile.file_kind == file_kind,
+            WorkspaceFile.origin_type != "worktree",
             WorkspaceFile.is_latest.is_(True),
             WorkspaceFile.deleted_at.is_(None),
         )
@@ -298,6 +303,32 @@ def update_worktree_counts(db: Session, worktree_id: uuid.UUID, **fields) -> Opt
         db.refresh(row)
     return row
 
+def finalize_worktree_status_if_analysis_done(db: Session, worktree_id: uuid.UUID) -> Optional[Worktree]:
+    """분석 대상 파일(document/image)이 전부 completed/failed로 settle되면
+    워크트리 status를 최종값으로 전이한다. status가 이미 processing이 아니면
+    (분석 대상이 없었거나 이미 최종 상태) 아무 것도 안 한다."""
+    worktree = get_worktree(db, worktree_id)
+    if not worktree or worktree.status != "processing":
+        return worktree
+
+    analyzable = [
+        f for f in list_files_by_worktree(db, worktree_id)
+        if f.file_kind in ("document", "image")
+    ]
+    unsettled = [f for f in analyzable if f.analysis_status not in ("completed", "failed")]
+    if unsettled:
+        return worktree  # 아직 분석 중인 파일이 남아있음
+
+    analysis_failed_count = sum(1 for f in analyzable if f.analysis_status == "failed")
+
+    if analysis_failed_count == 0 and worktree.failed_file_count == 0:
+        new_status = "completed"
+    elif worktree.completed_file_count == 0 and analysis_failed_count == len(analyzable):
+        new_status = "failed"
+    else:
+        new_status = "partially_completed"
+
+    return update_worktree_counts(db, worktree_id, status=new_status)
 
 def list_files_by_worktree(db: Session, worktree_id: uuid.UUID) -> list[WorkspaceFile]:
     return (
@@ -306,3 +337,15 @@ def list_files_by_worktree(db: Session, worktree_id: uuid.UUID) -> list[Workspac
         .order_by(WorkspaceFile.relative_path)
         .all()
     )
+
+def delete_worktree(db: Session, worktree_id: uuid.UUID) -> None:
+    """Worktree는 deleted_at 컬럼이 없어 소프트 삭제 대상이 아니므로 하드 삭제한다.
+    소프트 삭제된 workspace_files는 행 자체가 남아있어 worktree_id FK가 여전히
+    걸려있으므로, 하드 삭제 전에 그 파일들의 worktree_id를 먼저 NULL로 해제한다."""
+    db.query(WorkspaceFile).filter(WorkspaceFile.worktree_id == worktree_id).update(
+        {"worktree_id": None}, synchronize_session=False
+    )
+    worktree = get_worktree(db, worktree_id)
+    if worktree:
+        db.delete(worktree)
+        db.commit()
