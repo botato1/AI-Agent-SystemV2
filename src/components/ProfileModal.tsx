@@ -4,6 +4,7 @@ import Avatar from "./Avatar";
 import { AVATAR_COLORS } from "../data/avatarColors";
 import { PencilIcon } from "./icons";
 import { updateProfileApi } from "../services/auth";
+import AvatarCropModal from "./AvatarCropModal";
 
 interface ProfileModalProps {
   user: User;
@@ -61,12 +62,14 @@ export default function ProfileModal({
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cropFile, setCropFile] = useState<File | null>(null);
 
   function handlePickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    onChangeAvatarImage(file);
+    setCropFile(file);
     setShowAvatarMenu(false);
+    e.target.value = ""; // 같은 파일 다시 선택할 수 있도록 초기화
   }
 
   async function handleSaveProfile() {
@@ -95,6 +98,15 @@ export default function ProfileModal({
         setError("새 비밀번호는 현재 비밀번호와 다르게 설정해 주세요.");
         return;
       }
+    }
+
+    const nameChanged = displayName.trim() !== user.name;
+    const passwordChangeRequested = showPasswordSection && !!currentPassword && !!newPassword;
+
+    if (!nameChanged && !passwordChangeRequested) {
+      // 이름/비밀번호 둘 다 안 바뀌었으면(아바타만 바꾼 경우 등) 빈 수정 요청을 보낼 필요가 없다.
+      onClose();
+      return;
     }
 
     setIsSubmitting(true);
@@ -288,6 +300,17 @@ export default function ProfileModal({
           </button>
         </div>
       </div>
+
+      {cropFile && (
+        <AvatarCropModal
+          file={cropFile}
+          onCancel={() => setCropFile(null)}
+          onConfirm={(croppedFile) => {
+            onChangeAvatarImage(croppedFile);
+            setCropFile(null);
+          }}
+        />
+      )}
     </div>
   );
 }

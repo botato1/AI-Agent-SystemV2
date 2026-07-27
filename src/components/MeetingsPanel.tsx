@@ -206,12 +206,15 @@ export default function MeetingsPanel({
   } = useRealMeetings(workspaceId);
 
   const {
-    contradictions,
+    contradictions: workspaceContradictions,
     isLoading: isContradictionsLoading,
     resolve,
     dismiss,
     refresh: refreshContradictions,
   } = useContradictions(workspaceId);
+
+  // 회의 발언 쪽 모순만 보여줌 (채팅 메시지 쪽 모순은 채팅방 화면에서 따로 보여줌)
+  const contradictions = workspaceContradictions.filter((c) => c.source_type === "meeting_segment");
 
   // 실시간 회의 중 모순 감지 WS 알림이 오면, 8초 폴링을 기다리지 않고 즉시 목록을 새로고침
   const prevAlertCountRef = useRef(liveContradictionAlerts.length);

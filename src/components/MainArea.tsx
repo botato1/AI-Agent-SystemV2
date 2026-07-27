@@ -254,7 +254,17 @@ function ContradictionPanel({
   onDismiss: (id: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(true);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const prevCountRef = useRef(contradictions.length);
+
+  function toggleExpanded(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // 닫혀 있는 동안 새 모순이 감지되면 자동으로 펼침
   useEffect(() => {
@@ -307,12 +317,22 @@ function ContradictionPanel({
         {contradictions.length === 0 ? (
           <p className="text-sm text-recall-textMuted">감지된 모순이 없습니다.</p>
         ) : (
-          contradictions.map((c) => (
-            <div key={c.id} className="rounded-lg border border-recall-border p-2.5">
+          contradictions.map((c) => {
+            const isExpanded = expandedIds.has(c.id);
+            return (
+            <div
+              key={c.id}
+              onClick={() => toggleExpanded(c.id)}
+              className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
+            >
               <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity)}</div>
-              <p className="mb-1 line-clamp-2 text-sm text-recall-text">{c.statement_text_snapshot}</p>
-              <p className="mb-2 line-clamp-1 text-xs text-recall-textMuted">기준: {c.reference_text_snapshot}</p>
-              <div className="flex gap-1">
+              <p className={`mb-1 text-sm text-recall-text ${isExpanded ? "" : "line-clamp-2"}`}>
+                {c.statement_text_snapshot}
+              </p>
+              <p className={`mb-2 text-xs text-recall-textMuted ${isExpanded ? "" : "line-clamp-1"}`}>
+                기준: {c.reference_text_snapshot}
+              </p>
+              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                 <button
                   onClick={() => onDismiss(c.id)}
                   className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
@@ -333,7 +353,8 @@ function ContradictionPanel({
                 </button>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -693,11 +714,6 @@ function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: st
               key={m.id}
               className={`flex items-end gap-2 ${m.role === "assistant" ? "" : "flex-row-reverse"}`}
             >
-              {m.role === "assistant" && (
-                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent/15">
-                  <SparklesIcon size={13} className="text-recall-accent" />
-                </div>
-              )}
               <div className={`flex max-w-[75%] flex-col gap-1 ${m.role === "assistant" ? "items-start" : "items-end"}`}>
                 <div
                   className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-base leading-relaxed shadow-sm ${
@@ -719,9 +735,6 @@ function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: st
         )}
         {isSending && (
           <div className="flex items-end gap-2">
-            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent/15">
-              <SparklesIcon size={13} className="text-recall-accent" />
-            </div>
             <div className="rounded-2xl rounded-bl-md bg-recall-bgSoft px-3.5 py-2.5 shadow-sm">
               <ThinkingDots />
             </div>
