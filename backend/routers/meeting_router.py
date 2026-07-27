@@ -25,6 +25,8 @@ from backend.schemas.meeting_schema import (
     DecisionListResponse,
     DecisionResponse,
     MeetingStartResponse,
+    SpeakerLabelMappingRequest,
+    MeetingTitleUpdateRequest,
 )
 
 
@@ -255,6 +257,21 @@ def get_meeting_api(
     meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
     return MeetingResponse.model_validate(meeting)
 
+# 회의 제목 변경
+@router.patch("/{meeting_id}", response_model=MeetingResponse)
+def update_meeting_title_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: MeetingTitleUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    updated = meeting_crud.update_meeting_title(db, meeting_id, request.title)
+    return MeetingResponse.model_validate(updated)
+
 
 # 회의 삭제
 @router.delete("/{meeting_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -392,3 +409,23 @@ def resume_meeting_api(
 
     meeting_ws_router.set_stream_paused(meeting_id, False)
     return MeetingResponse.model_validate(transitioned)
+
+# 화자 라벨(SPEAKER_00 등)을 실명으로 매핑 — 회의 진행 중/종료 후 언제든 호출 가능
+@router.patch("/{meeting_id}/speakers")
+def update_meeting_speakers_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: SpeakerLabelMappingRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    updated = meeting_crud.update_speaker_labels(db, meeting_id, request.mapping)
+    return {
+        "status": "success",
+        "meeting_id": str(meeting_id),
+        "speaker_labels": updated.speaker_labels,
+        "message": "화자 이름이 매핑되었습니다.",
+    }
