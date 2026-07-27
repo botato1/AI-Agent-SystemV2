@@ -94,7 +94,11 @@ def main():
     parser.add_argument("--terms", default=None, help="용어 재현율 평가용 용어 목록 파일")
     parser.add_argument("--output", default="report.json")
     parser.add_argument("--adapter-path", default=None, help="LoRA 어댑터 경로 (없으면 순정 베이스 모델)")
+    # beam 크기는 정확도/속도 트레이드오프의 가장 큰 레버라 실측 비교가 필요함.
+    # 미지정 시 서버 설정(PRECISE_BEAM_SIZE)을 그대로 써서 기존 동작과 동일.
+    parser.add_argument("--beam-size", type=int, default=None, help=f"빔 크기 (미지정 시 서버 설정값 {PRECISE_BEAM_SIZE})")
     args = parser.parse_args()
+    beam_size = args.beam_size if args.beam_size is not None else PRECISE_BEAM_SIZE
 
     with open(args.manifest, encoding="utf-8") as f:
         items = [json.loads(line) for line in f if line.strip()]
@@ -103,7 +107,8 @@ def main():
         with open(args.terms, encoding="utf-8") as f:
             terms = [line.strip() for line in f if line.strip()]
 
-    print(f"엔진={STT_ENGINE}, 모델={WHISPER_MODEL_PRECISE}, 어댑터={args.adapter_path or '없음(베이스)'}, 평가 대상={len(items)}개")
+    print(f"엔진={STT_ENGINE}, 모델={WHISPER_MODEL_PRECISE}, 어댑터={args.adapter_path or '없음(베이스)'}, "
+          f"beam={beam_size}, 평가 대상={len(items)}개")
     model = load_model(args.adapter_path)
 
     total_word_err = total_words = 0
@@ -116,7 +121,7 @@ def main():
         segments, _info = model.transcribe(
             item["audio"],
             language=WHISPER_LANGUAGE,
-            beam_size=PRECISE_BEAM_SIZE,
+            beam_size=beam_size,
             vad_filter=True,
             condition_on_previous_text=False,
         )
@@ -152,7 +157,7 @@ def main():
         "engine": STT_ENGINE,
         "model": WHISPER_MODEL_PRECISE,
         "adapter": args.adapter_path,
-        "beam_size": PRECISE_BEAM_SIZE,
+        "beam_size": beam_size,
         "num_items": len(items),
         "wer": round(total_word_err / max(total_words, 1), 4),
         "cer": round(total_char_err / max(total_chars, 1), 4),
