@@ -228,7 +228,7 @@ class TransformersWhisperEngine:
             sequences = sequences[:, prompt_ids.shape[-1]:]
         text = self.processor.batch_decode(sequences, skip_special_tokens=True)[0].strip()
         avg_logprob = self._compute_avg_logprob(outputs)
-        no_speech_prob = self._estimate_no_speech_prob(outputs)
+        no_speech_prob = self._estimate_no_speech_prob(outputs, has_prompt=prompt_ids is not None)
         return text, avg_logprob, no_speech_prob
 
     def _compute_avg_logprob(self, outputs) -> float:
@@ -259,13 +259,24 @@ class TransformersWhisperEngine:
         return float(np.mean(log_probs)) if log_probs else 0.0
 
     @staticmethod
-    def _estimate_no_speech_prob(outputs) -> float:
+    def _estimate_no_speech_prob(outputs, has_prompt: bool = False) -> float:
         """
         ctranslate2처럼 전용 no_speech 토큰 확률을 직접 노출하는 공식 API가
         transformers엔 없어서, 첫 디코딩 스텝의 불확실성으로 근사.
         첫 스텝이 강제 토큰(언어/태스크)이면 항상 0.0에 가까워 의미가 없을 수 있음 —
         VAD가 1차로 침묵을 걸러주므로 어디까지나 보조 신호로만 사용할 것.
+
+        has_prompt=True면 추정 자체를 포기하고 0.0(=침묵 아님)을 반환한다.
+        이 근사는 "첫 스텝은 강제 토큰이라 확률이 1에 가깝다"는 전제에 기대는데,
+        initial_prompt를 붙이면 첫 스텝이 '실제 내용 토큰 예측'으로 바뀌어 전제가 깨진다.
+        실측(AI Hub held-out 200건, 2026-07-27): 힌트를 켜자 confident 비율이
+        95.5% → 72.0%로 떨어졌는데, avg_logprob 중앙값은 -0.153 → -0.163으로 거의
+        그대로였고 임계값 미달도 1.0%→3.5%뿐이었다. 즉 하락분의 대부분이 이 값에서
+        나왔고, 전사 품질 저하가 아니라 멀쩡한 발화를 침묵으로 오판한 것이었다.
+        침묵 차단은 _trim_silence의 VAD가 1차로 담당하므로 이 신호를 버려도 안전망은 남는다.
         """
+        if has_prompt:
+            return 0.0
         scores = getattr(outputs, "scores", None)
         if not scores:
             return 0.0
