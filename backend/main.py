@@ -22,6 +22,8 @@ from backend.routers.notification_router import router as notification_router
 from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.services.auth_service import PROFILE_IMAGE_STORAGE_DIR
+
 app = FastAPI(
     title="AI-Agent-System Backend",
     description="FastAPI backend for AI Agent System",
@@ -39,9 +41,8 @@ app.add_middleware(
 # 서버 실행 시 PostgreSQL 테이블 자동 생성 (개발용, 운영은 Alembic 권장)
 init_db()
 
-PROFILE_IMAGE_DIR = Path("data/uploads/profile_images")
-PROFILE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/static/profile_images", StaticFiles(directory=PROFILE_IMAGE_DIR), name="profile_images")
+PROFILE_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/profile_images", StaticFiles(directory=PROFILE_IMAGE_STORAGE_DIR), name="profile_images")
 
 # 서버 시작 시 리랭커 모델 미리 로딩
 warm_up_reranker()

@@ -462,7 +462,18 @@ def delete_account(db: Session, access_token: str, request: AccountDeleteRequest
 
 PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
 ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+MAX_PROFILE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
 
+
+def _delete_old_profile_image(old_image_url: str | None) -> None:
+    """기존 프로필 이미지 파일을 삭제한다. 실패해도 무시(치명적이지 않음)."""
+    if not old_image_url:
+        return
+    try:
+        old_path = PROFILE_IMAGE_STORAGE_DIR / Path(old_image_url).name
+        old_path.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"[auth_service] 기존 프로필 이미지 삭제 실패: {repr(e)}")
 
 def update_profile_image(db: Session, access_token: str, filename: str, file_content: bytes) -> ProfileResponse:
     try:
@@ -487,13 +498,21 @@ def update_profile_image(db: Session, access_token: str, filename: str, file_con
             detail="지원하지 않는 이미지 형식입니다 (png/jpg/jpeg만 가능).",
         )
 
+    if len(file_content) > MAX_PROFILE_IMAGE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이미지 파일은 5MB 이하만 업로드할 수 있습니다.",
+        )
+
     PROFILE_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     stored_filename = f"{uuid.uuid4()}{extension}"
     (PROFILE_IMAGE_STORAGE_DIR / stored_filename).write_bytes(file_content)
 
+    old_image_url = user.profile_image_url
     image_url = f"/static/profile_images/{stored_filename}"
     auth_crud.update_user_profile(db, user.id, profile_image_url=image_url)
     user = auth_crud.get_user_by_id(db, user.id)
+    _delete_old_profile_image(old_image_url)
 
     return ProfileResponse(
         status="success",
