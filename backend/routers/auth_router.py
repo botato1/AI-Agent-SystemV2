@@ -1,6 +1,6 @@
 # backend/routers/auth_router.py
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_access_token
@@ -32,6 +32,7 @@ from backend.services.auth_service import (
     logout,
     get_profile,
     update_profile,
+    update_profile_image,
     check_user_id_available,
     check_email_available,
     request_password_reset,
@@ -105,6 +106,16 @@ def update_profile_api(
     db: Session = Depends(get_db),
 ):
     return update_profile(db, access_token, request)
+
+# 프로필 이미지 설정/변경 (최초 등록이든 이후 수정이든 동일 엔드포인트)
+@router.patch("/profile/image", response_model=ProfileResponse)
+async def update_profile_image_api(
+    file: UploadFile = File(...),
+    access_token: str = Depends(get_access_token),
+    db: Session = Depends(get_db),
+):
+    file_content = await file.read()
+    return update_profile_image(db, access_token, file.filename, file_content)
 
 
 # 비밀번호 재설정 요청

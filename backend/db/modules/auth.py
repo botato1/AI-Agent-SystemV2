@@ -1,6 +1,6 @@
 """사용자 계정 / 인증"""
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, String, text
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 
 from backend.db.base import Base
@@ -20,6 +20,7 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     created_at = created_at_col()
     updated_at = updated_at_col()
+    profile_image_url = Column(Text, nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
