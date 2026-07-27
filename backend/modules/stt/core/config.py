@@ -53,7 +53,12 @@ else:
 # Whisper 모델 설정
 # ──────────────────────────────────────────
 WHISPER_LANGUAGE = "ko"
-WHISPER_BEAM_SIZE = 10 if DEVICE == "cuda" else 5
+# 빔 크기 실측 (2026-07-27, AI Hub 회의 음성 held-out 500건 / v4 어댑터):
+#   beam=10 → CER 0.1118, 2.72초/건   beam=5 → 0.1116, 2.30초/건
+#   beam=3  → CER 0.1108, 2.19초/건   beam=1 → 0.1080, 1.73초/건
+# 빔을 줄일수록 단조롭게 빨라지는데 정확도는 나빠지지 않았음(CER 차이는 19,197자 기준
+# 표본오차 범위). 즉 기존 beam=10이 쓰던 계산량은 사실상 낭비였고, greedy가 1.57배 빠르다.
+WHISPER_BEAM_SIZE = 1
 
 if STT_ENGINE == "transformers":
     WHISPER_MODEL_SIZE = "openai/whisper-large-v3"
@@ -75,7 +80,19 @@ FAST_BEAM_SIZE = 1        # greedy에 가깝게 → 최저 지연 (partial 스�
 PRECISE_BEAM_SIZE = WHISPER_BEAM_SIZE
 
 # 신뢰도 게이팅 임계값 (이 기준 미달이면 모순 감지 엔진으로 안 보내고 보류)
-CONF_AVG_LOGPROB_THRESHOLD = -1.0   # 이보다 낮으면(음수로 클수록 나쁨) 신뢰도 낮음
+#
+# greedy(beam=1)로 전환하면서 재조정함. avg_logprob는 beam search일 때와 greedy일 때
+# 계산 경로가 다른데(whisper_engine._compute_avg_logprob 참고), 실측해보니 둘 다
+# "토큰당 평균 로그확률"이라 스케일 자체는 호환됐다. 다만 greedy는 매 스텝 최댓값을
+# 고르는 구조라 값이 위로 쏠린다 — 실측 분포(세그먼트 200개, v4 어댑터):
+#   beam=10: 중앙 -0.202 / p05 -0.812 / 최소 -1.396 → -1.0 미달 2.5%
+#   beam=1 : 중앙 -0.152 / p05 -0.512 / 최소 -0.913 → -1.0 미달 0.0%(게이트 무력화)
+# 그래서 기존 -1.0을 그대로 두면 게이트가 한 번도 안 걸려 조용히 죽는다.
+# beam=10에서 -1.0이 하위 2.5%를 걸러내던 역할을 greedy 분포에서 하도록 -0.65로 내림.
+#
+# 주의: 이건 "같은 비율을 걸러내도록" 맞춘 근사치이지, 실제 오류율과의 상관을 보고
+# 최적화한 값이 아니다. 정밀 보정은 세그먼트별 avg_logprob ↔ 실제 CER 상관 측정이 필요.
+CONF_AVG_LOGPROB_THRESHOLD = -0.65  # 이보다 낮으면(음수로 클수록 나쁨) 신뢰도 낮음
 CONF_NO_SPEECH_THRESHOLD = 0.6      # 이보다 높으면 침묵/노이즈를 잘못 들었을 가능성
 
 # VAD 기반 청크 분할 설정 (시간이 아니라 '말이 끊기는 지점' 기준으로 자름)
