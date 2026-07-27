@@ -36,7 +36,7 @@ unsloth_compiled_cache/
 requirements_finetune.txt
 requirements_rag.txt
 
-gitignore# 가상환경 (추가)
+# 가상환경 (추가)
 venv-rag/
 venv-finetune/
 
@@ -52,6 +52,14 @@ checkpoint-*/
 *.gguf
 *.safetensors
 
-
 # 모델 캐시
 .cache/
+
+# 프론트엔드 빌드 산출물
+.vite/
+dist/
+build/
+*.log
+
+# 레거시 중복 frontend 폴더
+frontend/
