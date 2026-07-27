@@ -9,7 +9,7 @@ contradictions 테이블 + 기존 조회 경로로 노출되므로 여기서는 
 
 import uuid
 
-from backend.db.crud import notification_crud
+from backend.db.crud import notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.modules.judgment import decision_judgment, document_judgment, priority
 
@@ -28,7 +28,6 @@ def run_judgment_pipeline(
     category_id: str,
     source_type: str,  # "meeting_segment" | "room_message"
     statement_text: str,
-    notify_user_id: str,
     meeting_segment_id: str | None = None,
     room_message_id: str | None = None,
     session_meeting_id: str | None = None,
@@ -69,16 +68,17 @@ def run_judgment_pipeline(
         if not popup or popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
             return
 
-        notification_crud.create_notification(
-            db,
-            user_id=uuid.UUID(notify_user_id),
-            workspace_id=uuid.UUID(workspace_id),
-            type=popup["type"],
-            title=_POPUP_TITLE.get(popup["type"], "알림"),
-            message=popup["message"],
-            ref_type=source_type,
-            ref_id=source_id,
-        )
+        for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
+            notification_crud.create_notification(
+                db,
+                user_id=member.user_id,
+                workspace_id=uuid.UUID(workspace_id),
+                type=popup["type"],
+                title=_POPUP_TITLE.get(popup["type"], "알림"),
+                message=popup["message"],
+                ref_type=source_type,
+                ref_id=source_id,
+            )
 
     except Exception as e:
         print(f"[judgment_service] 판단 파이프라인 실패: {repr(e)}")
