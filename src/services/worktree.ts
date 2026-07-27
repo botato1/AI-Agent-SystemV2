@@ -60,6 +60,15 @@ export interface GetWorktreeFilesResponse {
   error: string | null;
 }
 
+export interface DeleteWorktreeResponse {
+  status: "success" | "error";
+  worktreeId: string | null;
+  deletedFileCount: number;
+  failedFileCount: number;
+  message: string;
+  error: string | null;
+}
+
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -325,6 +334,79 @@ export async function getWorktreeFilesApi(
     return {
       status: "error",
       files: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 5. 워크트리 삭제 API (DELETE /api/workspaces/{workspace_id}/worktrees/{worktree_id})
+ *
+ * 워크트리에 속한 파일들을 개별 정리(청크/모순/ChromaDB/유사도/로컬 원본)한 뒤
+ * 워크트리 자체를 삭제한다. 파일 수가 많으면 다소 시간이 걸릴 수 있다.
+ */
+export async function deleteWorktreeApi(
+  workspaceId: string,
+  worktreeId: string
+): Promise<DeleteWorktreeResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      worktreeId: null,
+      deletedFileCount: 0,
+      failedFileCount: 0,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/worktrees/${worktreeId}`,
+      { method: "DELETE" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "워크트리 삭제에 실패했습니다.";
+      if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 삭제할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스이거나 워크트리입니다.";
+      }
+
+      return {
+        status: "error",
+        worktreeId: null,
+        deletedFileCount: 0,
+        failedFileCount: 0,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      worktreeId: data.worktree_id ?? worktreeId,
+      deletedFileCount: data.deleted_file_count ?? 0,
+      failedFileCount: data.failed_file_count ?? 0,
+      message: data.message || "워크트리가 삭제되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("deleteWorktreeApi error:", error);
+    return {
+      status: "error",
+      worktreeId: null,
+      deletedFileCount: 0,
+      failedFileCount: 0,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

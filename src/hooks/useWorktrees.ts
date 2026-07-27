@@ -5,6 +5,7 @@ import {
   getWorktreeListApi,
   getWorktreeFilesApi,
   uploadWorktreeApi,
+  deleteWorktreeApi,
 } from "../services/worktree";
 
 const PENDING_STATUSES = new Set(["pending", "processing"]);
@@ -70,6 +71,19 @@ export function useWorktrees(workspaceId: string) {
     }
   }
 
+  async function deleteWorktree(worktreeId: string) {
+    const res = await deleteWorktreeApi(workspaceId, worktreeId);
+    if (res.status === "success") {
+      setWorktrees((prev) => prev.filter((w) => w.id !== worktreeId));
+      setSelectedWorktreeId((prev) => (prev === worktreeId ? null : prev));
+      if (res.failedFileCount > 0) {
+        alert(`워크트리는 삭제됐지만 파일 ${res.failedFileCount}개는 정리에 실패했어요.`);
+      }
+    } else {
+      alert(`워크트리 삭제 실패: ${res.message}`);
+    }
+  }
+
   return {
     worktrees,
     isLoading,
@@ -80,5 +94,6 @@ export function useWorktrees(workspaceId: string) {
     isFilesLoading,
     isUploading,
     uploadFolder,
+    deleteWorktree,
   };
 }

@@ -1,7 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWorktrees } from "../hooks/useWorktrees";
 import { WorktreeStatus } from "../services/worktree";
-import { UploadIcon, DocumentIcon } from "./icons";
+import { UploadIcon, DocumentIcon, TrashIcon, ChevronLeftIcon } from "./icons";
+import {
+  DocumentDetail,
+  DocumentFigure,
+  getDocumentApi,
+  getDocumentFiguresApi,
+  retryDocumentApi,
+} from "../services/document";
+import DocumentDetailPanel from "./DocumentDetailPanel";
 
 function formatDate(iso?: string | null): string {
   if (!iso) return "-";
@@ -50,7 +58,7 @@ function analysisStatusLabel(status: string): string {
   }
 }
 
-export default function WorktreePanel({ workspaceId }: { workspaceId: string }) {
+export default function WorktreePanel({ workspaceId, t }: { workspaceId: string; t: any }) {
   const {
     worktrees,
     isLoading,
@@ -61,9 +69,15 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
     isFilesLoading,
     isUploading,
     uploadFolder,
+    deleteWorktree,
   } = useWorktrees(workspaceId);
 
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const [previewFile, setPreviewFile] = useState<{ id: string; name: string } | null>(null);
+  const [previewDetail, setPreviewDetail] = useState<DocumentDetail | null>(null);
+  const [previewFigures, setPreviewFigures] = useState<DocumentFigure[]>([]);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   // webkitdirectory는 표준 React 타입에 없어서 ref로 직접 설정
   useEffect(() => {
@@ -72,6 +86,52 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
       folderInputRef.current.setAttribute("directory", "true");
     }
   }, []);
+
+  useEffect(() => {
+    if (!previewFile) {
+      setPreviewDetail(null);
+      setPreviewFigures([]);
+      return;
+    }
+    let cancelled = false;
+
+    loadPreviewDetail(previewFile.id, () => cancelled);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, previewFile]);
+
+  // 다른 워크트리를 선택하면 이전에 열어보던 파일 미리보기는 닫는다.
+  useEffect(() => {
+    setPreviewFile(null);
+  }, [selectedWorktreeId]);
+
+  async function loadPreviewDetail(fileId: string, isCancelled: () => boolean) {
+    setIsPreviewLoading(true);
+    const [detailRes, figuresRes] = await Promise.all([
+      getDocumentApi(workspaceId, fileId),
+      getDocumentFiguresApi(workspaceId, fileId),
+    ]);
+    if (!isCancelled()) {
+      setPreviewDetail(detailRes.status === "success" ? detailRes.document : null);
+      setPreviewFigures(figuresRes.status === "success" ? figuresRes.figures : []);
+      setIsPreviewLoading(false);
+    }
+  }
+
+  async function handleRetry() {
+    if (!previewFile) return;
+    setIsRetrying(true);
+    const res = await retryDocumentApi(workspaceId, previewFile.id);
+    setIsRetrying(false);
+
+    if (res.status === "success") {
+      await loadPreviewDetail(previewFile.id, () => false);
+    } else {
+      alert(`재분석 요청 실패: ${res.message}`);
+    }
+  }
 
   function handleFolderSelected(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -152,7 +212,7 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
       </div>
 
       {/* 오른쪽 상세 */}
-      <div className="flex h-full flex-1 flex-col p-4">
+      <div className="flex h-full flex-1 flex-col overflow-hidden p-4">
         {!selectedWorktree ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2">
             <UploadIcon size={24} className="text-recall-textMuted" />
@@ -160,14 +220,47 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
               왼쪽에서 폴더를 선택하거나, "폴더 업로드"로 코드 폴더를 올려보세요.
             </p>
           </div>
+        ) : previewFile ? (
+          <>
+            <div className="mb-3 flex items-center justify-between">
+              <button
+                onClick={() => setPreviewFile(null)}
+                className="flex items-center gap-1 text-sm text-recall-textMuted hover:text-recall-text"
+              >
+                <ChevronLeftIcon size={15} />
+                파일 목록으로
+              </button>
+              <button
+                onClick={handleRetry}
+                disabled={isRetrying}
+                className="rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-text hover:bg-white/5 disabled:opacity-50"
+              >
+                {isRetrying ? "재분석 중..." : "재분석"}
+              </button>
+            </div>
+            <div className="mb-3">
+              <p className="text-base font-medium text-recall-text">{previewFile.name}</p>
+              <p className="text-sm text-recall-textMuted">CODE FOLDER · {selectedWorktree.root_folder_name}</p>
+            </div>
+            <DocumentDetailPanel detail={previewDetail} figures={previewFigures} isLoading={isPreviewLoading} t={t} />
+          </>
         ) : (
           <>
-            <div className="mb-3">
-              <p className="text-base font-medium text-recall-text">{selectedWorktree.root_folder_name}</p>
-              <p className="text-sm text-recall-textMuted">
-                {statusBadge(selectedWorktree.status).label} · 총 {selectedWorktree.total_file_count}개 파일 ·{" "}
-                {formatDate(selectedWorktree.created_at)}
-              </p>
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-base font-medium text-recall-text">{selectedWorktree.root_folder_name}</p>
+                <p className="text-sm text-recall-textMuted">
+                  {statusBadge(selectedWorktree.status).label} · 총 {selectedWorktree.total_file_count}개 파일 ·{" "}
+                  {formatDate(selectedWorktree.created_at)}
+                </p>
+              </div>
+              <button
+                onClick={() => deleteWorktree(selectedWorktree.id)}
+                className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-textMuted hover:border-recall-danger hover:text-recall-danger"
+              >
+                <TrashIcon size={13} />
+                삭제
+              </button>
             </div>
 
             <div className="flex-1 overflow-y-auto rounded-lg border border-recall-border">
@@ -178,7 +271,11 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
               ) : (
                 <div className="divide-y divide-recall-border">
                   {files.map((f) => (
-                    <div key={f.id} className="flex items-center gap-2 px-3 py-2 text-base">
+                    <button
+                      key={f.id}
+                      onClick={() => setPreviewFile({ id: f.id, name: f.relative_path || f.original_filename })}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-base hover:bg-white/5"
+                    >
                       <DocumentIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
                       <span className="min-w-0 flex-1 truncate text-recall-text">
                         {f.relative_path || f.original_filename}
@@ -189,7 +286,7 @@ export default function WorktreePanel({ workspaceId }: { workspaceId: string }) 
                       <span className="flex-shrink-0 rounded bg-recall-textMuted/10 px-1.5 py-0.5 text-[11px] text-recall-textMuted">
                         {analysisStatusLabel(f.analysis_status)}
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}

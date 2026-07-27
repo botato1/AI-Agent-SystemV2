@@ -475,10 +475,6 @@ export default function App() {
         <GraphView
           workspaceId={currentWorkspaceId}
           documents={documentAnalysis.documents}
-          onGoToAnalysis={(id) => {
-            documentAnalysis.selectDocument(id);
-            setSelection({ type: "placeholder", key: "docAnalysis" });
-          }}
           t={t}
         />
       ) : (

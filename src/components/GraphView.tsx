@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import { getDocumentGraphApi } from "../services/document";
 import { SparklesIcon } from "./icons";
+import DocumentPreviewModal from "./DocumentPreviewModal";
 
 interface GraphViewProps {
   workspaceId: string;
   documents: AnalyzedDocument[];
-  onGoToAnalysis: (id: string) => void;
   t: any;
 }
 
@@ -26,7 +26,7 @@ interface Edge {
   strength: number; // 0~1
 }
 
-export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }: GraphViewProps) {
+export default function GraphView({ workspaceId, documents, t }: GraphViewProps) {
   const analyzedDocs = documents.filter((d) => d.status === "analyzed");
   const analyzedIds = analyzedDocs.map((d) => d.id).join(",");
 
@@ -39,6 +39,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
   const [selectedDocId, setSelectedDocId] = useState<string | null>(
     analyzedDocs.length > 0 ? analyzedDocs[0].id : null
   );
+  const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
 
   // 뷰 팬/줌 상태
   const viewRef = useRef({ offsetX: 0, offsetY: 0, scale: 1 });
@@ -127,11 +128,13 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
     if (!ctx) return;
 
     let animId: number;
-    const REPEL_K = 1600;
+    const REPEL_K = 650;
     const SPRING_K = 0.02;
     const REST_LENGTH = 90;
     const BASE_RADIUS = 10;
     const HOVER_RADIUS = 16;
+    // 지렁이처럼 살짝씩 꿈틀대는 유기적인 움직임을 위한 미세한 랜덤 힘
+    const WANDER_K = 0.12;
 
     const render = () => {
       const parent = canvas.parentElement;
@@ -159,7 +162,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
       });
 
       // 1. 노드 간 반발력 (일정 거리 안에서만 - 너무 멀어지는 것 방지, 중앙 수렴력은 없음)
-      const REPEL_RANGE = 240;
+      const REPEL_RANGE = 170;
       for (let i = 0; i < nodes.length; i++) {
         const nodeA = nodes[i];
         for (let j = i + 1; j < nodes.length; j++) {
@@ -237,7 +240,15 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
         }
       });
 
-      // 4. 감쇄 및 위치 업데이트
+      // 4. 지렁이처럼 살짝씩 방향을 트는 미세한 랜덤 흔들림 (정지 상태로 딱딱하게 굳지 않도록)
+      nodes.forEach((n) => {
+        if (draggingNodeRef.current !== n) {
+          n.vx += (Math.random() - 0.5) * WANDER_K;
+          n.vy += (Math.random() - 0.5) * WANDER_K;
+        }
+      });
+
+      // 5. 감쇄 및 위치 업데이트
       nodes.forEach((n) => {
         n.vx *= 0.82;
         n.vy *= 0.82;
@@ -551,7 +562,7 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          onGoToAnalysis(doc.id);
+                          setPreviewDoc({ id: doc.id, name: doc.name });
                         }}
                         className="shrink-0 rounded-lg bg-recall-accent/15 px-2.5 py-1.5 text-xs font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
                       >
@@ -564,6 +575,15 @@ export default function GraphView({ workspaceId, documents, onGoToAnalysis, t }:
             </div>
           </div>
         </div>
+      )}
+
+      {previewDoc && (
+        <DocumentPreviewModal
+          workspaceId={workspaceId}
+          documentId={previewDoc.id}
+          documentName={previewDoc.name}
+          onClose={() => setPreviewDoc(null)}
+        />
       )}
     </div>
   );
