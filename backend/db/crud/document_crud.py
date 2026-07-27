@@ -35,6 +35,11 @@ def update_document_analysis(db: Session, file_id: uuid.UUID, **fields) -> Optio
         db.refresh(row)
     return row
 
+def delete_figures_by_file(db: Session, file_id: uuid.UUID) -> None:
+    db.query(DocumentFigure).filter(DocumentFigure.file_id == file_id).delete()
+    db.commit()
+
+
 def create_document_figures(db: Session, file_id: uuid.UUID, figures: list[dict]) -> list[DocumentFigure]:
     rows = [
         DocumentFigure(
