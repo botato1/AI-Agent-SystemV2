@@ -53,6 +53,7 @@ class RealtimeSTTSession:
         recorder=None,
         fixed_speaker: str | None = None,
         base_offset_sec: float = 0.0,
+        initial_prompt: str | None = None,
     ):
         self.session_id = session_id
         self.fast_model = fast_model
@@ -66,6 +67,10 @@ class RealtimeSTTSession:
         # 세그먼트 시각과 믹싱 오디오 위치를 "회의 전체 기준 절대 시각"으로 맞추는 데 필요
         # (참가자마다 자기 스트림 기준 0초부터 시작하므로, 이 오프셋을 더해야 서로 어긋나지 않음)
         self.base_offset_sec = base_offset_sec
+        # 참석자 이름·팀 용어 인식 힌트 — 확정 전사(Precise)에만 적용한다.
+        # 잠정 전사(partial)는 화면에 흘려보내는 용도이고 1초마다 도는 저지연 경로라,
+        # 프롬프트 토큰만큼 디코딩 부담을 더 얹지 않는다(최종 텍스트는 어차피 확정본이 결정).
+        self.initial_prompt = initial_prompt
 
         # 오디오 버퍼: 매 프레임 np.concatenate 하면 버퍼가 길어질수록 복사 비용이
         # O(n²)로 커지므로, 조각 리스트로 쌓아두고 필요할 때만 합침
@@ -175,12 +180,15 @@ class RealtimeSTTSession:
         self._prev_partial_words = []
         return chunk, offset_sec
 
-    def _transcribe(self, model: WhisperModel, audio: np.ndarray, beam_size: int) -> list[dict]:
+    def _transcribe(
+        self, model: WhisperModel, audio: np.ndarray, beam_size: int, initial_prompt: str | None = None
+    ) -> list[dict]:
         segments, _info = model.transcribe(
             audio,
             language=WHISPER_LANGUAGE,
             beam_size=beam_size,
             vad_filter=True,
+            initial_prompt=initial_prompt,
             condition_on_previous_text=False,
         )
         return [
@@ -223,7 +231,9 @@ class RealtimeSTTSession:
         # 절대 시각"으로 변환 (각자 PC 모드가 아니면 base_offset_sec=0이라 그대로임)
         offset_sec = offset_sec + self.base_offset_sec
 
-        precise_task = loop.run_in_executor(None, self._transcribe, self.precise_model, audio, PRECISE_BEAM_SIZE)
+        precise_task = loop.run_in_executor(
+            None, self._transcribe, self.precise_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt
+        )
         if self.fixed_speaker is not None:
             # 각자 PC 모드 — 참가자가 이미 자기 이름으로 접속했으므로 화자 식별 자체가 불필요
             precise_segments = await precise_task

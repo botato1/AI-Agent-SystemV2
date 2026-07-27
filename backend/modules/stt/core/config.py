@@ -98,9 +98,23 @@ REALTIME_FORCE_CUT_MIN_SILENCE_MS = 100
 REALTIME_PARTIAL_INTERVAL_SEC = 1.0   # 이 주기로 버퍼 전체를 다시 훑어 잠정 텍스트 갱신
 REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정 전사 안 함
 
-# hotwords(initial_prompt)는 제거함 (2026-07-15) — 임의로 고른 단어 목록이라 근거가 약하고,
-# 회의 주제가 바뀌면 안 맞을 수 있어서 대신 파인튜닝으로 정확도를 개선하기로 결정.
-# 파인튜닝 준비/검증 전까지는 전문용어 인식률이 잠시 떨어질 수 있음 (트레이드오프 인지 후 결정).
+# ──────────────────────────────────────────
+# 인식 힌트(initial_prompt) 설정
+# ──────────────────────────────────────────
+# 2026-07-15에 hotwords를 제거하고 파인튜닝으로 방향을 틀었으나("임의로 고른 단어 목록이라
+# 근거가 약하다"는 이유), 2026-07-27 실측에서 파인튜닝의 실음성 개선폭이 CER 11.66%→11.18%
+# (0.48%p)에 그쳐 숫자·고유명사 오인식을 잡지 못하는 것이 확인됨
+# (실제 오인식: "8001번 포트"→"810000", "승주"→"승준", "WAV"→"WEV", "임베딩"→"인벨딩").
+#
+# 재도입하는 근거: 이제 "회의 참석자 명단"이라는 확실한 출처가 생겼음 — WebSocket이
+# attendees/participant_name으로 이미 받고 있어서, 임의로 고른 목록이 아니라 그 회의에
+# 실제로 참여 중인 사람 이름을 힌트로 줄 수 있다.
+#
+# 주의: 목록이 길수록 말하지 않은 용어를 지어내는 부작용이 커짐(그리고 Whisper 프롬프트는
+# 224토큰 제한). terms.txt를 의도적으로 짧게 유지하고, 늘릴 때는 반드시 회귀 측정할 것.
+# 부작용이 보이면 INITIAL_PROMPT_ENABLED=0으로 즉시 끌 수 있음(서버 재시작만 필요).
+INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
 
 # LoRA 파인튜닝 어댑터(finetune/stt/train_lora.py 결과물) 경로 — 설정 시 정밀(Precise) 모델에만
 # 적용됨(어댑터가 large-v3 기준으로 학습됐고, fast 모델은 turbo라 구조가 다름).
@@ -144,3 +158,40 @@ logger.info(
     f"⚙️  실행 디바이스: {DEVICE} ({ARCH}) / compute_type: {COMPUTE_TYPE} / "
     f"엔진: {STT_ENGINE} / 모델: {WHISPER_MODEL_SIZE}"
 )
+
+
+def _load_prompt_terms() -> list[str]:
+    """terms.txt를 읽어 용어 목록을 반환. '#' 시작 줄은 주석(선정 근거 기록용)."""
+    if not os.path.isfile(TERMS_PATH):
+        logger.warning(f"⚠️ 용어 목록 파일 없음: {TERMS_PATH} — 인식 힌트에 용어를 넣지 않음")
+        return []
+    with open(TERMS_PATH, encoding="utf-8") as f:
+        return [s for s in (line.strip() for line in f) if s and not s.startswith("#")]
+
+
+PROMPT_TERMS = _load_prompt_terms() if INITIAL_PROMPT_ENABLED else []
+
+
+def build_initial_prompt(speaker_names=None) -> str | None:
+    """
+    회의 참석자 이름과 팀 용어를 Whisper 디코딩 힌트 문장으로 조립.
+
+    speaker_names: 이 회의에 실제로 참여 중인 사람 이름들(공용 마이크 모드는 등록 참석자,
+    각자 PC 모드는 본인 이름). 이름이 힌트에 들어가야 "승주"→"승준" 같은 오인식이 잡힌다.
+
+    넣을 내용이 하나도 없으면(비활성화됐거나 이름·용어가 모두 비었으면) None을 반환해서
+    호출부가 힌트 없이 그냥 전사하게 한다 — 알맹이 없는 문장만 주면 이득 없이 위험만 있음.
+    """
+    if not INITIAL_PROMPT_ENABLED:
+        return None
+
+    names = sorted({n.strip() for n in (speaker_names or []) if n and n.strip()})
+    if not names and not PROMPT_TERMS:
+        return None
+
+    parts = ["비고 프로젝트 팀 회의."]
+    if names:
+        parts.append("참석자: " + ", ".join(names) + ".")
+    if PROMPT_TERMS:
+        parts.append("용어: " + ", ".join(PROMPT_TERMS) + ".")
+    return " ".join(parts)

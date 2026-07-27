@@ -16,6 +16,7 @@ from ..core.config import (
     CONF_AVG_LOGPROB_THRESHOLD,
     CONF_NO_SPEECH_THRESHOLD,
     MIN_SPEAKERS,
+    build_initial_prompt,
 )
 from .diarize_service import run_diarization
 from .speaker_id_service import LiveSpeakerIdentifier
@@ -129,12 +130,18 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 병합 후 {len(turns)}개, 턴별 전사 시작")
 
     # 2. 턴별 정밀 전사
+    # 최종 회의록이 되는 경로라 인식 힌트를 여기에도 적용한다. 등록 프로필이 있으면
+    # 그 이름들이 곧 참석자이므로 힌트에 넣고, 없으면 용어만 들어간다.
+    enrolled_names = list(np.load(profiles_path).files) if enrolled_count else []
+    initial_prompt = build_initial_prompt(enrolled_names)
+
     def _transcribe_clip(clip: np.ndarray) -> list:
         segments, _info = app_state.stt_model.transcribe(
             clip,
             language=WHISPER_LANGUAGE,
             beam_size=PRECISE_BEAM_SIZE,
             vad_filter=True,
+            initial_prompt=initial_prompt,
             condition_on_previous_text=False,
         )
         return list(segments)
