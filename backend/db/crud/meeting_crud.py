@@ -124,6 +124,13 @@ def update_meeting_status(db: Session, meeting_id: uuid.UUID, status: str, **fie
         db.refresh(row)
     return row
 
+def update_meeting_title(db: Session, meeting_id: uuid.UUID, title: str) -> Optional[Meeting]:
+    row = get_meeting(db, meeting_id)
+    if row:
+        row.title = title
+        db.commit()
+        db.refresh(row)
+    return row
 
 def try_transition_meeting_status(
     db: Session, meeting_id: uuid.UUID, from_status: str, to_status: str, **fields,
@@ -257,3 +264,26 @@ def delete_task(db: Session, task_id: uuid.UUID) -> Optional[Task]:
         db.commit()
         db.refresh(row)
     return row
+
+def update_speaker_labels(db: Session, meeting_id: uuid.UUID, mapping: dict[str, str]) -> Optional[Meeting]:
+    """화자 라벨(SPEAKER_00 등)을 실명으로 매핑한다.
+    - meetings.speaker_labels에 매핑을 누적 저장 (이후 실시간 세그먼트에도 적용하기 위함)
+    - 이미 저장된 세그먼트 중 매핑 대상 라벨을 가진 것들은 실명으로 소급 변경한다.
+    """
+    meeting = get_meeting(db, meeting_id)
+    if not meeting:
+        return None
+
+    existing = dict(meeting.speaker_labels or {})
+    existing.update(mapping)
+    meeting.speaker_labels = existing
+
+    for raw_label, display_name in mapping.items():
+        db.query(MeetingSegment).filter(
+            MeetingSegment.meeting_id == meeting_id,
+            MeetingSegment.speaker_label == raw_label,
+        ).update({"speaker_label": display_name}, synchronize_session=False)
+
+    db.commit()
+    db.refresh(meeting)
+    return meeting
