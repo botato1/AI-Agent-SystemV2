@@ -16,6 +16,7 @@ from .workspace import Workspace, WorkspaceMember
 from .room import Category, Room, RoomMessage
 from .file import RoomFileLink, Worktree, WorkspaceFile
 from .document import DocumentAnalysis, DocumentFigure
+from .history import RelatedHistoryMatch
 from .code import CodeAnalysis, CodeFact, CodeSymbol
 from .content_chunk import ContentChunk
 from .similarity import FileSimilarity
@@ -31,6 +32,7 @@ __all__ = [
     "Category", "Room", "RoomMessage",
     "Worktree", "WorkspaceFile", "RoomFileLink",
     "DocumentAnalysis", "DocumentFigure",
+    "RelatedHistoryMatch",
     "CodeAnalysis", "CodeSymbol", "CodeFact",
     "ContentChunk",
     "FileSimilarity",

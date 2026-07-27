@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, BaseModel
 
 from backend.schemas.common_schema import ORMBaseSchema
 from backend.schemas.type_schema import NotificationType
@@ -63,3 +63,6 @@ class NotificationSchema(ORMBaseSchema):
     read_at: Optional[datetime] = None
 
     created_at: datetime
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationSchema] = Field(default_factory=list)

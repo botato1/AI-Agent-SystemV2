@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import file_crud, meeting_crud
 from backend.db.session import SessionLocal
+from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 
@@ -63,12 +64,15 @@ async def _detect_uploaded_audio_contradictions(
     workspace_id: uuid.UUID,
     category_id: uuid.UUID,
     saved_segments: list[tuple[str, str]],
+    meeting_id: uuid.UUID,
+    started_by: uuid.UUID,
 ) -> None:
     """
-    업로드 음성에서 생성된 각 발화 세그먼트의 모순을 탐지한다.
+    업로드 음성에서 생성된 각 발화 세그먼트의 모순 및 판단 파이프라인(결정 리마인더/
+    문서 추천/반복논의)을 실행한다.
 
     다수의 LLM 요청이 한꺼번에 실행되는 것을 막기 위해 순차 처리한다.
-    개별 모순 감지 실패는 회의 요약 및 후처리 결과에 영향을 주지 않는다.
+    개별 실패는 회의 요약 및 후처리 결과에 영향을 주지 않는다.
     """
     for segment_id, content in saved_segments:
         statement_text = content.strip()
@@ -85,6 +89,20 @@ async def _detect_uploaded_audio_contradictions(
             )
         except Exception as exc:
             print(f"[meeting_service] 모순 감지 실패: segment_id={segment_id}, error={repr(exc)}")
+
+        try:
+            await asyncio.to_thread(
+                judgment_service.run_judgment_pipeline,
+                workspace_id=str(workspace_id),
+                category_id=str(category_id),
+                source_type="meeting_segment",
+                statement_text=statement_text,
+                notify_user_id=str(started_by),
+                meeting_segment_id=segment_id,
+                session_meeting_id=str(meeting_id),
+            )
+        except Exception as exc:
+            print(f"[meeting_service] 판단 파이프라인 실패: segment_id={segment_id}, error={repr(exc)}")
 
 
 def _mark_failed(db, meeting_id: uuid.UUID) -> None:
@@ -185,8 +203,9 @@ async def process_uploaded_audio_stt(
             category_id=str(category_id),
         )
 
-        await _detect_uploaded_audio_contradictions(workspace_id, category_id, saved_segments)
-
+        await _detect_uploaded_audio_contradictions(
+            workspace_id, category_id, saved_segments, meeting_id, transitioned.started_by,
+        )
     except Exception as exc:
         _mark_failed(db, meeting_id)
         print(f"[meeting_service] 음성 파일 STT 처리 중 예외 발생: {repr(exc)}")

@@ -302,4 +302,7 @@ NotificationType = Literal[
     "meeting_summary_ready",
     "file_analysis_completed",
     "file_analysis_failed",
+    "decision_reminder",
+    "repeat_discussion",
+    "document_recommendation",
 ]
