@@ -71,13 +71,13 @@ def _chunk_document(chunks: list) -> list[dict]:
     current_chars = 0
 
     def flush(lines, title, page):
-        if not lines:
+        if not lines and not title:
             return
         content = "\n".join(lines).strip()
+        if title:
+            content = f"{title}\n{content}".strip() if content else title
         if not content:
             return
-        if title:
-            content = f"{title}\n{content}"
         result.append({"content": content, "page_number": page})
 
     for chunk in chunks:
@@ -99,7 +99,7 @@ def _chunk_document(chunks: list) -> list[dict]:
             continue
 
         if style in ("title", "heading"):
-            if current_lines:
+            if current_lines or current_title:
                 flush(current_lines, current_title, current_page)
                 current_lines = []
                 current_chars = 0
