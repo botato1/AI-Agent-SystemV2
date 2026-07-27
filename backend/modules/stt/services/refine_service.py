@@ -15,6 +15,7 @@ from ..core.config import (
     REALTIME_SAMPLE_RATE,
     CONF_AVG_LOGPROB_THRESHOLD,
     CONF_NO_SPEECH_THRESHOLD,
+    MIN_SPEAKERS,
 )
 from .diarize_service import run_diarization
 from .speaker_id_service import LiveSpeakerIdentifier
@@ -111,8 +112,19 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     loop = asyncio.get_event_loop()
 
     # 1. 전체 화자분리 — 파일 경로 대신 메모리 오디오를 넘김 (서버 FFmpeg 부재로 파일 디코딩 불가)
+    #
+    # 사전 등록 프로필이 있으면 등록 인원이 곧 회의 참석자(닫힌 집합)이므로 화자 수 상한을
+    # 그 인원으로 좁혀준다 — 범위가 좁을수록 클러스터링이 흔들릴 여지가 줄어든다.
+    # 하한(MIN_SPEAKERS)까지 인원수로 올리지는 않는다: 등록만 하고 한 마디도 안 한 참석자가
+    # 있으면 없는 화자를 억지로 만들어내게 되기 때문.
+    profiles_path = os.path.join(meeting_dir, "profiles.npz")
+    enrolled_count = len(np.load(profiles_path).files) if os.path.isfile(profiles_path) else 0
     waveform = {"waveform": torch.from_numpy(audio.reshape(1, -1)), "sample_rate": sample_rate}
-    diarization_tracks = await run_diarization(app_state.diarize_pipeline, waveform)
+    diarization_tracks = await run_diarization(
+        app_state.diarize_pipeline,
+        waveform,
+        max_speakers=enrolled_count if enrolled_count >= MIN_SPEAKERS else None,
+    )
     turns = _merge_adjacent_turns(diarization_tracks)
     logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 병합 후 {len(turns)}개, 턴별 전사 시작")
 
@@ -158,8 +170,7 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
             logger.info(f"🔬 [{meeting_id}] 턴 전사 진행 {i}/{len(turns)}")
 
     # 3. 사전 등록 프로필이 있으면 익명 라벨(SPEAKER_00 등) → 실제 이름으로 매핑
-    profiles_path = os.path.join(meeting_dir, "profiles.npz")
-    if os.path.isfile(profiles_path):
+    if enrolled_count:
         refined_segments = await loop.run_in_executor(
             None, _map_speaker_names,
             refined_segments, audio, profiles_path, app_state.speaker_embedding_inference,
