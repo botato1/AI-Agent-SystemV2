@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from backend.core.security import verify_ws_ticket
 from backend.core.ws_ticket_store import consume_ticket
-from backend.db.crud import meeting_crud
-from backend.db.session import get_db
+from backend.db.crud import meeting_crud, file_crud, contradiction_crud
+from backend.db.session import get_db, SessionLocal
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.services.stt_stream_client import SttStreamClient
@@ -72,17 +72,48 @@ async def _detect_and_push_contradiction(
     if not detected:
         return
 
+    # 같은 발화에 대해 여러 개 감지될 수 있어(top-5 후보 각각 독립 판단) —
+    # DB엔 다 저장되지만, 실시간 화면에는 확신도(confidence_score) 제일 높은
+    # 것 하나만 보여준다. 근본 원인은 contradiction_detect.py(가동현) 쪽 수정 필요.
+    pair_count = min(len(detected), len(saved_ids))
+    best_index = max(range(pair_count), key=lambda i: detected[i]["confidence_score"])
+    contradiction = detected[best_index]
+    contradiction_id = saved_ids[best_index]
+
+    source_name = None
+    excerpt = ""
+    reference_file_id = contradiction.get("reference_file_id")
+    if reference_file_id:
+        db = SessionLocal()
+        try:
+            file = file_crud.get_file(db, uuid.UUID(reference_file_id))
+            source_name = file.original_filename if file else None
+
+            saved_row = contradiction_crud.get_contradiction(db, uuid.UUID(contradiction_id))
+            if saved_row and saved_row.reference_text_snapshot:
+                excerpt = " ".join(saved_row.reference_text_snapshot.split())[:100]
+        finally:
+            db.close()
+
+    if source_name and excerpt:
+        display_message = f"'{statement_text}'라고 하셨는데, 기존 자료({source_name})의 '{excerpt}'와 다릅니다."
+    elif excerpt:
+        display_message = f"'{statement_text}'라고 하셨는데, 기존 자료의 '{excerpt}'와 다릅니다."
+    else:
+        display_message = f"'{statement_text}'라고 하셨는데, 기존 자료와 다릅니다."
+
     try:
         async with send_lock:
-            for contradiction, contradiction_id in zip(detected, saved_ids):
-                await websocket.send_json({
-                    "type": "contradiction_alert",
-                    "contradiction_id": contradiction_id,
-                    "statement_text": statement_text,
-                    "reason": contradiction["reason"],
-                    "severity": contradiction["severity"],
-                    "confidence_score": contradiction["confidence_score"],
-                })
+            await websocket.send_json({
+                "type": "contradiction_alert",
+                "contradiction_id": contradiction_id,
+                "statement_text": statement_text,
+                "reason": contradiction["reason"],
+                "severity": contradiction["severity"],
+                "confidence_score": contradiction["confidence_score"],
+                "reference_source_name": source_name,
+                "display_message": display_message,
+            })
     except Exception as e:
         print(f"[meeting_ws_router] 모순 알림 전송 실패: {repr(e)}")
 
@@ -107,7 +138,6 @@ async def _process_segment_analysis(
             category_id=str(category_id),
             source_type="meeting_segment",
             statement_text=statement_text,
-            notify_user_id=str(meeting_started_by),
             meeting_segment_id=meeting_segment_id,
             session_meeting_id=str(meeting_id),
         )
@@ -124,6 +154,16 @@ def _extract_stt_confidence(seg: dict) -> float | None:
     if avg_logprob is None:
         return None
     return round(math.exp(avg_logprob), 4)
+
+def _resolve_speaker_label(db: Session, meeting_id: uuid.UUID, raw_label: str | None) -> str | None:
+    """이 회의에 설정된 화자 매핑을 적용한다. PATCH /speakers가 다른 요청에서 커밋한
+    최신 매핑을 확실히 읽기 위해 expire_all 후 재조회한다."""
+    if not raw_label:
+        return raw_label
+    db.expire_all()
+    meeting = meeting_crud.get_meeting(db, meeting_id)
+    mapping = (meeting.speaker_labels or {}) if meeting else {}
+    return mapping.get(raw_label, raw_label)
 
 def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording/paused 상태면 자동으로 마무리한다."""
@@ -190,6 +230,8 @@ async def _relay_stt_to_frontend(
             
         elif msg_type == "final":
             for seg in data.get("final", {}).get("segments", []):
+                resolved_speaker = _resolve_speaker_label(db, meeting_id, seg.get("speaker"))
+                seg["speaker"] = resolved_speaker  # WS로 나가는 payload에도 반영
                 try:
                     segment_row = meeting_crud.add_segment(
                         db,
@@ -198,7 +240,7 @@ async def _relay_stt_to_frontend(
                         start_ms=int(seg["start"] * 1000),
                         end_ms=int(seg["end"] * 1000),
                         segment_index=next_index,
-                        speaker_label=seg.get("speaker"),
+                        speaker_label=resolved_speaker,
                         stt_confidence=_extract_stt_confidence(seg),
                     )
                     next_index += 1
