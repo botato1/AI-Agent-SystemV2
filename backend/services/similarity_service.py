@@ -24,8 +24,8 @@ def _get_document_embedding(document_id: str, workspace_id: str) -> list[float] 
         where={"$and": [{"document_id": document_id}, {"workspace_id": workspace_id}]},
         include=["embeddings"],
     )
-    embeddings = result.get("embeddings") or []
-    if not embeddings:
+    embeddings = result.get("embeddings")
+    if embeddings is None or len(embeddings) == 0:
         return None
     dim = len(embeddings[0])
     return [sum(vec[i] for vec in embeddings) / len(embeddings) for i in range(dim)]
@@ -37,7 +37,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     norm_b = sum(y * y for y in b) ** 0.5
     if norm_a == 0 or norm_b == 0:
         return 0.0
-    return dot / (norm_a * norm_b)
+    return float(dot / (norm_a * norm_b))
 
 
 def compute_similarities_for_document(
