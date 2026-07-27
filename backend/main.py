@@ -2,6 +2,9 @@
 
 from fastapi import FastAPI
 
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
 from backend.db.base import init_db
 from backend.routers.chat_router import router as chat_router
 from backend.routers.rag_router import router as rag_router
@@ -35,6 +38,10 @@ app.add_middleware(
 
 # 서버 실행 시 PostgreSQL 테이블 자동 생성 (개발용, 운영은 Alembic 권장)
 init_db()
+
+PROFILE_IMAGE_DIR = Path("data/uploads/profile_images")
+PROFILE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/profile_images", StaticFiles(directory=PROFILE_IMAGE_DIR), name="profile_images")
 
 # 서버 시작 시 리랭커 모델 미리 로딩
 warm_up_reranker()

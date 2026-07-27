@@ -1,5 +1,8 @@
 # backend/services/auth_service.py
 
+import uuid
+from pathlib import Path
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -454,5 +457,47 @@ def delete_account(db: Session, access_token: str, request: AccountDeleteRequest
     return AccountDeleteResponse(
         status="success",
         message="회원 탈퇴가 완료되었습니다.",
+        error=None,
+    )
+
+PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
+ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+
+def update_profile_image(db: Session, access_token: str, filename: str, file_content: bytes) -> ProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_PROFILE_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="지원하지 않는 이미지 형식입니다 (png/jpg/jpeg만 가능).",
+        )
+
+    PROFILE_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{uuid.uuid4()}{extension}"
+    (PROFILE_IMAGE_STORAGE_DIR / stored_filename).write_bytes(file_content)
+
+    image_url = f"/static/profile_images/{stored_filename}"
+    auth_crud.update_user_profile(db, user.id, profile_image_url=image_url)
+    user = auth_crud.get_user_by_id(db, user.id)
+
+    return ProfileResponse(
+        status="success",
+        user=UserPublicSchema.model_validate(user),
+        message="프로필 이미지가 변경되었습니다.",
         error=None,
     )
