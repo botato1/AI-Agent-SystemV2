@@ -77,7 +77,9 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           .map((e) => ({
             a: e.source_file_id,
             b: e.target_file_id,
-            strength: e.similarity_score,
+            // 백엔드가 similarity_score를 문자열로 내려줄 때가 있어서, 숫자로 안 바꾸면
+            // "0.4 + strength" 같은 연산에서 문자열 이어붙이기가 일어나 NaN이 퍼진다.
+            strength: Number(e.similarity_score),
           }));
       } else {
         edgesRef.current = [];
@@ -128,13 +130,11 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
     if (!ctx) return;
 
     let animId: number;
-    const REPEL_K = 650;
+    const REPEL_K = 1600;
     const SPRING_K = 0.02;
     const REST_LENGTH = 90;
     const BASE_RADIUS = 10;
     const HOVER_RADIUS = 16;
-    // 지렁이처럼 살짝씩 꿈틀대는 유기적인 움직임을 위한 미세한 랜덤 힘
-    const WANDER_K = 0.12;
 
     const render = () => {
       const parent = canvas.parentElement;
@@ -162,7 +162,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
       });
 
       // 1. 노드 간 반발력 (일정 거리 안에서만 - 너무 멀어지는 것 방지, 중앙 수렴력은 없음)
-      const REPEL_RANGE = 170;
+      const REPEL_RANGE = 240;
       for (let i = 0; i < nodes.length; i++) {
         const nodeA = nodes[i];
         for (let j = i + 1; j < nodes.length; j++) {
@@ -240,15 +240,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
         }
       });
 
-      // 4. 지렁이처럼 살짝씩 방향을 트는 미세한 랜덤 흔들림 (정지 상태로 딱딱하게 굳지 않도록)
-      nodes.forEach((n) => {
-        if (draggingNodeRef.current !== n) {
-          n.vx += (Math.random() - 0.5) * WANDER_K;
-          n.vy += (Math.random() - 0.5) * WANDER_K;
-        }
-      });
-
-      // 5. 감쇄 및 위치 업데이트
+      // 4. 감쇄 및 위치 업데이트
       nodes.forEach((n) => {
         n.vx *= 0.82;
         n.vy *= 0.82;

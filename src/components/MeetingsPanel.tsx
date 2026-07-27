@@ -54,6 +54,19 @@ function formatDuration(ms?: number | null): string {
   return `${mm}:${ss}`;
 }
 
+// STT가 준 원본 화자 라벨인지(아직 실명으로 매핑 안 됐는지) 판단
+function isRawSpeakerLabel(label: string | null | undefined): label is string {
+  return !!label && /^SPEAKER[_\s]?\d+$/i.test(label.trim());
+}
+
+function uniqueRawSpeakerLabels(labels: (string | null | undefined)[]): string[] {
+  const seen = new Set<string>();
+  for (const l of labels) {
+    if (isRawSpeakerLabel(l)) seen.add(l.trim());
+  }
+  return Array.from(seen);
+}
+
 function statusBadge(status: MeetingStatus) {
   switch (status) {
     case "created":
@@ -173,6 +186,39 @@ interface MeetingsPanelProps {
   onResumeLive: () => void;
   onStopLive: () => void;
   onResetLive: () => void;
+  onMapLiveSpeakers: (mapping: Record<string, string>) => void;
+}
+
+// 아직 실명 매핑 안 된 화자 라벨을 칩으로 보여주고, 누르면 이름을 물어봐서 매핑 API를 호출한다.
+function UnmappedSpeakerChips({
+  labels,
+  onAssign,
+}: {
+  labels: string[];
+  onAssign: (mapping: Record<string, string>) => void;
+}) {
+  if (labels.length === 0) return null;
+
+  function handleClick(label: string) {
+    const name = window.prompt(`"${label}"의 실제 이름을 입력해 주세요.`, "");
+    if (!name || !name.trim()) return;
+    onAssign({ [label]: name.trim() });
+  }
+
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-recall-textMuted">화자 이름 지정:</span>
+      {labels.map((label) => (
+        <button
+          key={label}
+          onClick={() => handleClick(label)}
+          className="rounded-full border border-recall-border px-2 py-0.5 text-xs text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
+        >
+          {label} +
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export default function MeetingsPanel({
@@ -188,6 +234,7 @@ export default function MeetingsPanel({
   onResumeLive,
   onStopLive,
   onResetLive,
+  onMapLiveSpeakers,
 }: MeetingsPanelProps) {
   const {
     meetings: realMeetings,
@@ -202,6 +249,7 @@ export default function MeetingsPanel({
     isUploading,
     uploadAudio,
     removeMeeting,
+    mapSpeakerNames,
     reload,
   } = useRealMeetings(workspaceId);
 
@@ -447,6 +495,10 @@ export default function MeetingsPanel({
                 </p>
               ) : (
                 <div className="space-y-2 text-base text-recall-textMuted">
+                  <UnmappedSpeakerChips
+                    labels={uniqueRawSpeakerLabels(liveSegments.map((s) => s.speaker_label))}
+                    onAssign={onMapLiveSpeakers}
+                  />
                   {liveSegments.map((s, i) => (
                     <p key={i}>
                       <span className="font-medium text-recall-text">{s.speaker_label || "화자 미상"}</span>{" "}
@@ -558,6 +610,10 @@ export default function MeetingsPanel({
                     <p className="text-base text-recall-textMuted">발화 스크립트가 없습니다.</p>
                   ) : (
                     <div className="space-y-2 text-base text-recall-textMuted">
+                      <UnmappedSpeakerChips
+                        labels={uniqueRawSpeakerLabels(segments.map((s) => s.speaker_label))}
+                        onAssign={mapSpeakerNames}
+                      />
                       {segments
                         .slice()
                         .sort((a, b) => a.segment_index - b.segment_index)

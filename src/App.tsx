@@ -455,6 +455,7 @@ export default function App() {
           onResume={liveMeeting.resume}
           onStop={liveMeeting.stop}
           onReset={liveMeeting.reset}
+          onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
           t={t}
         />
       ) : selection.key === "dashboard" ? (

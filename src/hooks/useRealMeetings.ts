@@ -10,6 +10,7 @@ import {
   getMeetingSummaryApi,
   getMeetingDecisionsApi,
   uploadMeetingAudioApi,
+  mapSpeakerNamesApi,
 } from "../services/meeting";
 
 const PENDING_STATUSES = new Set(["created", "processing"]);
@@ -87,6 +88,22 @@ export function useRealMeetings(workspaceId: string) {
     }
   }
 
+  async function mapSpeakerNames(mapping: Record<string, string>) {
+    if (!selectedMeetingId) return;
+    const res = await mapSpeakerNamesApi(workspaceId, selectedMeetingId, mapping);
+    if (res.status === "success") {
+      setSegments((prev) =>
+        prev.map((s) =>
+          s.speaker_label && res.speakerLabels[s.speaker_label]
+            ? { ...s, speaker_label: res.speakerLabels[s.speaker_label] }
+            : s
+        )
+      );
+    } else {
+      alert(`화자 이름 지정 실패: ${res.message}`);
+    }
+  }
+
   async function removeMeeting(id: string) {
     const res = await deleteMeetingApi(workspaceId, id);
 
@@ -111,6 +128,7 @@ export function useRealMeetings(workspaceId: string) {
     isUploading,
     uploadAudio,
     removeMeeting,
+    mapSpeakerNames,
     reload: loadMeetings,
   };
 }

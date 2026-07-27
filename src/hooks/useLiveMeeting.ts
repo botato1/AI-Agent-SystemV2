@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Meeting, startMeetingApi, pauseMeetingApi, resumeMeetingApi } from "../services/meeting";
+import {
+  Meeting,
+  startMeetingApi,
+  pauseMeetingApi,
+  resumeMeetingApi,
+  mapSpeakerNamesApi,
+} from "../services/meeting";
 
 export type LiveMeetingStatus =
   | "idle"
@@ -347,6 +353,23 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     }
   }
 
+  async function mapSpeakerNames(mapping: Record<string, string>) {
+    if (!meeting) return;
+    const res = await mapSpeakerNamesApi(workspaceId, meeting.id, mapping);
+    if (res.status === "success") {
+      // 이미 표시된 발화도 즉시 소급 반영 (앞으로 들어오는 발화는 백엔드가 이미 매핑해서 보내줌)
+      setSegments((prev) =>
+        prev.map((s) =>
+          s.speaker_label && res.speakerLabels[s.speaker_label]
+            ? { ...s, speaker_label: res.speakerLabels[s.speaker_label] }
+            : s
+        )
+      );
+    } else {
+      alert(`화자 이름 지정 실패: ${res.message}`);
+    }
+  }
+
   async function stop() {
     const ws = wsRef.current;
     if (!ws || (status !== "recording" && status !== "paused")) return;
@@ -402,6 +425,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     resume,
     stop,
     reset,
+    mapSpeakerNames,
     startedByName: currentUser.name,
   };
 }
