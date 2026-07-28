@@ -15,13 +15,16 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   WarningIcon,
+  PencilIcon,
 } from "./icons";
+import ContradictionMessage from "./ContradictionMessage";
+import ChangeSummaryModal from "./ChangeSummaryModal";
 
-function severityBadge(severity: ContradictionSeverity) {
+function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
-    high: { label: "높음", className: "bg-recall-danger/15 text-recall-danger" },
-    medium: { label: "중간", className: "bg-amber-500/15 text-amber-400" },
-    low: { label: "낮음", className: "bg-recall-textMuted/15 text-recall-textMuted" },
+    high: { label: t.priority_high, className: "bg-recall-danger/15 text-recall-danger" },
+    medium: { label: t.priority_medium, className: "bg-amber-500/15 text-amber-400" },
+    low: { label: t.priority_low, className: "bg-recall-textMuted/15 text-recall-textMuted" },
   } as const;
   const { label, className } = map[severity];
   return <span className={`flex-shrink-0 rounded-full px-1.5 py-0.5 text-[11px] ${className}`}>{label}</span>;
@@ -187,6 +190,56 @@ interface MeetingsPanelProps {
   onStopLive: () => void;
   onResetLive: () => void;
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
+  onRenameLive: (title: string) => void;
+  t: any;
+}
+
+// 회의 제목 인라인 수정 — 클릭하면 입력창으로 바뀌고, Enter/blur로 저장
+function EditableMeetingTitle({ title, onRename }: { title: string; onRename: (title: string) => void }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+
+  function commit() {
+    setIsEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== title) {
+      onRename(trimmed);
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setDraft(title);
+            setIsEditing(false);
+          }
+        }}
+        className="rounded border border-recall-border bg-transparent px-1.5 py-0.5 text-base font-medium text-recall-text focus:outline-none focus:border-recall-accent"
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={() => {
+        setDraft(title);
+        setIsEditing(true);
+      }}
+      title="제목 수정"
+      className="group flex items-center gap-1.5 text-left"
+    >
+      <span className="text-base font-medium text-recall-text">{title}</span>
+      <PencilIcon size={12} className="flex-shrink-0 text-recall-textMuted opacity-0 group-hover:opacity-70" />
+    </button>
+  );
 }
 
 // 아직 실명 매핑 안 된 화자 라벨을 칩으로 보여주고, 누르면 이름을 물어봐서 매핑 API를 호출한다.
@@ -235,6 +288,8 @@ export default function MeetingsPanel({
   onStopLive,
   onResetLive,
   onMapLiveSpeakers,
+  onRenameLive,
+  t,
 }: MeetingsPanelProps) {
   const {
     meetings: realMeetings,
@@ -249,6 +304,7 @@ export default function MeetingsPanel({
     isUploading,
     uploadAudio,
     removeMeeting,
+    renameMeeting,
     mapSpeakerNames,
     reload,
   } = useRealMeetings(workspaceId);
@@ -259,10 +315,11 @@ export default function MeetingsPanel({
     resolve,
     dismiss,
     refresh: refreshContradictions,
+    pendingSummaryFor,
+    changeSummary,
+    isChangeSummaryLoading,
+    closeChangeSummary,
   } = useContradictions(workspaceId);
-
-  // 회의 발언 쪽 모순만 보여줌 (채팅 메시지 쪽 모순은 채팅방 화면에서 따로 보여줌)
-  const contradictions = workspaceContradictions.filter((c) => c.source_type === "meeting_segment");
 
   // 실시간 회의 중 모순 감지 WS 알림이 오면, 8초 폴링을 기다리지 않고 즉시 목록을 새로고침
   const prevAlertCountRef = useRef(liveContradictionAlerts.length);
@@ -278,15 +335,16 @@ export default function MeetingsPanel({
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
   const [isMeetingListOpen, setIsMeetingListOpen] = useState(true);
   const [isContradictionListOpen, setIsContradictionListOpen] = useState(true);
-  const prevContradictionCountRef = useRef(contradictions.length);
+  const [expandedContradictionIds, setExpandedContradictionIds] = useState<Set<string>>(new Set());
 
-  // 닫혀 있는 동안 새 모순이 감지되면 자동으로 펼침
-  useEffect(() => {
-    if (contradictions.length > prevContradictionCountRef.current) {
-      setIsContradictionListOpen((prevOpen) => (prevOpen ? prevOpen : true));
-    }
-    prevContradictionCountRef.current = contradictions.length;
-  }, [contradictions.length]);
+  function toggleContradictionExpanded(id: string) {
+    setExpandedContradictionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const isLiveActive = LIVE_ACTIVE_STATUSES.includes(liveStatus);
 
@@ -297,6 +355,30 @@ export default function MeetingsPanel({
       : realMeetings;
 
   const isViewingLive = isLiveActive && !!liveMeeting && selectedMeetingId === liveMeeting.id;
+
+  // 회의 발언 쪽 모순만 보여주고(채팅 메시지 쪽은 채팅방 화면에서 따로 보여줌), 그중에서도
+  // 지금 보고 있는 회의(실시간 or 선택된 과거 회의) 것만 걸러서 보여준다 — 다른 회의 갔다와도
+  // 안 섞이고, 새 회의 들어가면 그 회의 것만 보이도록.
+  const contradictions = workspaceContradictions.filter((c) => {
+    if (c.source_type !== "meeting_segment") return false;
+    if (isViewingLive) {
+      if (!liveMeeting) return false;
+      const startedAt = liveMeeting.started_at || liveMeeting.created_at;
+      return !startedAt || new Date(c.detected_at) >= new Date(startedAt);
+    }
+    if (!selectedRealMeeting) return false;
+    return !!c.meeting_segment_id && segments.some((s) => s.id === c.meeting_segment_id);
+  });
+
+  const prevContradictionCountRef = useRef(contradictions.length);
+
+  // 닫혀 있는 동안 새 모순이 감지되면 자동으로 펼침
+  useEffect(() => {
+    if (contradictions.length > prevContradictionCountRef.current) {
+      setIsContradictionListOpen((prevOpen) => (prevOpen ? prevOpen : true));
+    }
+    prevContradictionCountRef.current = contradictions.length;
+  }, [contradictions.length]);
 
   // 새 녹음이 시작되면 그 회의를 자동으로 선택
   useEffect(() => {
@@ -372,9 +454,9 @@ export default function MeetingsPanel({
 
         <div className="flex-1 space-y-1.5 overflow-y-auto">
           {isLoading ? (
-            <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+            <p className="text-sm text-recall-textMuted">{t.common_loading}</p>
           ) : meetings.length === 0 ? (
-            <p className="text-sm text-recall-textMuted">아직 회의가 없습니다.</p>
+            <p className="text-sm text-recall-textMuted">{t.meeting_none}</p>
           ) : (
             meetings.map((m) => {
               const isSelected = m.id === selectedMeetingId;
@@ -438,7 +520,7 @@ export default function MeetingsPanel({
           <>
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <p className="text-base font-medium text-recall-text">{liveMeeting.title}</p>
+                <EditableMeetingTitle title={liveMeeting.title} onRename={onRenameLive} />
                 <p className="flex items-center gap-1.5 text-sm text-recall-textMuted">
                   {liveStatus === "recording" && (
                     <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-recall-danger" />
@@ -501,7 +583,7 @@ export default function MeetingsPanel({
                   />
                   {liveSegments.map((s, i) => (
                     <p key={i}>
-                      <span className="font-medium text-recall-text">{s.speaker_label || "화자 미상"}</span>{" "}
+                      <span className="font-medium text-recall-text">{s.speaker_label || t.speaker_unknown}</span>{" "}
                       {s.content}
                     </p>
                   ))}
@@ -532,7 +614,10 @@ export default function MeetingsPanel({
         ) : (
           <>
             <div className="mb-3">
-              <p className="text-base font-medium text-recall-text">{selectedRealMeeting.title}</p>
+              <EditableMeetingTitle
+                title={selectedRealMeeting.title}
+                onRename={(title) => renameMeeting(selectedRealMeeting.id, title)}
+              />
               <p className="text-sm text-recall-textMuted">
                 {statusBadge(selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
                 {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
@@ -542,20 +627,20 @@ export default function MeetingsPanel({
             {selectedRealMeeting.status === "created" || selectedRealMeeting.status === "processing" ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-recall-border">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-recall-border border-t-recall-accent" />
-                <p className="text-base text-recall-textMuted">음성 분석(STT) 및 요약 생성 중입니다...</p>
+                <p className="text-base text-recall-textMuted">{t.meeting_processing}</p>
               </div>
             ) : selectedRealMeeting.status === "failed" ? (
               <div className="flex flex-1 items-center justify-center rounded-lg border border-recall-danger/30 bg-recall-danger/5">
-                <p className="text-base text-recall-danger">회의 처리에 실패했습니다.</p>
+                <p className="text-base text-recall-danger">{t.meeting_failed}</p>
               </div>
             ) : (
               <>
                 <div className="mb-3 flex gap-0.5 border-b border-recall-border">
                   {(
                     [
-                      { key: "summary", label: "요약" },
-                      { key: "decisions", label: "결정사항" },
-                      { key: "script", label: "스크립트" },
+                      { key: "summary", label: t.meeting_tab_summary },
+                      { key: "decisions", label: t.meeting_tab_decisions },
+                      { key: "script", label: t.meeting_tab_script },
                     ] as { key: DetailTab; label: string }[]
                   ).map((tab) => (
                     <button
@@ -574,7 +659,7 @@ export default function MeetingsPanel({
 
                 <div className="flex-1 overflow-y-auto rounded-lg border border-recall-border p-3">
                   {isDetailLoading ? (
-                    <p className="text-base text-recall-textMuted">불러오는 중...</p>
+                    <p className="text-base text-recall-textMuted">{t.common_loading}</p>
                   ) : detailTab === "summary" ? (
                     summary?.generation_status === "completed" ? (
                       <div className="space-y-3">
@@ -588,11 +673,11 @@ export default function MeetingsPanel({
                         )}
                       </div>
                     ) : (
-                      <p className="text-base text-recall-textMuted">아직 요약이 생성되지 않았습니다.</p>
+                      <p className="text-base text-recall-textMuted">{t.meeting_summary_not_ready}</p>
                     )
                   ) : detailTab === "decisions" ? (
                     decisions.length === 0 ? (
-                      <p className="text-base text-recall-textMuted">추출된 결정사항이 없습니다.</p>
+                      <p className="text-base text-recall-textMuted">{t.meeting_no_decisions}</p>
                     ) : (
                       <div className="space-y-3">
                         {decisions.map((d) => (
@@ -600,14 +685,16 @@ export default function MeetingsPanel({
                             <p className="text-base font-medium text-recall-text">{d.title}</p>
                             <p className="mt-1 text-sm text-recall-textMuted">{d.decision_text}</p>
                             {d.reason && (
-                              <p className="mt-1 text-xs text-recall-textMuted">사유: {d.reason}</p>
+                              <p className="mt-1 text-xs text-recall-textMuted">
+                                {t.decision_reason_label} {d.reason}
+                              </p>
                             )}
                           </div>
                         ))}
                       </div>
                     )
                   ) : segments.length === 0 ? (
-                    <p className="text-base text-recall-textMuted">발화 스크립트가 없습니다.</p>
+                    <p className="text-base text-recall-textMuted">{t.meeting_no_script}</p>
                   ) : (
                     <div className="space-y-2 text-base text-recall-textMuted">
                       <UnmappedSpeakerChips
@@ -620,7 +707,7 @@ export default function MeetingsPanel({
                         .map((s) => (
                           <p key={s.id}>
                             <span className="font-medium text-recall-text">
-                              {s.speaker_label || "화자 미상"}
+                              {s.speaker_label || t.speaker_unknown}
                             </span>{" "}
                             {s.content}
                           </p>
@@ -666,18 +753,24 @@ export default function MeetingsPanel({
             </button>
             <p className="flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
               <WarningIcon size={12} className="text-recall-danger" />
-              모순 감지
+              {t.contradiction_title}
             </p>
           </div>
 
           <div className="flex-1 space-y-2 overflow-y-auto">
             {isContradictionsLoading ? (
-              <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+              <p className="text-sm text-recall-textMuted">{t.common_loading}</p>
             ) : contradictions.length === 0 ? (
-              <p className="text-sm text-recall-textMuted">감지된 모순이 없습니다.</p>
+              <p className="text-sm text-recall-textMuted">{t.contradiction_none}</p>
             ) : (
-              contradictions.map((c) => (
-                <div key={c.id} className="rounded-lg border border-recall-border p-2.5">
+              contradictions.map((c) => {
+                const isExpanded = expandedContradictionIds.has(c.id);
+                return (
+                <div
+                  key={c.id}
+                  onClick={() => toggleContradictionExpanded(c.id)}
+                  className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
+                >
                   <div className="mb-1 flex items-center justify-between gap-1">
                     <span className="flex items-center gap-1 text-xs font-medium text-recall-textMuted">
                       {c.source_type === "meeting_segment" ? (
@@ -685,36 +778,34 @@ export default function MeetingsPanel({
                       ) : (
                         <DocumentIcon size={11} className="flex-shrink-0" />
                       )}
-                      {c.source_type === "meeting_segment" ? "회의 발언" : "채팅 메시지"}
+                      {c.source_type === "meeting_segment" ? t.contradiction_source_meeting : t.contradiction_source_chat}
                     </span>
-                    {severityBadge(c.severity)}
+                    {severityBadge(c.severity, t)}
                   </div>
-                  <p className="mb-1 line-clamp-2 text-sm text-recall-text">{c.statement_text_snapshot}</p>
-                  <p className="mb-2 line-clamp-1 text-xs text-recall-textMuted">
-                    기준: {c.reference_text_snapshot}
-                  </p>
-                  <div className="flex gap-1">
+                  <ContradictionMessage contradiction={c} expanded={isExpanded} t={t} />
+                  <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => dismiss(c.id)}
                       className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
                     >
-                      무시
+                      {t.contradiction_dismiss}
                     </button>
                     <button
                       onClick={() => resolve(c.id, "keep_reference")}
                       className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
                     >
-                      유지
+                      {t.contradiction_keep}
                     </button>
                     <button
                       onClick={() => resolve(c.id, "change_acknowledged")}
                       className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
                     >
-                      반영
+                      {t.contradiction_apply}
                     </button>
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -725,6 +816,16 @@ export default function MeetingsPanel({
           isUploading={isUploading}
           onClose={() => setShowUploadModal(false)}
           onUpload={handleUpload}
+        />
+      )}
+
+      {pendingSummaryFor && (
+        <ChangeSummaryModal
+          contradiction={pendingSummaryFor}
+          changeSummary={changeSummary}
+          isLoading={isChangeSummaryLoading}
+          onClose={closeChangeSummary}
+          t={t}
         />
       )}
     </div>

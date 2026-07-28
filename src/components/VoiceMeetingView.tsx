@@ -16,6 +16,7 @@ interface VoiceMeetingViewProps {
   onStop: () => void;
   onReset: () => void;
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
+  onRenameLive: (title: string) => void;
   t: any;
 }
 
@@ -33,6 +34,7 @@ export default function VoiceMeetingView({
   onStop,
   onReset,
   onMapLiveSpeakers,
+  onRenameLive,
   t,
 }: VoiceMeetingViewProps) {
   return (
@@ -55,6 +57,8 @@ export default function VoiceMeetingView({
         onStopLive={onStop}
         onResetLive={onReset}
         onMapLiveSpeakers={onMapLiveSpeakers}
+        onRenameLive={onRenameLive}
+        t={t}
       />
     </div>
   );
