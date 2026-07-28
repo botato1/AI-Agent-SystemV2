@@ -69,6 +69,8 @@ def run_judgment_pipeline(
             return
 
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
+            if not notification_crud.is_notification_enabled(db, uuid.UUID(workspace_id), member.user_id, popup["type"]):
+                continue
             notification_crud.create_notification(
                 db,
                 user_id=member.user_id,
