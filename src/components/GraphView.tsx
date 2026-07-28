@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import { getDocumentGraphApi } from "../services/document";
-import { SparklesIcon } from "./icons";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 
 interface GraphViewProps {
@@ -10,9 +9,31 @@ interface GraphViewProps {
   t: any;
 }
 
+// 파일 확장자별 카테고리 색상 — 진짜 문서 유형/토픽 분류가 생기기 전까지 확장자를 임시 카테고리로 사용
+const EXT_GROUP: Record<string, number> = { PDF: 1, DOCX: 2, HWPX: 3, PNG: 4, JPG: 4, JPEG: 4, TXT: 5 };
+const GROUP_COLORS = ["#7c6af7", "#4caf82", "#e8a838", "#ec7fb0", "#5bb8d9", "#94a3b8"]; // 마지막은 "기타"
+const GROUP_LABELS: Record<number, string> = {
+  1: "PDF",
+  2: "DOCX",
+  3: "HWPX",
+  4: "이미지",
+  5: "TXT",
+  6: "기타",
+};
+
+function getExtGroup(filename: string): number {
+  const ext = filename.split(".").pop()?.toUpperCase() ?? "";
+  return EXT_GROUP[ext] ?? 6;
+}
+
+function getGroupColor(group: number): string {
+  return GROUP_COLORS[(group - 1) % GROUP_COLORS.length];
+}
+
 interface Node {
   id: string;
   name: string;
+  group: number;
   x: number;
   y: number;
   vx: number;
@@ -112,6 +133,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
       return {
         id: doc.id,
         name: doc.name,
+        group: getExtGroup(doc.name),
         x: width / 2 + radiusDist * Math.cos(angle) + (Math.random() - 0.5) * 40,
         y: height / 2 + radiusDist * Math.sin(angle) + (Math.random() - 0.5) * 40,
         vx: 0,
@@ -324,13 +346,13 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           ctx.shadowBlur = 16;
         }
 
-        ctx.fillStyle = isSelected ? "#818CF8" : isHovered ? "#6366F1" : "#4F46E5";
+        ctx.fillStyle = getGroupColor(node.group);
         ctx.fill();
 
-        if (isSelected) {
+        if (isSelected || isHovered) {
           ctx.shadowBlur = 0;
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = "rgba(199, 210, 254, 0.9)";
+          ctx.lineWidth = isSelected ? 2.5 : 1.5;
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
           ctx.stroke();
         }
         ctx.restore();
@@ -451,6 +473,10 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
         .filter((x) => x.doc)
     : [];
 
+  const presentGroups = Array.from(new Set(analyzedDocs.map((d) => getExtGroup(d.name)))).sort(
+    (a, b) => a - b
+  );
+
   return (
     <div className="flex h-full w-full flex-col bg-recall-bgMain p-4 text-recall-text">
       <div className="mb-4">
@@ -501,12 +527,25 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
                 </div>
               </div>
             )}
+
+            {presentGroups.length > 0 && (
+              <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-wrap gap-2.5 rounded-lg border border-recall-border bg-recall-bgMain/85 px-3 py-2 backdrop-blur-sm">
+                {presentGroups.map((group) => (
+                  <div key={group} className="flex items-center gap-1.5">
+                    <span
+                      className="h-2 w-2 flex-shrink-0 rounded-full"
+                      style={{ background: getGroupColor(group) }}
+                    />
+                    <span className="text-xs text-recall-textMuted">{GROUP_LABELS[group] ?? "기타"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-4 overflow-hidden">
             <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-              <p className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">
-                <SparklesIcon size={14} className="text-recall-accent" />
+              <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">
                 연관 문서 {selectedDoc ? `- ${selectedDoc.name}` : ""}
               </p>
               {relatedToSelected.length === 0 ? (
