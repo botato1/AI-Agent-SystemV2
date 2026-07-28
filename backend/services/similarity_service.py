@@ -10,7 +10,7 @@ from backend.db.crud import file_crud, similarity_crud
 from backend.db.session import SessionLocal
 from backend.modules.rag.chroma_client import DOCUMENT_COLLECTION, get_or_create_collection
 
-MIN_STORAGE_SCORE = 0.3  # 이 미만은 저장도 안 함 (테이블 비대화 방지)
+MIN_STORAGE_SCORE = 0.6  # 이 미만은 저장도 안 함 (테이블 비대화 방지)
 
 
 # TODO: chroma_client.py로 이관 필요 (승주 확인 후). 지금은 승주가 당장
