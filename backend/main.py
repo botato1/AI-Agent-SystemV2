@@ -19,6 +19,7 @@ from backend.routers.contradiction_router import router as contradiction_router
 from backend.routers.worktree_router import router as worktree_router
 from backend.routers.ai_chat_router import router as ai_chat_router
 from backend.routers.notification_router import router as notification_router
+from backend.routers.notification_router import router as notification_router, preferences_router as notification_preferences_router
 from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -60,6 +61,7 @@ app.include_router(contradiction_router)
 app.include_router(worktree_router)
 app.include_router(ai_chat_router)
 app.include_router(notification_router)
+app.include_router(notification_preferences_router)
 
 @app.get("/")
 def root():
