@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import contradiction_crud
+from backend.db.crud import contradiction_crud, file_crud
+from backend.db.modules import Decision
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
     ContradictionSchema,
@@ -31,6 +32,39 @@ def _get_contradiction_or_404(db: Session, contradiction_id: uuid.UUID, workspac
         )
     return contradiction
 
+def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
+    """reference_type에 따라 근거 자료의 이름(파일명/결정 제목)을 채워서 반환한다.
+    프론트가 '기준: system_spec.pdf' 처럼 사람이 알아볼 수 있게 표시할 수 있게 함."""
+    source_name = None
+    if contradiction.reference_type == "content_chunk" and contradiction.reference_file_id:
+        file = file_crud.get_file(db, contradiction.reference_file_id)
+        source_name = file.original_filename if file else None
+    elif contradiction.reference_type == "decision" and contradiction.reference_decision_id:
+        decision = db.get(Decision, contradiction.reference_decision_id)
+        source_name = decision.title if decision else None
+
+    excerpt = " ".join((contradiction.reference_text_snapshot or "").split())[:100]
+
+    if source_name and excerpt:
+        display_message = (
+            f"'{contradiction.statement_text_snapshot}'라고 하셨는데, "
+            f"기존 자료({source_name})의 '{excerpt}'와 다릅니다."
+        )
+    elif excerpt:
+        display_message = (
+            f"'{contradiction.statement_text_snapshot}'라고 하셨는데, "
+            f"기존 자료의 '{excerpt}'와 다릅니다."
+        )
+    else:
+        display_message = (
+            f"'{contradiction.statement_text_snapshot}'라고 하셨는데, 기존 자료와 다릅니다."
+        )
+
+    schema = ContradictionSchema.model_validate(contradiction)
+    schema.reference_source_name = source_name
+    schema.display_message = display_message
+    return schema
+
 
 # 모순 목록 조회
 @router.get("", response_model=ContradictionListResponse)
@@ -43,7 +77,7 @@ def get_contradiction_list(
     require_workspace_member(db, workspace_id, current_user_id)
     items = contradiction_crud.list_contradictions(db, workspace_id, status=status_filter)
     return ContradictionListResponse(
-        contradictions=[ContradictionSchema.model_validate(c) for c in items]
+        contradictions=[_to_contradiction_schema(db, c) for c in items]
     )
 
 
@@ -57,7 +91,7 @@ def get_contradiction_api(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     contradiction = _get_contradiction_or_404(db, contradiction_id, workspace_id)
-    return ContradictionSchema.model_validate(contradiction)
+    return _to_contradiction_schema(db, contradiction)
 
 
 # 모순 해결
@@ -108,7 +142,7 @@ def resolve_contradiction_api(
         )
 
     updated = contradiction_crud.get_contradiction(db, contradiction_id)
-    return ContradictionSchema.model_validate(updated)
+    return _to_contradiction_schema(db, updated)
 
 
 # 모순 무시
@@ -129,8 +163,7 @@ def dismiss_contradiction_api(
         )
 
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
-    return ContradictionSchema.model_validate(updated)
-
+    return _to_contradiction_schema(db, updated)
 
 # 변경 요약 초안 조회
 @router.get("/{contradiction_id}/change-summary", response_model=ChangeSummaryDraftSchema)

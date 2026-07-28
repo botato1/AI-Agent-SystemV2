@@ -97,7 +97,6 @@ async def _detect_uploaded_audio_contradictions(
                 category_id=str(category_id),
                 source_type="meeting_segment",
                 statement_text=statement_text,
-                notify_user_id=str(started_by),
                 meeting_segment_id=segment_id,
                 session_meeting_id=str(meeting_id),
             )

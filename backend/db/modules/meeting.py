@@ -27,6 +27,7 @@ class Meeting(Base):
     duration_ms = Column(BigInteger, nullable=True)
     paused_at = Column(DateTime(timezone=True), nullable=True)
     paused_duration_ms = Column(BigInteger, nullable=False, server_default="0")
+    speaker_labels = Column(JSONB, nullable=True)  # {"SPEAKER_00": "지수", ...} 화자 라벨→실명 매핑
     created_at = created_at_col()
     updated_at = updated_at_col()
     deleted_at = Column(DateTime(timezone=True), nullable=True)

@@ -61,6 +61,8 @@ class ContradictionSchema(ORMBaseSchema):
         ...,
         min_length=1,
     )
+    reference_source_name: Optional[str] = None  # 근거 문서명 또는 결정 제목 (프론트 표시용)
+    display_message: Optional[str] = None  # 프론트에 바로 띄울 수 있는 조합 문구
     reference_location: Optional[dict[str, Any]] = None
     reason: Optional[str] = None
 

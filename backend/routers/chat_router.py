@@ -1,5 +1,5 @@
 # backend/routers/chat_router.py
-
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -23,6 +23,44 @@ from backend.services import judgment_service
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/rooms", tags=["Rooms"])
 
+# 같은 room에서 메시지가 빠르게 여러 개 오면 모순감지+판단파이프라인이 동시에
+# DB 커넥션을 여러 개 물어 풀 고갈이 날 수 있다 (meeting 실시간 경로와 동일 이유).
+# room_id 단위로 직렬화해서 방지한다.
+_ROOM_PROCESSING_LOCKS: dict[UUID, asyncio.Lock] = {}
+
+
+def _get_room_processing_lock(room_id: UUID) -> asyncio.Lock:
+    lock = _ROOM_PROCESSING_LOCKS.get(room_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ROOM_PROCESSING_LOCKS[room_id] = lock
+    return lock
+
+
+async def _process_room_message_analysis(
+    room_id: UUID, workspace_id: UUID, category_id: UUID,
+    statement_text: str, message_id: str,
+) -> None:
+    """채팅 메시지 하나의 모순감지+판단파이프라인을 room 단위로 직렬 처리한다."""
+    lock = _get_room_processing_lock(room_id)
+    async with lock:
+        await asyncio.to_thread(
+            run_contradiction_detection,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=message_id,
+        )
+        await asyncio.to_thread(
+            judgment_service.run_judgment_pipeline,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=message_id,
+            session_room_id=str(room_id),
+        )
 
 class RoomCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -156,22 +194,8 @@ def send_room_message(
     statement_text = (request.content or "").strip()
     if statement_text:
         background_tasks.add_task(
-            run_contradiction_detection,
-            workspace_id=str(workspace_id),
-            category_id=str(room.category_id),
-            source_type="room_message",
-            statement_text=statement_text,
-            room_message_id=str(message.id),
-        )
-        background_tasks.add_task(
-            judgment_service.run_judgment_pipeline,
-            workspace_id=str(workspace_id),
-            category_id=str(room.category_id),
-            source_type="room_message",
-            statement_text=statement_text,
-            notify_user_id=current_user_id,
-            room_message_id=str(message.id),
-            session_room_id=str(room_id),
+            _process_room_message_analysis,
+            room_id, workspace_id, room.category_id, statement_text, str(message.id),
         )
 
     return RoomMessageSchema.model_validate(message)

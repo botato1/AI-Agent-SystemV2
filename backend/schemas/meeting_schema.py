@@ -323,3 +323,12 @@ class DecisionResponse(TimestampSchema):
 
 class DecisionListResponse(BaseModel):
     decisions: list[DecisionResponse] = Field(default_factory=list)
+
+class SpeakerLabelMappingRequest(BaseModel):
+    mapping: dict[str, str] = Field(
+        ...,
+        description="원본 화자 라벨(예: SPEAKER_00) → 실명 매핑",
+    )
+
+class MeetingTitleUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
