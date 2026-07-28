@@ -1,4 +1,4 @@
-import { DocumentIcon, SparklesIcon } from "./icons";
+import { DocumentIcon } from "./icons";
 import { DocumentDetail, DocumentFigure } from "../services/document";
 import { cleanExtractedText } from "./DocumentContentBlocks";
 import DocumentOriginalPages from "./DocumentOriginalPages";
@@ -63,8 +63,7 @@ export default function DocumentDetailPanel({ detail, figures, isLoading, t }: D
         </div>
 
         <div className="max-h-48 flex-shrink-0 overflow-y-auto rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-          <p className="mb-2 flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
-            <SparklesIcon size={14} className="text-recall-accent" />
+          <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
             {t.doc_tab_summary}
           </p>
           <p className="whitespace-pre-wrap text-sm leading-relaxed">
