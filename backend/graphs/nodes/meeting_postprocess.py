@@ -200,6 +200,9 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
             # 임베딩 실패는 회의 전체를 미완료로 취급한다 — 검색이 안 되는 회의를
             # completed로 표시하면 나중에 "왜 검색이 안 되지"로 이어지기 때문.
             raise _PostprocessFailure(f"세그먼트 임베딩 실패: {load_result}")
+
+        file_crud.update_analysis_status(db, file_id, "completed")  # 추가 — AI Chat 검색 대상에 포함되려면 필요
+
         segment_chunks = content_chunk_crud.get_chunks_by_file(db, file_id, chunk_type="meeting_segment")
         segment_chunk_ids = [str(c.id) for c in segment_chunks]
 
