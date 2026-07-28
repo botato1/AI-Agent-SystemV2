@@ -200,3 +200,32 @@ def verify_ws_ticket(token: str) -> dict[str, Any]:
         raise JWTError("티켓에 필요한 정보가 없습니다.")
 
     return payload
+
+def create_workspace_invite_token(
+    workspace_id: str,
+    email: str,
+    role: str,
+    invited_by: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=7))
+
+    payload: dict[str, Any] = {
+        "sub": email,
+        "type": "workspace_invite",
+        "workspace_id": workspace_id,
+        "role": role,
+        "invited_by": invited_by,
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def verify_workspace_invite_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "workspace_invite":
+        raise JWTError("워크스페이스 초대 토큰이 아닙니다.")
+
+    return payload
