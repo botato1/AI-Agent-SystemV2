@@ -84,6 +84,11 @@ async def lifespan(app: FastAPI):
     app.state.active_recorders = {}
     app.state.active_participants = {}
 
+    # 통화(오디오 릴레이) 방: {session_id: VoiceRoom} — "각자 PC" 모드에서 ?voice=1로
+    # 접속한 참가자끼리 서로 목소리를 듣게 해줌. 전사용 청킹(2~28초 버퍼링)과 별개로,
+    # 받은 프레임을 즉시 나머지 참가자에게 흘려보내는 경로 (services/audio_relay.py).
+    app.state.voice_rooms = {}
+
     yield  # 서버 동작
 
     logger.info("🛑 서버 종료, 모델 메모리 해제")

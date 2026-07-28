@@ -8,6 +8,7 @@ from ..services.realtime_service import RealtimeSTTSession
 from ..services.speaker_id_service import LiveSpeakerIdentifier
 from ..services.meeting_store import MeetingRecord
 from ..services.refine_service import refine_meeting
+from ..services import audio_relay
 
 router = APIRouter()
 
@@ -91,7 +92,7 @@ async def _finalize_abnormal(
 
 async def _run_session(
     websocket: WebSocket, session, recorder, session_id: str,
-    participant_key: str, active_key: str, mode: str,
+    participant_key: str, active_key: str, mode: str, voice: bool = False,
 ) -> None:
     """
     연결 하나의 수신 루프 본체 — 새로 만든 세션이든, 재연결로 이어받은 세션이든
@@ -102,9 +103,28 @@ async def _run_session(
     # rename API가 진행 중인 회의에도 이름 수정을 전파할 수 있게 레지스트리에 등록.
     websocket.app.state.active_sessions[active_key] = session
 
+    # 통화방 참여는 아래 try 안에서 한다 — 참여 직후의 send_json이 실패하면(접속하자마자
+    # 끊긴 경우 등) 정리 없이 빠져나가 통화방에 유령 참가자가 남기 때문.
+    # 다만 finally가 참조해야 하므로 변수 자체는 try 밖에서 선언한다.
+    room = None
+
     logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
 
     try:
+        # 통화(오디오 릴레이) 참여 — 요청한 연결만. 기존 클라이언트는 바이너리 수신을
+        # 예상하지 않으므로(JSON.parse에서 깨짐) 옵트인이어야 한다.
+        if voice:
+            joined = audio_relay.get_room(websocket.app.state, session_id)
+            my_slot = joined.join(participant_key, websocket)
+            if my_slot is not None:
+                room = joined  # 상한 초과로 슬롯을 못 받으면 전사만 진행하고 음성은 미참여
+                await websocket.send_json({
+                    "session_id": session_id,
+                    "type": "voice_ready",
+                    "slot": my_slot,
+                    "participants": room.size,
+                })
+
         while True:
             message = await websocket.receive()
 
@@ -139,6 +159,12 @@ async def _run_session(
             data = message.get("bytes")
             if not data:
                 continue
+
+            # 통화 릴레이는 전사 경로보다 먼저, 도착 즉시 흘려보낸다.
+            # (전사용 청킹은 발화가 끊길 때까지 2~28초를 모으므로 통화에 쓸 수 없음)
+            if room is not None:
+                await room.broadcast(participant_key, data)
+
             session.push_audio(data)
 
             # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
@@ -163,6 +189,11 @@ async def _run_session(
         # 같은 키로 새 연결이 이미 등록됐을 수 있으므로 내 세션일 때만 제거.
         if websocket.app.state.active_sessions.get(active_key) is session:
             websocket.app.state.active_sessions.pop(active_key, None)
+        if room is not None:
+            # leave()는 같은 키로 새 연결이 들어와 있으면 알아서 건너뛴다
+            # (늦게 끝난 옛 연결이 새 연결을 통화에서 쫓아내지 않도록)
+            room.leave(participant_key, websocket)
+            audio_relay.drop_room_if_empty(websocket.app.state, session_id)
 
     try:
         await websocket.close()
@@ -172,7 +203,8 @@ async def _run_session(
 
 @router.websocket("/ws/stt/{session_id}")
 async def realtime_stt_ws(
-    websocket: WebSocket, session_id: str, attendees: str = None, participant_name: str = None
+    websocket: WebSocket, session_id: str, attendees: str = None,
+    participant_name: str = None, voice: int = 0,
 ):
     """
     실시간 회의용 STT 엔드포인트.
@@ -204,6 +236,12 @@ async def realtime_stt_ws(
 
     ⚠️ 두 모드는 같은 회의 안에서 섞어 쓸 수 없음 — 회의 하나는 처음부터 끝까지
     하나의 모드로 통일해야 함 (참가자마다 다르게 접속하면 서로 다른 회의록이 생김).
+
+    voice=1 (각자 PC 모드 전용): 참가자끼리 서로 목소리를 듣는 통화 기능을 켠다.
+    서버가 받은 오디오 프레임을 나머지 참가자에게 즉시 되돌려보내며, 이때부터
+    이 연결은 바이너리 프레임(= [1바이트 발신자 슬롯][PCM16LE])도 받게 된다.
+    기존 클라이언트가 예상 못 한 바이너리를 받고 깨지지 않도록 옵트인으로 두었다.
+    공용 마이크 모드는 한 공간에 모여 있어 통화가 무의미하므로 무시된다.
     """
     await websocket.accept()
 
@@ -292,4 +330,9 @@ async def realtime_stt_ws(
         )
         mode = ("재연결 — " if is_reconnect else "") + mode_desc
 
-    await _run_session(websocket, session, recorder, session_id, participant_key, active_key, mode)
+    # 통화는 각자 PC 모드에서만 의미가 있다 — 공용 마이크 모드는 참가자가 한 공간에
+    # 모여 있어 서로 목소리를 되돌려주면 하울링만 생긴다.
+    await _run_session(
+        websocket, session, recorder, session_id, participant_key, active_key, mode,
+        voice=bool(voice) and bool(participant_name),
+    )
