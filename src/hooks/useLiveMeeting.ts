@@ -5,6 +5,7 @@ import {
   pauseMeetingApi,
   resumeMeetingApi,
   mapSpeakerNamesApi,
+  renameMeetingApi,
 } from "../services/meeting";
 
 export type LiveMeetingStatus =
@@ -30,6 +31,8 @@ export interface ContradictionAlert {
   reason: string;
   severity: "low" | "medium" | "high";
   confidence_score: number;
+  displayMessage: string | null;
+  referenceSourceName: string | null;
 }
 
 interface CurrentUserInfo {
@@ -241,6 +244,8 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
           reason: data.reason || "",
           severity: data.severity || "low",
           confidence_score: data.confidence_score ?? 0,
+          displayMessage: data.display_message || null,
+          referenceSourceName: data.reference_source_name || null,
         };
         setContradictionAlerts((prev) => [...prev, alert]);
       } else if (data.type === "session_end") {
@@ -370,6 +375,16 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     }
   }
 
+  async function renameMeeting(title: string) {
+    if (!meeting) return;
+    const res = await renameMeetingApi(workspaceId, meeting.id, title);
+    if (res.status === "success" && res.meeting) {
+      setMeeting(res.meeting);
+    } else {
+      alert(`회의 제목 변경 실패: ${res.message}`);
+    }
+  }
+
   async function stop() {
     const ws = wsRef.current;
     if (!ws || (status !== "recording" && status !== "paused")) return;
@@ -426,6 +441,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     stop,
     reset,
     mapSpeakerNames,
+    renameMeeting,
     startedByName: currentUser.name,
   };
 }

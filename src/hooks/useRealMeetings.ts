@@ -11,6 +11,7 @@ import {
   getMeetingDecisionsApi,
   uploadMeetingAudioApi,
   mapSpeakerNamesApi,
+  renameMeetingApi,
 } from "../services/meeting";
 
 const PENDING_STATUSES = new Set(["created", "processing"]);
@@ -104,6 +105,16 @@ export function useRealMeetings(workspaceId: string) {
     }
   }
 
+  async function renameMeeting(id: string, title: string) {
+    const res = await renameMeetingApi(workspaceId, id, title);
+    if (res.status === "success" && res.meeting) {
+      const updated = res.meeting;
+      setMeetings((prev) => prev.map((m) => (m.id === id ? updated : m)));
+    } else {
+      alert(`회의 제목 변경 실패: ${res.message}`);
+    }
+  }
+
   async function removeMeeting(id: string) {
     const res = await deleteMeetingApi(workspaceId, id);
 
@@ -128,6 +139,7 @@ export function useRealMeetings(workspaceId: string) {
     isUploading,
     uploadAudio,
     removeMeeting,
+    renameMeeting,
     mapSpeakerNames,
     reload: loadMeetings,
   };
