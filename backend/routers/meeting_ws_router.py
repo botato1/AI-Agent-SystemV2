@@ -12,12 +12,11 @@ from sqlalchemy.orm import Session
 
 from backend.core.security import verify_ws_ticket
 from backend.core.ws_ticket_store import consume_ticket
-from backend.db.crud import meeting_crud, file_crud, contradiction_crud
+from backend.db.crud import meeting_crud, file_crud, contradiction_crud, notification_crud, workspace_crud
 from backend.db.session import get_db, SessionLocal
 from backend.graphs.contradiction_graph import run_contradiction_detection
-from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 from backend.services.stt_stream_client import SttStreamClient
-from backend.services import judgment_service
+from backend.services import judgment_service, meeting_service
 
 router = APIRouter(tags=["Meetings (Realtime)"])
 
@@ -47,6 +46,24 @@ def _spawn_background_task(coro) -> asyncio.Task:
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task
+
+def _notify_contradiction_detected(workspace_id: uuid.UUID, contradiction_id: str, display_message: str) -> None:
+    """모순 감지 시 워크스페이스 멤버들에게 알림을 남긴다 (알림 설정 on/off 반영)."""
+    db = SessionLocal()
+    try:
+        for member, _user in workspace_crud.list_members(db, workspace_id):
+            if not notification_crud.is_notification_enabled(
+                db, workspace_id, member.user_id, "contradiction_detected",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=workspace_id,
+                type="contradiction_detected", title="모순 감지",
+                message=display_message,
+                ref_type="contradiction", ref_id=uuid.UUID(contradiction_id),
+            )
+    finally:
+        db.close()
 
 async def _detect_and_push_contradiction(
     websocket: WebSocket, send_lock: asyncio.Lock,
@@ -101,6 +118,8 @@ async def _detect_and_push_contradiction(
         display_message = f"'{statement_text}'라고 하셨는데, 기존 자료의 '{excerpt}'와 다릅니다."
     else:
         display_message = f"'{statement_text}'라고 하셨는데, 기존 자료와 다릅니다."
+
+    await asyncio.to_thread(_notify_contradiction_detected, workspace_id, contradiction_id, display_message)
 
     try:
         async with send_lock:
@@ -190,7 +209,7 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     # 요약/결정사항/할 일 생성(LLM 호출 포함)은 오래 걸릴 수 있어 백그라운드로 돌린다.
     # run_meeting_postprocess는 동기 함수라 to_thread로 감싸서 이벤트 루프를 막지 않게 한다.
     _spawn_background_task(asyncio.to_thread(
-        run_meeting_postprocess,
+        meeting_service.run_meeting_postprocess_and_notify,
         meeting_id=str(meeting_id),
         workspace_id=str(meeting.workspace_id),
         category_id=str(meeting.category_id),

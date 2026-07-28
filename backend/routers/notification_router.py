@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import notification_crud
-from backend.schemas.notification_schema import NotificationListResponse, NotificationSchema
+from backend.schemas.notification_schema import (
+    NotificationListResponse, NotificationSchema,
+    NotificationPreferencesSchema, NotificationPreferencesUpdateRequest,
+)
+
+preferences_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Notifications"])
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/notifications", tags=["Notifications"])
 
@@ -59,3 +64,28 @@ def mark_notification_read(
     notification_crud.mark_read(db, notification_id)
     db.refresh(notification)
     return NotificationSchema.model_validate(notification)
+
+@preferences_router.get("/notification-preferences", response_model=NotificationPreferencesSchema)
+def get_notification_preferences_api(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    prefs = notification_crud.get_notification_preferences(db, workspace_id, UUID(current_user_id))
+    return NotificationPreferencesSchema(**prefs)
+
+
+@preferences_router.patch("/notification-preferences", response_model=NotificationPreferencesSchema)
+def update_notification_preferences_api(
+    workspace_id: UUID,
+    request: NotificationPreferencesUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    updates = request.model_dump(exclude_none=True)
+    prefs = notification_crud.update_notification_preferences(
+        db, workspace_id, UUID(current_user_id), updates,
+    )
+    return NotificationPreferencesSchema(**prefs)

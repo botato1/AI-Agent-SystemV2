@@ -26,7 +26,8 @@ class Notification(Base):
     __table_args__ = (
         CheckConstraint(
             "type IN ('contradiction_detected','contradiction_resolved',"
-            "'meeting_summary_ready','file_analysis_completed','file_analysis_failed')",
+            "'meeting_summary_ready','file_analysis_completed','file_analysis_failed',"
+            "'decision_reminder','repeat_discussion','document_recommendation')",
             name="chk_notifications_type",
         ),
         Index(

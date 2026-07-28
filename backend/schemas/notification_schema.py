@@ -66,3 +66,14 @@ class NotificationSchema(ORMBaseSchema):
 
 class NotificationListResponse(BaseModel):
     notifications: list[NotificationSchema] = Field(default_factory=list)
+
+class NotificationPreferencesSchema(BaseModel):
+    new_message: bool = True
+    meeting_summary: bool = True
+    contradiction: bool = True
+
+
+class NotificationPreferencesUpdateRequest(BaseModel):
+    new_message: Optional[bool] = None
+    meeting_summary: Optional[bool] = None
+    contradiction: Optional[bool] = None

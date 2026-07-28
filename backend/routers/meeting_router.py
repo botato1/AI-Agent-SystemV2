@@ -12,7 +12,7 @@ from backend.core.security import create_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud
-from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
+from backend.services import meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.routers import meeting_ws_router
 from backend.schemas.meeting_schema import (
@@ -224,7 +224,7 @@ def end_meeting_api(
 
     # 응답은 바로 내려주고, 요약/결정사항/할 일 생성(LLM 호출 포함)은 백그라운드에서 처리.
     background_tasks.add_task(
-        run_meeting_postprocess,
+        meeting_service.run_meeting_postprocess_and_notify,
         meeting_id=str(meeting_id),
         workspace_id=str(workspace_id),
         category_id=str(meeting.category_id),
