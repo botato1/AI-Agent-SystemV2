@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import contradiction_crud, file_crud
+from backend.db.crud import contradiction_crud, file_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
@@ -66,6 +66,20 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     return schema
 
 
+def _notify_contradiction_resolved(db: Session, workspace_id: uuid.UUID, contradiction) -> None:
+    for member, _user in workspace_crud.list_members(db, workspace_id):
+        if not notification_crud.is_notification_enabled(
+            db, workspace_id, member.user_id, "contradiction_resolved",
+        ):
+            continue
+        notification_crud.create_notification(
+            db, user_id=member.user_id, workspace_id=workspace_id,
+            type="contradiction_resolved", title="모순 해결됨",
+            message=f"'{contradiction.statement_text_snapshot}' 관련 모순이 처리되었습니다.",
+            ref_type="contradiction", ref_id=contradiction.id,
+        )
+
+
 # 모순 목록 조회
 @router.get("", response_model=ContradictionListResponse)
 def get_contradiction_list(
@@ -120,6 +134,8 @@ def resolve_contradiction_api(
         resolution_type=request.resolution_type,
         note=request.note,
     )
+
+    _notify_contradiction_resolved(db, workspace_id, contradiction)
 
     if request.resolution_type == "change_acknowledged":
         context_type = "meeting" if contradiction.source_type == "meeting_segment" else "chat"
