@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from pyannote.audio import Model, Inference
+from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from ..core.config import (
     logger,
@@ -9,7 +10,12 @@ from ..core.config import (
     REALTIME_SAMPLE_RATE,
     SPEAKER_EMBEDDING_MODEL,
     SPEAKER_SIMILARITY_THRESHOLD,
+    MAX_SPEAKERS,
 )
+
+# 화자 판정용 임베딩을 뽑을 때, 이보다 짧은 구간은 임베딩이 불안정해서 쓰지 않는다
+# (너무 짧으면 목소리 특성보다 발음 내용에 휘둘림)
+_MIN_EMBED_SEC = 1.0
 
 
 def load_speaker_embedding_inference() -> Inference:
@@ -73,6 +79,31 @@ class LiveSpeakerIdentifier:
         denom = np.linalg.norm(a) * np.linalg.norm(b) + 1e-8
         return float(np.dot(a, b) / denom)
 
+    @staticmethod
+    def _dominant_speech_region(audio: np.ndarray) -> np.ndarray:
+        """
+        청크에서 '가장 긴 연속 발화 구간'만 잘라서 반환 — 화자 판정 전용 전처리.
+
+        왜 필요한가: 청크(최대 28초)가 화자 전환을 걸치면 두 사람 목소리가 한 청크에
+        들어가는데, 이걸 통째로 임베딩하면 두 목소리가 섞인 벡터가 나와 기존 어느
+        프로필과도 안 맞는다. 그러면 매번 새 화자가 만들어진다 — 실측(2026-07-27
+        2인 회의)에서 유사도가 0.26~0.40으로 떨어지며 SPEAKER_1~4까지 유령 화자가
+        생긴 원인이 이것.
+        가장 긴 발화 구간은 한 사람이 이어 말한 부분일 가능성이 높아 훨씬 깨끗하다.
+
+        발화 구간이 하나뿐이거나(=섞일 일 없음) 가장 긴 구간이 너무 짧으면
+        원본을 그대로 돌려준다 — 잘라내서 얻을 게 없거나 오히려 손해이므로.
+        """
+        spans = get_speech_timestamps(
+            audio, VadOptions(min_silence_duration_ms=300), sampling_rate=REALTIME_SAMPLE_RATE
+        )
+        if len(spans) < 2:
+            return audio
+        longest = max(spans, key=lambda s: s["end"] - s["start"])
+        if (longest["end"] - longest["start"]) / REALTIME_SAMPLE_RATE < _MIN_EMBED_SEC:
+            return audio
+        return audio[longest["start"]:longest["end"]]
+
     def extract_embedding(self, audio: np.ndarray) -> np.ndarray:
         # pyannote Inference는 numpy 배열이 아니라 torch 텐서를 기대함 (내부에서 .to(device) 호출)
         waveform_tensor = torch.from_numpy(audio.reshape(1, -1).astype(np.float32))
@@ -109,7 +140,12 @@ class LiveSpeakerIdentifier:
         청크 오디오를 받아 화자 라벨(사전 등록 이름 또는 "SPEAKER_N")을 즉시 반환.
         내부적으로 프로필을 계속 갱신(이동 평균)해서 화자 목소리 변화에도 서서히 적응.
         """
-        embedding = self.extract_embedding(audio)
+        # 청크 전체가 아니라 가장 긴 발화 구간으로 판정 — 화자 전환이 섞인 청크에서
+        # 유령 화자가 만들어지는 걸 막기 위함 (_dominant_speech_region 참고).
+        # 주의: extract_embedding 자체는 원본 그대로 두어야 한다 — refine_service가
+        # "같은 화자의 여러 발화를 이어붙여" 임베딩할 때 재사용하는데, 거기서는
+        # 오히려 오디오가 많을수록 정확하므로 잘라내면 안 됨.
+        embedding = self.extract_embedding(self._dominant_speech_region(audio))
 
         if not self._profiles:
             # 사전 등록도 없고 첫 화자도 없음 → 무조건 첫 화자로 등록
@@ -133,6 +169,17 @@ class LiveSpeakerIdentifier:
         if best_score >= self.similarity_threshold:
             self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding
             logger.info(f"🗣️ 화자 매칭: {best_label} (유사도 {best_score:.2f})")
+            return best_label
+
+        # 열린 집합이어도 화자 수는 무한정 늘 수 없다. 상한에 닿으면 새로 만들지 않고
+        # 가장 가까운 기존 화자에 배정 — 상한이 없으면 판정이 한 번 흔들릴 때마다
+        # 화자가 계속 늘어나 회의록이 유령 화자로 뒤덮인다(실측에서 SPEAKER_4까지 생김).
+        # 이 경우 프로필은 갱신하지 않는다(확신이 없는 배정이라 지문을 오염시키면 안 됨).
+        if len(self._profiles) >= MAX_SPEAKERS:
+            logger.info(
+                f"🗣️ 화자 매칭(상한 {MAX_SPEAKERS}명 도달, 최근접 배정): "
+                f"{best_label} (유사도 {best_score:.2f})"
+            )
             return best_label
 
         new_label = f"SPEAKER_{self._next_speaker_num}"
