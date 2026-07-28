@@ -5,7 +5,10 @@ import {
   updateMemberRoleApi,
   WorkspaceMemberInfo,
 } from "../services/workspace";
+import { resolveAvatarUrl } from "../services/auth";
+import { hashAvatarColor } from "../data/avatarColors";
 import { TrashIcon } from "./icons";
+import Avatar from "./Avatar";
 
 interface ManageMembersModalProps {
   workspaceId: string;
@@ -142,9 +145,14 @@ export default function ManageMembersModal({
                 >
                   {/* 팀원 정보 영역 */}
                   <div className="flex items-center gap-3 min-w-0 pr-2">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-recall-accent/20 text-recall-accent font-bold text-base">
-                      {displayName.slice(0, 1).toUpperCase()}
-                    </div>
+                    <Avatar
+                      user={{
+                        name: displayName,
+                        avatarColor: hashAvatarColor(targetUserId),
+                        avatarImageUrl: resolveAvatarUrl(m.profile_image_url),
+                      }}
+                      size={36}
+                    />
 
                     <div className="flex flex-col min-w-0">
                       <span className="truncate text-base font-bold text-recall-text leading-tight">

@@ -7,7 +7,8 @@ import {
   CheckIcon,
   DocumentIcon,
   MicIcon,
-  SparklesIcon,
+  ClockIcon,
+  RepeatIcon,
 } from "./icons";
 
 interface NotificationBellProps {
@@ -15,8 +16,8 @@ interface NotificationBellProps {
 }
 
 const TYPE_META: Record<NotificationType, { label: string; icon: typeof BellIcon; className: string }> = {
-  decision_reminder: { label: "결정 리마인더", icon: SparklesIcon, className: "text-recall-accent" },
-  repeat_discussion: { label: "반복 논의", icon: SparklesIcon, className: "text-recall-accent" },
+  decision_reminder: { label: "결정 리마인더", icon: ClockIcon, className: "text-recall-accent" },
+  repeat_discussion: { label: "반복 논의", icon: RepeatIcon, className: "text-recall-accent" },
   document_recommendation: { label: "문서 추천", icon: DocumentIcon, className: "text-recall-textMuted" },
   contradiction_detected: { label: "모순 감지", icon: WarningIcon, className: "text-recall-danger" },
   contradiction_resolved: { label: "모순 해결", icon: CheckIcon, className: "text-emerald-400" },

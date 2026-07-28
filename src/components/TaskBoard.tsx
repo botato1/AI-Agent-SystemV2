@@ -240,7 +240,7 @@ function TaskDetailModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
-          <p className="text-base font-semibold text-recall-text">업무 상세 및 수정</p>
+          <p className="text-base font-semibold text-recall-text">{t.task_detail_title}</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
             <CloseIcon size={16} />
           </button>
@@ -248,7 +248,7 @@ function TaskDetailModal({
 
         <div className="flex flex-col gap-4 max-h-[75vh] overflow-y-auto pr-1">
           <div>
-            <label className="mb-1 block text-sm font-semibold text-recall-textMuted">업무 제목</label>
+            <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_title}</label>
             <input
               value={form.task}
               onChange={(e) => setForm({ ...form, task: e.target.value })}
@@ -257,19 +257,19 @@ function TaskDetailModal({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-semibold text-recall-textMuted">상세 설명</label>
+            <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_description}</label>
             <textarea
               rows={3}
               value={form.description || ""}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="업무 세부 내용이나 메모를 입력하세요."
+              placeholder={t.task_field_description_placeholder}
               className="w-full resize-none rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent leading-relaxed"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">진행 상태</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_status}</label>
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as TaskStatus })}
@@ -282,7 +282,7 @@ function TaskDetailModal({
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">우선순위</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_priority}</label>
               <select
                 value={form.priority}
                 onChange={(e) => setForm({ ...form, priority: e.target.value as TaskPriority })}
@@ -297,7 +297,7 @@ function TaskDetailModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="relative" ref={assigneeRef}>
-              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">담당자</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_assignee}</label>
               <input
                 value={form.assignee || ""}
                 onFocus={() => setIsAssigneeOpen(true)}
@@ -311,7 +311,7 @@ function TaskDetailModal({
                     setIsAssigneeOpen(false);
                   }
                 }}
-                placeholder="담당자 검색 또는 입력"
+                placeholder={t.task_field_assignee_placeholder}
                 className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
               />
 
@@ -335,13 +335,13 @@ function TaskDetailModal({
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">마감일</label>
+              <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_deadline}</label>
               <div
                 onClick={handleOpenDatePicker}
                 className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
               >
                 <span className={form.deadline ? "text-recall-text" : "text-recall-textMuted"}>
-                  {form.deadline || "마감일 선택"}
+                  {form.deadline || t.task_field_deadline_placeholder}
                 </span>
 
                 <CalendarIcon className="text-recall-textMuted flex-shrink-0" size={14} />
@@ -376,14 +376,14 @@ function TaskDetailModal({
               onClick={onClose}
               className="rounded-lg border border-recall-border px-3.5 py-1.5 text-sm text-recall-textMuted hover:bg-white/5 transition"
             >
-              취소
+              {t.task_cancel}
             </button>
             <button
               type="button"
               onClick={handleSave}
               className="rounded-lg bg-recall-accent px-4 py-1.5 text-sm text-white font-medium hover:opacity-90 transition"
             >
-              저장
+              {t.task_save}
             </button>
           </div>
         </div>
@@ -477,7 +477,7 @@ function DraggableCard({
           {overdue && (
             <span className="flex items-center gap-1 rounded-full bg-recall-danger/15 px-2 py-0.5 text-[11px] font-semibold text-recall-danger">
               <WarningIcon size={10} className="flex-shrink-0" />
-              지연
+              {t.task_overdue}
             </span>
           )}
         </div>

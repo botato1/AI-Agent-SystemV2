@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { confirmPasswordResetApi } from "../services/auth";
+import { validatePassword } from "../data/passwordPolicy";
 
 interface PasswordResetConfirmViewProps {
   resetToken: string; // URL 쿼리 파라미터 등에서 추출한 토큰
@@ -22,6 +23,12 @@ export default function PasswordResetConfirmView({
 
     if (!newPassword) {
       setError("새 비밀번호를 입력해 주세요.");
+      return;
+    }
+
+    const policyError = validatePassword(newPassword);
+    if (policyError) {
+      setError(policyError);
       return;
     }
 
@@ -64,6 +71,9 @@ export default function PasswordResetConfirmView({
               placeholder="새 비밀번호 입력"
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:border-recall-accent focus:outline-none"
             />
+            <p className="mt-1 text-xs text-recall-textMuted">
+              8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합
+            </p>
           </div>
 
           <div>

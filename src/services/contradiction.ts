@@ -29,6 +29,10 @@ export interface Contradiction {
   reference_code_fact_id?: string | null;
   statement_text_snapshot: string;
   reference_text_snapshot: string;
+  // 화면에 바로 띄울 수 있는 "기존 자료와 다르다" 비교 문구. 없으면(예전 데이터) statement/reference
+  // 스냅샷을 조합해서 프론트에서 직접 구성한다.
+  display_message?: string | null;
+  reference_source_name?: string | null;
   reference_location?: ReferenceLocation | null;
   reason?: string | null;
   confidence_score: number;
