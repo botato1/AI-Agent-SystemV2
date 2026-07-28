@@ -37,7 +37,7 @@ def _get_workspace_file_or_404(db: Session, file_id: UUID, workspace_id: UUID):
 @router.get("/graph", response_model=DocumentGraphResponse)
 def get_document_graph_api(
     workspace_id: UUID,
-    min_score: float = Query(default=0.5, ge=0, le=1),
+    min_score: float = Query(default=0.6, ge=0, le=1),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
