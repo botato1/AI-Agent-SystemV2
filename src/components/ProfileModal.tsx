@@ -5,6 +5,7 @@ import { AVATAR_COLORS } from "../data/avatarColors";
 import { PencilIcon } from "./icons";
 import { updateProfileApi } from "../services/auth";
 import AvatarCropModal from "./AvatarCropModal";
+import { validatePassword } from "../data/passwordPolicy";
 
 interface ProfileModalProps {
   user: User;
@@ -96,6 +97,11 @@ export default function ProfileModal({
       }
       if (currentPassword === newPassword) {
         setError("새 비밀번호는 현재 비밀번호와 다르게 설정해 주세요.");
+        return;
+      }
+      const policyError = validatePassword(newPassword);
+      if (policyError) {
+        setError(policyError);
         return;
       }
     }
@@ -258,7 +264,7 @@ export default function ProfileModal({
                   />
                   <div className="mt-1 flex items-center gap-1 text-xs text-recall-textMuted">
                     <InfoIcon />
-                    <span>8자 이상, 영문·숫자 포함</span>
+                    <span>8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합</span>
                   </div>
                 </div>
 

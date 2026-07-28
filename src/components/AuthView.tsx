@@ -3,6 +3,7 @@ import { User } from "../types";
 import { AVATAR_COLORS, randomAvatarColor, hashAvatarColor, loadAvatarColor, saveAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
 import { PencilIcon } from "./icons";
+import { validatePassword } from "../data/passwordPolicy";
 import {
   checkEmail,
   checkUserId,
@@ -190,6 +191,11 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
     }
     if (password !== confirmPassword) {
       setError("비밀번호가 일치하지 않아요.");
+      return;
+    }
+    const policyError = validatePassword(password);
+    if (policyError) {
+      setError(policyError);
       return;
     }
 
@@ -453,6 +459,11 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
               onKeyDown={(e) => e.key === "Enter" && mode === "login" && handleLogIn()}
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
+            {mode === "signup" && (
+              <p className="mt-1 text-xs text-recall-textMuted">
+                8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합
+              </p>
+            )}
             {mode === "login" && (
               <button
                 type="button"
