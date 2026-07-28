@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 from sqlalchemy.orm import Session
 
-from backend.db.crud import file_crud, meeting_crud
+from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
@@ -268,3 +268,29 @@ def save_summary_as_document(
         db.rollback()
         print(f"[meeting_service] 요약 문서 저장 실패 (meeting_id={meeting_id}): {repr(exc)}")
         return None
+    
+def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, category_id: str) -> None:
+    """run_meeting_postprocess 실행 후 완료되면 워크스페이스 멤버에게 알림."""
+    result = run_meeting_postprocess(
+        meeting_id=meeting_id, workspace_id=workspace_id, category_id=category_id,
+    )
+    if result.get("summary_generation_status") != "completed":
+        return
+
+    db = SessionLocal()
+    try:
+        meeting = meeting_crud.get_meeting(db, uuid.UUID(meeting_id))
+        title = meeting.title if meeting else "회의"
+        for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
+            if not notification_crud.is_notification_enabled(
+                db, uuid.UUID(workspace_id), member.user_id, "meeting_summary_ready",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=uuid.UUID(workspace_id),
+                type="meeting_summary_ready", title="회의 요약 완료",
+                message=f"'{title}' 회의 요약이 준비됐습니다.",
+                ref_type="meeting", ref_id=uuid.UUID(meeting_id),
+            )
+    finally:
+        db.close()
