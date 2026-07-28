@@ -20,6 +20,11 @@ from backend.modules.rag import chroma_client
 
 DECISION_MATCH_THRESHOLD = 0.75  # TBD - 실험 후 조정 (설계 문서 5장 열린 질문과 동일 축)
 
+# LLM이 status를 스펙대로 못 채우는 경우(누락/오타/대소문자 다름 등)를 대비한 화이트리스트.
+# 여기 없는 값은 "confirmed"로 잘못 간주되어 기존 active decision을 의도치 않게
+# superseded시킬 위험이 있으므로, 아예 이 topic 전체를 보수적으로 건너뛴다.
+_VALID_TOPIC_STATUSES = {"confirmed", "reopened_no_conclusion", "reconfirmed"}
+
 COMPARE_PROMPT_TEMPLATE = """아래는 같은 주제에 대한 기존 결정과 새로 논의된 내용이다.
 두 값이 실질적으로 같은 내용인지, 다른 내용인지만 판단하라.
 다른 설명 없이 "SAME" 또는 "DIFFERENT" 중 하나만 출력하라.
@@ -87,6 +92,10 @@ def process_topics(
         status = topic.get("status")
         topic_text = topic.get("decision_text", "") or topic.get("title", "")
         if not topic_text:
+            continue
+
+        if status not in _VALID_TOPIC_STATUSES:
+            print(f"[decision_transition] 알 수 없는 topic status, 보수적으로 스킵: {status!r} (topic={topic_text!r})")
             continue
 
         existing = _find_existing_active_decision(db, workspace_id, category_id, topic_text)
