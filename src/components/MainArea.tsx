@@ -7,7 +7,6 @@ import {
   MicIcon,
   PlusIcon,
   CloseIcon,
-  SparklesIcon,
   UploadIcon,
   TrashIcon,
   LinkIcon,
@@ -21,14 +20,17 @@ import { useRoomFiles } from "../hooks/useRoomFiles";
 import { useContradictions } from "../hooks/useContradictions";
 import { RoomFile } from "../services/roomFile";
 import { Contradiction, ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
+import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
+import ContradictionMessage from "./ContradictionMessage";
+import ChangeSummaryModal from "./ChangeSummaryModal";
 
-function severityBadge(severity: ContradictionSeverity) {
+function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
-    high: { label: "높음", className: "bg-recall-danger/15 text-recall-danger" },
-    medium: { label: "중간", className: "bg-amber-500/15 text-amber-400" },
-    low: { label: "낮음", className: "bg-recall-textMuted/15 text-recall-textMuted" },
+    high: { label: t.priority_high, className: "bg-recall-danger/15 text-recall-danger" },
+    medium: { label: t.priority_medium, className: "bg-amber-500/15 text-amber-400" },
+    low: { label: t.priority_low, className: "bg-recall-textMuted/15 text-recall-textMuted" },
   } as const;
   const { label, className } = map[severity];
   return <span className={`flex-shrink-0 rounded-full px-1.5 py-0.5 text-[11px] ${className}`}>{label}</span>;
@@ -248,13 +250,25 @@ function ContradictionPanel({
   contradictions,
   onResolve,
   onDismiss,
+  t,
 }: {
   contradictions: Contradiction[];
   onResolve: (id: string, resolutionType: ContradictionResolutionType) => void;
   onDismiss: (id: string) => void;
+  t: any;
 }) {
   const [isOpen, setIsOpen] = useState(true);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const prevCountRef = useRef(contradictions.length);
+
+  function toggleExpanded(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // 닫혀 있는 동안 새 모순이 감지되면 자동으로 펼침
   useEffect(() => {
@@ -299,41 +313,47 @@ function ContradictionPanel({
         </button>
         <p className="flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
           <WarningIcon size={13} className="text-recall-danger" />
-          모순 감지
+          {t.contradiction_title}
         </p>
       </div>
 
       <div className="flex-1 space-y-2 overflow-y-auto">
         {contradictions.length === 0 ? (
-          <p className="text-sm text-recall-textMuted">감지된 모순이 없습니다.</p>
+          <p className="text-sm text-recall-textMuted">{t.contradiction_none}</p>
         ) : (
-          contradictions.map((c) => (
-            <div key={c.id} className="rounded-lg border border-recall-border p-2.5">
-              <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity)}</div>
-              <p className="mb-1 line-clamp-2 text-sm text-recall-text">{c.statement_text_snapshot}</p>
-              <p className="mb-2 line-clamp-1 text-xs text-recall-textMuted">기준: {c.reference_text_snapshot}</p>
-              <div className="flex gap-1">
+          contradictions.map((c) => {
+            const isExpanded = expandedIds.has(c.id);
+            return (
+            <div
+              key={c.id}
+              onClick={() => toggleExpanded(c.id)}
+              className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
+            >
+              <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity, t)}</div>
+              <ContradictionMessage contradiction={c} expanded={isExpanded} t={t} />
+              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                 <button
                   onClick={() => onDismiss(c.id)}
                   className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
                 >
-                  무시
+                  {t.contradiction_dismiss}
                 </button>
                 <button
                   onClick={() => onResolve(c.id, "keep_reference")}
                   className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
                 >
-                  유지
+                  {t.contradiction_keep}
                 </button>
                 <button
                   onClick={() => onResolve(c.id, "change_acknowledged")}
                   className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
                 >
-                  반영
+                  {t.contradiction_apply}
                 </button>
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -452,7 +472,6 @@ function MessageTab({
                 key={activity.name}
                 className="flex items-start gap-1.5 rounded-lg border border-recall-border px-3 py-2"
               >
-                <SparklesIcon size={13} className="mt-0.5 flex-shrink-0 text-recall-accent" />
                 <p className="text-base text-recall-text">{activity.preview}</p>
               </div>
             ) : (
@@ -539,14 +558,21 @@ function MessageTab({
         contradictions={contradictions}
         onResolve={onResolveContradiction}
         onDismiss={onDismissContradiction}
+        t={t}
       />
     </div>
   );
 }
 
 // 문서보관함 탭
+function docExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toUpperCase() : "";
+}
+
 function DocsTab({
   docs,
+  activeDocId,
   onUploadFiles,
   onRemoveDoc,
   onLinkExisting,
@@ -554,6 +580,7 @@ function DocsTab({
   t,
 }: {
   docs: DocItem[];
+  activeDocId: string | null;
   onUploadFiles: (fileList: FileList | null, kind: "file" | "voice") => void;
   onRemoveDoc: (id: string) => void;
   onLinkExisting: () => void;
@@ -603,52 +630,89 @@ function DocsTab({
         }}
       />
 
-      <div className="mb-3 flex gap-2">
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-recall-border px-3 py-6 text-center hover:bg-white/5"
-        >
-          <p className="text-base text-recall-text">{t.docs_tab_msg}</p>
-          <p className="mt-1 text-sm text-recall-textMuted">{t.docs_tab_sub}</p>
-        </button>
-        <button
-          onClick={onLinkExisting}
-          className="flex flex-shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-recall-border px-4 py-6 text-center hover:bg-white/5"
-        >
-          <LinkIcon size={16} className="text-recall-textMuted" />
-          <p className="text-sm text-recall-textMuted">기존 문서 연결</p>
-        </button>
-      </div>
-
-      <div className="space-y-2">
-        {docs.map((doc) => (
-          <div
-            key={doc.id}
-            onClick={() => doc.kind === "file" && onOpenPreview(doc.id, doc.name)}
-            className={`group flex items-center justify-between rounded-lg border border-recall-border px-3 py-2 text-base ${
-              doc.kind === "file" ? "cursor-pointer hover:border-recall-accent/50" : ""
-            }`}
+      {docs.length === 0 ? (
+        <div className="mb-3 flex gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-recall-border px-3 py-6 text-center hover:bg-white/5"
           >
-            <span className="flex min-w-0 items-center gap-2 text-recall-text">
-              <span className="flex-shrink-0 text-recall-textMuted">
-                {doc.kind === "voice" ? <MicIcon size={15} /> : <DocumentIcon size={15} />}
-              </span>
-              <span className="truncate">{doc.name}</span>
-            </span>
-            <span className="flex flex-shrink-0 items-center gap-2 text-sm text-recall-textMuted">
-              {doc.statusLabel ?? formatFileSize(doc.size)} · {doc.date}
-              <span
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemoveDoc(doc.id);
-                }}
-                className="hidden hover:text-recall-danger group-hover:inline"
-              >
-                <CloseIcon size={13} />
-              </span>
-            </span>
-          </div>
-        ))}
+            <p className="text-base text-recall-text">{t.docs_tab_msg}</p>
+            <p className="mt-1 text-sm text-recall-textMuted">{t.docs_tab_sub}</p>
+          </button>
+          <button
+            onClick={onLinkExisting}
+            className="flex flex-shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-recall-border px-4 py-6 text-center hover:bg-white/5"
+          >
+            <LinkIcon size={16} className="text-recall-textMuted" />
+            <p className="text-sm text-recall-textMuted">기존 문서 연결</p>
+          </button>
+        </div>
+      ) : (
+        <div className="mb-3 flex gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 rounded-full border border-recall-border px-3 py-1.5 text-sm text-recall-text hover:bg-white/5"
+          >
+            <UploadIcon size={13} />
+            {t.docs_tab_msg}
+          </button>
+          <button
+            onClick={onLinkExisting}
+            className="flex items-center gap-1.5 rounded-full border border-recall-border px-3 py-1.5 text-sm text-recall-textMuted hover:bg-white/5"
+          >
+            <LinkIcon size={13} />
+            기존 문서 연결
+          </button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        {docs.map((doc) => {
+          const isActive = doc.id === activeDocId;
+          return (
+            <div
+              key={doc.id}
+              onClick={() => doc.kind === "file" && onOpenPreview(doc.id, doc.name)}
+              className={`group relative flex flex-col gap-2 rounded-lg border px-3 py-2.5 text-base ${
+                doc.kind === "file" ? "cursor-pointer" : ""
+              } ${
+                isActive
+                  ? "border-recall-accent bg-recall-accent/10"
+                  : "border-recall-border hover:border-recall-accent/50"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-1.5">
+                <span
+                  className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
+                    isActive ? "bg-recall-accent/20 text-recall-accent" : "bg-recall-bgMain text-recall-textMuted"
+                  }`}
+                >
+                  {doc.kind === "voice" ? <MicIcon size={14} /> : <DocumentIcon size={14} />}
+                </span>
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveDoc(doc.id);
+                  }}
+                  className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline"
+                >
+                  <CloseIcon size={13} />
+                </span>
+              </div>
+              <p className="line-clamp-2 text-sm font-medium leading-snug text-recall-text">{doc.name}</p>
+              <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-recall-textMuted">
+                {doc.kind === "file" && docExtension(doc.name) && (
+                  <span className="rounded border border-recall-border px-1 py-0.5 font-medium">
+                    {docExtension(doc.name)}
+                  </span>
+                )}
+                <span>{doc.statusLabel ?? formatFileSize(doc.size)}</span>
+                <span className="opacity-50">·</span>
+                <span>{doc.date}</span>
+              </p>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -682,9 +746,6 @@ function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: st
           <p className="text-base text-recall-textMuted">불러오는 중...</p>
         ) : messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-recall-accent/15">
-              <SparklesIcon size={18} className="text-recall-accent" />
-            </div>
             <p className="text-base text-recall-textMuted">{t.ai_chat_welcome}</p>
           </div>
         ) : (
@@ -693,11 +754,6 @@ function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: st
               key={m.id}
               className={`flex items-end gap-2 ${m.role === "assistant" ? "" : "flex-row-reverse"}`}
             >
-              {m.role === "assistant" && (
-                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent/15">
-                  <SparklesIcon size={13} className="text-recall-accent" />
-                </div>
-              )}
               <div className={`flex max-w-[75%] flex-col gap-1 ${m.role === "assistant" ? "items-start" : "items-end"}`}>
                 <div
                   className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-base leading-relaxed shadow-sm ${
@@ -719,9 +775,6 @@ function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: st
         )}
         {isSending && (
           <div className="flex items-end gap-2">
-            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent/15">
-              <SparklesIcon size={13} className="text-recall-accent" />
-            </div>
             <div className="rounded-2xl rounded-bl-md bg-recall-bgSoft px-3.5 py-2.5 shadow-sm">
               <ThinkingDots />
             </div>
@@ -760,7 +813,7 @@ export default function MainArea({
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
 
-  const { chatMessages, docs, sendChatMessage, deleteMessage, addDocFiles, removeDoc } = useChannelRuntime(
+  const { chatMessages, sendChatMessage, deleteMessage } = useChannelRuntime(
     workspaceId,
     channel.id,
     currentUser,
@@ -770,28 +823,42 @@ export default function MainArea({
   const roomFiles = useRoomFiles(workspaceId, channel.id);
 
   // 이 채팅방 메시지에서 감지된 모순만 필터링 (회의 발언 쪽 모순은 회의 화면에서 따로 보여줌)
-  const { contradictions: workspaceContradictions, resolve: resolveContradiction, dismiss: dismissContradiction } =
-    useContradictions(workspaceId);
+  const {
+    contradictions: workspaceContradictions,
+    resolve: resolveContradiction,
+    dismiss: dismissContradiction,
+    pendingSummaryFor,
+    changeSummary,
+    isChangeSummaryLoading,
+    closeChangeSummary,
+  } = useContradictions(workspaceId);
   const roomContradictions = workspaceContradictions.filter(
     (c) => c.source_type === "room_message" && c.room_message_id && chatMessages.some((m) => m.id === c.room_message_id)
   );
 
-  const mergedDocs: DocItem[] = [
-    ...roomFiles.files.map((f) => ({
-      id: f.id,
-      name: f.original_filename,
-      size: 0,
-      statusLabel: analysisStatusLabel(f.analysis_status),
-      date: formatDocDate(f.created_at),
-      kind: "file" as const,
-    })),
-    ...docs.filter((d) => d.kind === "voice"),
-  ];
+  const mergedDocs: DocItem[] = roomFiles.files.map((f) => ({
+    id: f.id,
+    name: f.original_filename,
+    size: 0,
+    statusLabel: analysisStatusLabel(f.analysis_status),
+    date: formatDocDate(f.created_at),
+    kind: "file" as const,
+  }));
 
-  // 채팅창 "+"로 문서를 올리면 실제로 업로드하고(room_id로 자동 연결), 성공하면 공유 메시지를 남김
+  // 채팅창 "+"로 문서를 올리면 실제로 업로드하고(room_id로 자동 연결), 성공하면 공유 메시지를 남김.
+  // 음성은 이 채팅방에 연결된 진짜 회의(Meeting)로 업로드해서 STT/요약/모순감지까지 실제로 돌게 한다
+  // (문서보관함이 아니라 사이드바 "음성 회의" 목록에 나타남).
   async function handleUploadFromChat(files: File[], kind: "file" | "voice") {
     if (kind === "voice") {
-      addDocFiles(files, "voice", true);
+      for (const file of files) {
+        const title = file.name.replace(/\.[^./]+$/, "") || file.name;
+        const res = await uploadMeetingAudioApi(workspaceId, file, title, channel.id);
+        if (res.status === "success") {
+          sendChatMessage(`음성 파일을 공유했습니다: ${file.name}`);
+        } else {
+          alert(res.message);
+        }
+      }
       return;
     }
     for (const file of files) {
@@ -809,11 +876,7 @@ export default function MainArea({
   }
 
   function handleRemoveDoc(id: string) {
-    if (roomFiles.files.some((f) => f.id === id)) {
-      roomFiles.removeFile(id);
-    } else {
-      removeDoc(id);
-    }
+    roomFiles.removeFile(id);
   }
 
   const [showLinkModal, setShowLinkModal] = useState(false);
@@ -837,14 +900,11 @@ export default function MainArea({
               const isRecording = name === activeRecorderName;
               return (
                 <div key={id} title={isRecording ? `${name} · ${t.sidebar_recording}` : name} className="relative">
-                  <div
-                    className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-semibold text-white ${
-                      isRecording ? "border-recall-danger" : "border-recall-bgMain"
-                    }`}
-                    style={{ backgroundColor: hashAvatarColor(id) }}
-                  >
-                    {name.slice(0, 1).toUpperCase()}
-                  </div>
+                  <Avatar
+                    user={{ name, avatarColor: hashAvatarColor(id), avatarImageUrl: memberAvatarById[id] ?? null }}
+                    size={24}
+                    className={`border-2 ${isRecording ? "border-recall-danger" : "border-recall-bgMain"}`}
+                  />
                   {isRecording && (
                     <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-recall-danger text-white">
                       <MicIcon size={8} />
@@ -893,6 +953,7 @@ export default function MainArea({
       {activeTab === "docs" && (
         <DocsTab
           docs={mergedDocs}
+          activeDocId={previewDoc?.id ?? null}
           onUploadFiles={(fileList) => handleUploadFromDocsTab(fileList)}
           onRemoveDoc={handleRemoveDoc}
           onLinkExisting={() => setShowLinkModal(true)}
@@ -917,6 +978,16 @@ export default function MainArea({
           documentId={previewDoc.id}
           documentName={previewDoc.name}
           onClose={() => setPreviewDoc(null)}
+        />
+      )}
+
+      {pendingSummaryFor && (
+        <ChangeSummaryModal
+          contradiction={pendingSummaryFor}
+          changeSummary={changeSummary}
+          isLoading={isChangeSummaryLoading}
+          onClose={closeChangeSummary}
+          t={t}
         />
       )}
     </div>

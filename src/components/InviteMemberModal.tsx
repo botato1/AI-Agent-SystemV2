@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { addWorkspaceMemberApi } from "../services/workspace";
+import { inviteWorkspaceMemberApi } from "../services/workspace";
 
 interface InviteMemberModalProps {
   workspaceId: string;
@@ -26,16 +26,20 @@ export default function InviteMemberModal({
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    const res = await addWorkspaceMemberApi(workspaceId, email, role);
+    const res = await inviteWorkspaceMemberApi(workspaceId, email, role);
 
     setIsLoading(false);
 
     if (res.status === "success") {
-      setSuccessMessage(`${res.member?.display_name || email} 님을 멤버로 초대했습니다!`);
+      setSuccessMessage(
+        res.result === "invited"
+          ? `${res.email || email} 로 초대 메일을 보냈습니다! (7일간 유효)`
+          : `${res.member?.display_name || email} 님을 멤버로 추가했습니다!`
+      );
       setEmail("");
       setTimeout(() => {
         onClose();
-      }, 1200);
+      }, 1600);
     } else {
       setErrorMessage(res.message);
     }

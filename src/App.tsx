@@ -8,6 +8,7 @@ import GraphView from "./components/GraphView";
 import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
+import PasswordResetConfirmView from "./components/PasswordResetConfirmView";
 
 import { Channel, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
@@ -16,7 +17,14 @@ import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
 import { useRealTasks } from "./hooks/useRealTasks";
 import { Language, translations } from "./data/translations";
 import { hashAvatarColor, loadAvatarColor, saveAvatarColor } from "./data/avatarColors";
-import { getProfileApi, logoutApi, uploadProfileImageApi, resolveAvatarUrl } from "./services/auth";
+import {
+  getProfileApi,
+  logoutApi,
+  uploadProfileImageApi,
+  resolveAvatarUrl,
+  deleteAccountApi,
+  DeleteAccountResponse,
+} from "./services/auth";
 import {
   createWorkspaceApi,
   getWorkspaceListApi,
@@ -53,6 +61,12 @@ export default function App() {
   const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+
+  // 비밀번호 재설정 메일 링크(?token=...)로 들어온 경우, 로그인 여부와 무관하게
+  // 새 비밀번호 설정 화면부터 보여준다.
+  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(() => {
+    return new URLSearchParams(window.location.search).get("token");
+  });
 
   // 💡 워크스페이스 목록 상태 (목업 중복 방지를 위해 빈 배열로 시작)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -225,6 +239,21 @@ export default function App() {
     setMemberNameById({});
   };
 
+  // 회원 탈퇴 (성공 시에만 로그아웃과 동일하게 상태 초기화)
+  const handleDeleteAccount = async (password: string): Promise<DeleteAccountResponse> => {
+    const res = await deleteAccountApi(password);
+    if (res.status === "success") {
+      localStorage.removeItem("last_workspace_id");
+      setWorkspaces([]);
+      setCurrentUser(null);
+      setCurrentWorkspaceId("");
+      setSelection({ type: "placeholder", key: "dashboard" });
+      setChannelsByWorkspace({});
+      setMemberNameById({});
+    }
+    return res;
+  };
+
   function handleChangeAvatarColor(color: string) {
     setCurrentUser((prev) => {
       if (!prev) return prev;
@@ -240,9 +269,14 @@ export default function App() {
 
     const res = await uploadProfileImageApi(file);
     if (res.status === "success" && res.user) {
-      setCurrentUser((prev) =>
-        prev ? { ...prev, avatarImageUrl: resolveAvatarUrl(res.user!.profile_image_url) } : prev
-      );
+      const resolvedUrl = resolveAvatarUrl(res.user.profile_image_url);
+      setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: resolvedUrl } : prev));
+      // 워크스페이스 멤버 목록에서 가져온 아바타 캐시(memberAvatarById)에도 반영해야
+      // 채팅방 참가자 목록 등 다른 화면에서 바로 새 사진이 보인다 (안 그러면 워크스페이스를
+      // 다시 선택하거나 새로고침해야만 반영됨)
+      if (currentUser) {
+        setMemberAvatarById((prev) => ({ ...prev, [currentUser.id]: resolvedUrl }));
+      }
     } else {
       alert(`프로필 이미지 변경 실패: ${res.message}`);
     }
@@ -380,6 +414,19 @@ export default function App() {
     }
   }
 
+  if (passwordResetToken) {
+    return (
+      <PasswordResetConfirmView
+        resetToken={passwordResetToken}
+        onSuccess={() => {
+          // 링크의 토큰을 주소창에서 지우고 로그인 화면으로 돌아간다
+          window.history.replaceState(null, "", window.location.pathname);
+          setPasswordResetToken(null);
+        }}
+      />
+    );
+  }
+
   if (isAuthChecking) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
@@ -455,6 +502,8 @@ export default function App() {
           onResume={liveMeeting.resume}
           onStop={liveMeeting.stop}
           onReset={liveMeeting.reset}
+          onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
+          onRenameLive={liveMeeting.renameMeeting}
           t={t}
         />
       ) : selection.key === "dashboard" ? (
@@ -507,6 +556,7 @@ export default function App() {
           onChangeLang={setLang}
           t={t}
           onLogout={handleLogOut}
+          onDeleteAccount={handleDeleteAccount}
         />
       )}
     </div>

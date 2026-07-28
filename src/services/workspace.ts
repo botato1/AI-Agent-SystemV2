@@ -54,9 +54,13 @@ export interface GetWorkspaceMembersResponse {
   error: string | null;
 }
 
-export interface AddWorkspaceMemberResponse {
+// result: "added"면 이미 가입된 사용자가 즉시 멤버로 추가된 것(member에 정보 있음),
+// "invited"면 미가입 이메일로 초대 메일이 발송된 것(회원가입 링크, 7일 유효, member는 없음)
+export interface InviteWorkspaceMemberResponse {
   status: "success" | "error";
+  result: "added" | "invited" | null;
   member: WorkspaceMemberInfo | null;
+  email: string | null;
   message: string;
   error: string | null;
 }
@@ -386,20 +390,25 @@ export async function getWorkspaceMembersApi(
 }
 
 /**
- * 6. 워크스페이스 팀원 초대 API (POST /api/workspaces/{workspace_id}/members)
+ * 6. 워크스페이스 팀원 초대 API (POST /api/workspaces/{workspace_id}/members/invite)
+ *
+ * owner만 호출 가능. 이미 가입된 사용자면 즉시 추가되고(result: "added"), 미가입
+ * 이메일이면 회원가입 링크가 담긴 초대 메일이 발송된다(result: "invited", 7일 유효).
  */
-export async function addWorkspaceMemberApi(
+export async function inviteWorkspaceMemberApi(
   workspaceId: string,
   email: string,
   role: "owner" | "member" = "member"
-): Promise<AddWorkspaceMemberResponse> {
+): Promise<InviteWorkspaceMemberResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
 
   if (!token) {
     return {
       status: "error",
+      result: null,
       member: null,
+      email: null,
       message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
       error: "UNAUTHORIZED",
     };
@@ -407,7 +416,7 @@ export async function addWorkspaceMemberApi(
 
   try {
     const response = await authFetch(
-      `${API_BASE_URL}/api/workspaces/${workspaceId}/members`,
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/members/invite`,
       {
         method: "POST",
         headers: {
@@ -422,35 +431,45 @@ export async function addWorkspaceMemberApi(
     if (!response.ok || data.status === "error") {
       let errorMsg = data.message || "팀원 초대에 실패했습니다.";
 
-      if (data.error === "already_member" || response.status === 409) {
-        errorMsg = "이미 워크스페이스에 참여 중인 사용자입니다.";
+      if (response.status === 409) {
+        errorMsg = "이미 워크스페이스에 속한 사용자입니다.";
       } else if (response.status === 401) {
         errorMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
       } else if (response.status === 403) {
         errorMsg = "팀원 초대 권한이 없습니다. (Owner만 가능)";
-      } else if (data.error === "user_not_found" || response.status === 404) {
-        errorMsg = "해당 이메일로 가입된 사용자를 찾을 수 없습니다.";
+      } else if (response.status === 404) {
+        errorMsg = "존재하지 않는 워크스페이스입니다.";
+      } else if (response.status === 422) {
+        errorMsg = "이메일 형식을 확인해 주세요.";
       }
 
       return {
         status: "error",
+        result: null,
         member: null,
+        email: null,
         message: errorMsg,
         error: data.error || `HTTP_${response.status}`,
       };
     }
 
+    const result: "added" | "invited" = data.status === "invited" ? "invited" : "added";
+
     return {
       status: "success",
-      member: data.member || data,
-      message: data.message || "팀원이 추가되었습니다.",
+      result,
+      member: data.member ?? null,
+      email: data.email ?? null,
+      message: result === "invited" ? "초대 메일을 발송했습니다." : "팀원이 추가되었습니다.",
       error: null,
     };
   } catch (error) {
-    console.error("addWorkspaceMemberApi error:", error);
+    console.error("inviteWorkspaceMemberApi error:", error);
     return {
       status: "error",
+      result: null,
       member: null,
+      email: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

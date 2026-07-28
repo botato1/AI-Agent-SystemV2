@@ -18,6 +18,7 @@ import httpx
 from backend.db.crud import content_chunk_crud, file_crud, meeting_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.meeting_postprocess_state import MeetingPostprocessState
+from backend.modules.post_meeting import decision_transition, indexer
 from backend.modules.rag.document_loader import load_document
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -44,11 +45,18 @@ _EXTRACT_PROMPT = """당신은 회의에서 결정사항과 할 일을 추출하
 {transcript}
 
 "~로 확정하자/~로 가자/~는 OO가 담당하자" 같은 표현을 결정사항으로, 담당자가 명시된 작업을 할 일로 추출하세요.
+
+결정사항마다 status를 아래 세 값 중 하나로 분류하세요 (과거 결정 이력과 비교하는 게 아니라,
+이번 회의 전문 안에서 그 논의가 어떻게 마무리됐는지로 판단):
+- "confirmed": 새 값/방침이 이번 회의에서 확정됨 (기존 결정을 뒤집는 경우 포함)
+- "reopened_no_conclusion": 다시 논의했지만 결론 없이 끝남 (다음에 다시 얘기하기로 함 등)
+- "reconfirmed": 기존에 이미 정해진 내용을 그대로 재확인만 함 (새로운 내용 없음)
+
 반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 덧붙이지 마세요.
 
 {{
   "decisions": [
-    {{"title": "짧은 제목", "decision_text": "결정 내용", "reason": "결정 이유(없으면 빈 문자열)"}}
+    {{"title": "짧은 제목", "decision_text": "결정 내용", "reason": "결정 이유(없으면 빈 문자열)", "status": "confirmed"}}
   ],
   "tasks": [
     {{"title": "할 일 내용", "assignee_label": "담당자 이름(없으면 빈 문자열)"}}
@@ -210,23 +218,25 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         # 4. 결정사항 / 할 일 추출 및 저장
         extraction = _extract_decisions_and_tasks(full_transcript)
 
-        decision_ids: list[str] = []
-        for d in extraction["decisions"]:
-            title = str(d.get("title") or "").strip()
-            decision_text = str(d.get("decision_text") or "").strip()
-            if not title or not decision_text:
-                continue
-            row = meeting_crud.create_decision(
-                db,
-                workspace_id=meeting.workspace_id,
-                meeting_id=meeting_id,
-                title=title,
-                decision_text=decision_text,
-                decided_at=datetime.now(timezone.utc),
-                reason=str(d.get("reason") or "") or None,
-                status="active",
-            )
-            decision_ids.append(str(row.id))
+        # decision_transition.process_topics()가 확정/재논의/재확인 상태에 따라
+        # 기존 active decision을 superseded로 전이시키거나 새로 active를 등록한다
+        # (post_meeting 파이프라인 2-3 설계 재사용 - 여기서 직접 만들지 않는다).
+        topics = [
+            d for d in extraction["decisions"]
+            if str(d.get("title") or "").strip() and str(d.get("decision_text") or "").strip()
+        ]
+        new_decisions = decision_transition.process_topics(
+            db,
+            workspace_id=meeting.workspace_id,
+            category_id=meeting.category_id,
+            meeting_id=meeting_id,
+            topics=topics,
+            commit=True,
+        )
+        # 새로 active가 된 decision만 DECISION_COLLECTION에 벡터로 저장한다.
+        # (process_topics 자체는 Postgres만 다루고 인덱싱은 하지 않음 - 별도 호출 필요)
+        indexer.index_decisions(db, meeting.workspace_id, meeting.category_id, new_decisions)
+        decision_ids = [str(d.id) for d in new_decisions]
 
         task_ids: list[str] = []
         for t in extraction["tasks"]:

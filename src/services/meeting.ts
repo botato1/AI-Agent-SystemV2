@@ -122,6 +122,14 @@ export interface GetMeetingDecisionsResponse {
   error: string | null;
 }
 
+export interface MapSpeakerNamesResponse {
+  status: "success" | "error";
+  meetingId: string | null;
+  speakerLabels: Record<string, string>;
+  message: string;
+  error: string | null;
+}
+
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -838,6 +846,153 @@ export async function resumeMeetingApi(
     return {
       status: "error",
       meeting: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 12. 회의 제목 변경 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id})
+ *
+ * 회의 상태(recording/paused/completed 등)와 무관하게 언제든 변경 가능. 변경된 회의 정보
+ * 전체를 응답으로 받는다 (다른 엔드포인트와 달리 status/message 래핑 없이 회의 객체 그대로 옴).
+ */
+export async function renameMeetingApi(
+  workspaceId: string,
+  meetingId: string,
+  title: string
+): Promise<GetMeetingResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      meeting: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "회의 제목 변경에 실패했습니다.";
+      if (response.status === 400) {
+        defaultMsg = "제목을 1~200자로 입력해 주세요.";
+      } else if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 변경할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      }
+
+      return {
+        status: "error",
+        meeting: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      meeting: data.meeting || data,
+      message: "회의 제목이 변경되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("renameMeetingApi error:", error);
+    return {
+      status: "error",
+      meeting: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 13. 화자 이름 매핑 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/speakers)
+ *
+ * STT 원본 화자 라벨(SPEAKER_00 등)을 실명으로 매핑한다. 저장된 발화도 즉시 소급 변경되고
+ * (되돌릴 수 없음), 이후 실시간 발화에도 계속 적용된다. 여러 번 호출해도 기존 매핑은 유지된 채
+ * 새 매핑만 누적된다.
+ */
+export async function mapSpeakerNamesApi(
+  workspaceId: string,
+  meetingId: string,
+  mapping: Record<string, string>
+): Promise<MapSpeakerNamesResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      meetingId: null,
+      speakerLabels: {},
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/speakers`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mapping }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "화자 이름 매핑에 실패했습니다.";
+      if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 매핑할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      }
+
+      return {
+        status: "error",
+        meetingId: null,
+        speakerLabels: {},
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      meetingId: data.meeting_id ?? meetingId,
+      speakerLabels: data.speaker_labels || {},
+      message: data.message || "화자 이름이 매핑되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("mapSpeakerNamesApi error:", error);
+    return {
+      status: "error",
+      meetingId: null,
+      speakerLabels: {},
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

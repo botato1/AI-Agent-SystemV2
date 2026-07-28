@@ -1,11 +1,14 @@
 // src/components/DashboardView.tsx
 import { useState } from "react";
 import { Task, TaskPriority, TaskStatus } from "../types";
-import { Contradiction, ContradictionStatus } from "../services/contradiction";
+import { Contradiction, ContradictionStatus, ContradictionResolutionType } from "../services/contradiction";
 import { useContradictions } from "../hooks/useContradictions";
-import { WarningIcon } from "./icons";
+import { useClampCheck } from "../hooks/useClampCheck";
+import { WarningIcon, ChevronDownIcon } from "./icons";
 import TaskBoard from "./TaskBoard";
 import CreateTaskModal from "./CreateTaskmodal";
+import ContradictionMessage from "./ContradictionMessage";
+import ChangeSummaryModal from "./ChangeSummaryModal";
 
 interface DashboardViewProps {
   workspaceId: string;
@@ -21,11 +24,11 @@ interface DashboardViewProps {
 
 type DashboardTab = "tasks" | "log";
 
-function severityBadge(severity: Contradiction["severity"]) {
+function severityBadge(severity: Contradiction["severity"], t: any) {
   const map = {
-    high: { label: "높음", className: "bg-recall-danger/15 text-recall-danger" },
-    medium: { label: "중간", className: "bg-amber-500/15 text-amber-400" },
-    low: { label: "낮음", className: "bg-recall-textMuted/15 text-recall-textMuted" },
+    high: { label: t.priority_high, className: "bg-recall-danger/15 text-recall-danger" },
+    medium: { label: t.priority_medium, className: "bg-amber-500/15 text-amber-400" },
+    low: { label: t.priority_low, className: "bg-recall-textMuted/15 text-recall-textMuted" },
   } as const;
   const { label, className } = map[severity];
   return <span className={`rounded-full px-2 py-0.5 text-xs ${className}`}>{label}</span>;
@@ -38,7 +41,98 @@ function formatDate(iso: string): string {
   ).padStart(2, "0")}`;
 }
 
-function ContradictionLog({ workspaceId }: { workspaceId: string }) {
+function ContradictionLogCard({
+  c,
+  isExpanded,
+  onToggleExpand,
+  onDismiss,
+  onResolve,
+  t,
+}: {
+  c: Contradiction;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  onDismiss: () => void;
+  onResolve: (resolutionType: ContradictionResolutionType) => void;
+  t: any;
+}) {
+  // 접힌 상태에서 실제로 텍스트가 잘리는지 측정해서, 잘릴 때만 "자세히 보기"를 보여준다
+  // (짧은 내용에서 눌러도 아무 변화가 없는 버튼을 없애기 위함)
+  const [clampRef, isClamped] = useClampCheck([c.id]);
+
+  return (
+    <div className="rounded-lg border border-recall-border bg-recall-bg p-3 shadow-sm">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-base font-bold text-recall-text">
+          <WarningIcon size={15} className="text-recall-danger" />
+          {t.contradiction_title}
+        </span>
+        <span className="text-sm text-recall-textMuted">{formatDate(c.detected_at)}</span>
+      </div>
+
+      <span className="mb-2 inline-block rounded-md bg-recall-bgMain px-1.5 py-1 text-xs font-medium text-recall-textMuted">
+        {c.source_type === "meeting_segment" ? t.contradiction_source_meeting : t.contradiction_source_chat}
+      </span>
+
+      <div ref={clampRef}>
+        <ContradictionMessage contradiction={c} expanded={isExpanded} t={t} />
+
+        {c.reason && (
+          <div className="mb-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
+              {t.contradiction_reason_label}
+            </p>
+            <p data-clamp className={`text-base text-recall-textMuted ${isExpanded ? "" : "line-clamp-1"}`}>{c.reason}</p>
+          </div>
+        )}
+      </div>
+
+      {isClamped && (
+        <button
+          onClick={onToggleExpand}
+          className="mb-2 flex items-center gap-1 text-sm font-medium text-recall-accent hover:underline"
+        >
+          {isExpanded ? t.contradiction_show_less : t.contradiction_show_more}
+          <ChevronDownIcon size={13} className={`transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+        </button>
+      )}
+
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          {severityBadge(c.severity, t)}
+          <span className="text-sm text-recall-textMuted">
+            {t.contradiction_confidence} {Math.round(c.confidence_score * 100)}%
+          </span>
+        </div>
+
+        {c.status === "unresolved" && (
+          <div className="flex gap-1.5">
+            <button
+              onClick={onDismiss}
+              className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-textMuted hover:bg-white/5"
+            >
+              {t.contradiction_dismiss}
+            </button>
+            <button
+              onClick={() => onResolve("keep_reference")}
+              className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-text hover:bg-white/5"
+            >
+              {t.contradiction_keep}
+            </button>
+            <button
+              onClick={() => onResolve("change_acknowledged")}
+              className="rounded-lg bg-recall-accent px-2.5 py-1 text-sm font-medium text-white hover:opacity-90"
+            >
+              {t.contradiction_apply}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ContradictionLog({ workspaceId, t }: { workspaceId: string; t: any }) {
   const {
     statusFilter,
     setStatusFilter,
@@ -46,12 +140,26 @@ function ContradictionLog({ workspaceId }: { workspaceId: string }) {
     isLoading,
     resolve,
     dismiss,
+    pendingSummaryFor,
+    changeSummary,
+    isChangeSummaryLoading,
+    closeChangeSummary,
   } = useContradictions(workspaceId);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  function toggleExpanded(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const tabs: { key: ContradictionStatus; label: string }[] = [
-    { key: "unresolved", label: "미해결" },
-    { key: "resolved", label: "해결됨" },
-    { key: "dismissed", label: "무시됨" },
+    { key: "unresolved", label: t.contradiction_status_unresolved },
+    { key: "resolved", label: t.contradiction_status_resolved },
+    { key: "dismissed", label: t.contradiction_status_dismissed },
   ];
 
   return (
@@ -73,68 +181,33 @@ function ContradictionLog({ workspaceId }: { workspaceId: string }) {
       </div>
 
       {isLoading ? (
-        <p className="text-base text-recall-textMuted">불러오는 중...</p>
+        <p className="text-base text-recall-textMuted">{t.common_loading}</p>
       ) : contradictions.length === 0 ? (
-        <p className="text-base text-recall-textMuted">표시할 항목이 없습니다.</p>
+        <p className="text-base text-recall-textMuted">{t.contradiction_log_empty}</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {contradictions.map((c) => (
-            <div key={c.id} className="rounded-lg border border-recall-border p-3">
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-sm font-medium text-recall-textMuted">
-                  <WarningIcon size={12} className="text-recall-danger" />
-                  {c.source_type === "meeting_segment" ? "회의 발언" : "채팅 메시지"}
-                </span>
-                <span className="text-xs text-recall-textMuted">{formatDate(c.detected_at)}</span>
-              </div>
-
-              <div className="mb-1.5 space-y-1 text-base">
-                <p className="text-recall-text">
-                  <span className="text-recall-textMuted">발언: </span>
-                  {c.statement_text_snapshot}
-                </p>
-                <p className="text-recall-text">
-                  <span className="text-recall-textMuted">기준자료: </span>
-                  {c.reference_text_snapshot}
-                </p>
-              </div>
-
-              {c.reason && <p className="mb-2 text-sm text-recall-textMuted">{c.reason}</p>}
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  {severityBadge(c.severity)}
-                  <span className="text-xs text-recall-textMuted">
-                    신뢰도 {Math.round(c.confidence_score * 100)}%
-                  </span>
-                </div>
-
-                {c.status === "unresolved" && (
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => dismiss(c.id)}
-                      className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-textMuted hover:bg-white/5"
-                    >
-                      무시
-                    </button>
-                    <button
-                      onClick={() => resolve(c.id, "keep_reference")}
-                      className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-text hover:bg-white/5"
-                    >
-                      기준 유지
-                    </button>
-                    <button
-                      onClick={() => resolve(c.id, "change_acknowledged")}
-                      className="rounded-lg bg-recall-accent px-2.5 py-1 text-sm font-medium text-white hover:opacity-90"
-                    >
-                      변경 인지
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+            <ContradictionLogCard
+              key={c.id}
+              c={c}
+              isExpanded={expandedIds.has(c.id)}
+              onToggleExpand={() => toggleExpanded(c.id)}
+              onDismiss={() => dismiss(c.id)}
+              onResolve={(resolutionType) => resolve(c.id, resolutionType)}
+              t={t}
+            />
           ))}
         </div>
+      )}
+
+      {pendingSummaryFor && (
+        <ChangeSummaryModal
+          contradiction={pendingSummaryFor}
+          changeSummary={changeSummary}
+          isLoading={isChangeSummaryLoading}
+          onClose={closeChangeSummary}
+          t={t}
+        />
       )}
     </div>
   );
@@ -190,7 +263,7 @@ export default function DashboardView({
             t={t}
           />
         ) : (
-          <ContradictionLog workspaceId={workspaceId} />
+          <ContradictionLog workspaceId={workspaceId} t={t} />
         )}
       </div>
 
