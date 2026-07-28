@@ -50,6 +50,7 @@ class SignupRequest(BaseModel):
         max_length=50,
         description="화면에 표시할 이름",
     )
+    invite_token: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -105,6 +106,7 @@ class SignupResponse(BaseModel):
     user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
+    invite_status: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
