@@ -122,6 +122,15 @@ def main():
     parser.add_argument("--val-ratio", type=float, default=0.05, help="학습 중 모니터링용 내부 검증 비율")
     parser.add_argument("--lora-r", type=int, default=32)
     parser.add_argument("--lora-alpha", type=int, default=64)
+    # v4까지는 q_proj/v_proj만 적응시켰는데(어텐션 일부), 실측에서 실음성 개선폭이
+    # CER 11.66%→11.18%(0.48%p)에 그치고 eval_loss도 3 epoch 내내 0.409→0.404로
+    # 사실상 정체했음 — 적응 가능한 용량 자체가 부족했다는 신호. k_proj/out_proj로
+    # 어텐션을 완성하고 MLP(fc1/fc2)까지 포함해 용량을 늘린다.
+    parser.add_argument(
+        "--lora-target-modules", nargs="+",
+        default=["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"],
+        help="LoRA를 붙일 모듈 (기본: 어텐션 전체 + MLP)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -150,7 +159,7 @@ def main():
     lora_config = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
-        target_modules=["q_proj", "v_proj"],
+        target_modules=args.lora_target_modules,
         lora_dropout=0.05,
         bias="none",
     )
