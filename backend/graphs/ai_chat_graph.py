@@ -22,19 +22,20 @@ def run_ai_chat_answer(
     session_id: str,
     workspace_id: str,
     category_id: str,
-    room_id: str,
     user_id: str,
     user_message: str,
+    room_id: str | None = None,
     chat_history: list[dict] | None = None,
 ) -> dict:
     initial_state: AIChatState = {
         "workspace_id": workspace_id,
         "category_id": category_id,
         "session_id": session_id,
-        "room_id": room_id,
         "user_id": user_id,
         "user_message": user_message,
     }
+    if room_id is not None:
+        initial_state["room_id"] = room_id
     if chat_history is not None:
         initial_state["chat_history"] = chat_history
     return ai_chat_graph.invoke(initial_state)
