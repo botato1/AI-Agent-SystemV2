@@ -94,7 +94,9 @@ def extract(transcript: str) -> dict:
 
     try:
         json_str = _extract_json_block(raw)
-        parsed = json.loads(json_str)
+        # strict=False: LLM이 문자열 값 안에 이스케이프 안 된 제어문자(줄바꿈 등)를
+        # 넣는 경우가 있어, JSON 표준상 금지된 이런 문자도 관대하게 허용한다.
+        parsed = json.loads(json_str, strict=False)
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[llm_extractor] JSON 파싱 실패, 빈 결과로 폴백: {e}\n원본 응답: {raw[:500]}")
         return fallback
