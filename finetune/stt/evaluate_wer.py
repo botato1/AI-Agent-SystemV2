@@ -46,7 +46,15 @@ def load_model(model_id: str, adapter_path: str | None = None):
     turbo(디코더 레이어 32→4)에 얹으면 로딩 단계에서 실패한다.
     faster-whisper 엔진에서는 어댑터 로딩 자체를 지원하지 않음(peft가 ctranslate2
     포맷을 다루지 않음) — transformers 엔진에서만 의미 있음.
+
+    Qwen3-ASR 계열은 Whisper와 아키텍처가 달라 전용 어댑터로 분기한다.
+    (평가 전용 — 서버 파이프라인에는 아직 연결돼 있지 않음)
     """
+    if "qwen3-asr" in model_id.lower():
+        if adapter_path:
+            raise SystemExit("Qwen3-ASR은 LoRA 어댑터 로딩을 지원하지 않음 (평가 전용 어댑터)")
+        from qwen_asr_engine import Qwen3ASREngine
+        return Qwen3ASREngine(model_id, device=DEVICE)
     if STT_ENGINE == "transformers":
         from stt.services.whisper_engine import TransformersWhisperEngine
         return TransformersWhisperEngine(model_id, device=DEVICE, adapter_path=adapter_path)
@@ -105,6 +113,11 @@ def main():
     parser.add_argument("--beam-size", type=int, default=None, help=f"빔 크기 (미지정 시 서버 설정값 {PRECISE_BEAM_SIZE})")
     # 모델을 바꿔가며 같은 평가셋으로 비교하기 위한 옵션 (예: turbo 계열, 한국어 파인튜닝 모델)
     parser.add_argument("--model", default=None, help=f"모델 ID (미지정 시 서버 설정값 {WHISPER_MODEL_PRECISE})")
+    # 컨텍스트 바이어싱 텍스트 파일 (용어 목록/배경 설명).
+    # ⚠️ Whisper에서는 이 값이 initial_prompt로 들어가는데, 짧은 오디오에서
+    #    프롬프트를 그대로 받아적는 문제가 실측으로 확인됐다. Whisper 계열
+    #    모델에 이 옵션을 쓸 때는 그 사실을 감안할 것.
+    parser.add_argument("--context", default=None, help="컨텍스트 바이어싱 텍스트 파일 경로")
     args = parser.parse_args()
     beam_size = args.beam_size if args.beam_size is not None else PRECISE_BEAM_SIZE
     model_id = args.model or WHISPER_MODEL_PRECISE
@@ -115,15 +128,22 @@ def main():
     if args.terms:
         with open(args.terms, encoding="utf-8") as f:
             terms = [line.strip() for line in f if line.strip()]
+    context = None
+    if args.context:
+        with open(args.context, encoding="utf-8") as f:
+            # 주석(#)과 빈 줄은 빼고 한 덩어리 텍스트로 만든다
+            lines = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+        context = " ".join(lines)
 
     print(f"엔진={STT_ENGINE}, 모델={model_id}, 어댑터={args.adapter_path or '없음(베이스)'}, "
-          f"beam={beam_size}, 평가 대상={len(items)}개")
+          f"beam={beam_size}, 컨텍스트={'있음' if context else '없음'}, 평가 대상={len(items)}개")
     model = load_model(model_id, args.adapter_path)
 
     total_word_err = total_words = 0
     total_char_err = total_chars = 0
     total_term_expected = total_term_found = 0
     details = []
+    logprobs = []
     started = time.monotonic()
 
     for i, item in enumerate(items, 1):
@@ -133,8 +153,15 @@ def main():
             beam_size=beam_size,
             vad_filter=True,
             condition_on_previous_text=False,
+            initial_prompt=context,
         )
+        segments = list(segments)
         hyp = " ".join(seg.text.strip() for seg in segments).strip()
+        # 신뢰도 신호가 실제로 나오는지 확인 (confident 플래그의 근거가 됨)
+        seg_logprobs = [s.avg_logprob for s in segments if getattr(s, "avg_logprob", None) is not None]
+        item_logprob = sum(seg_logprobs) / len(seg_logprobs) if seg_logprobs else None
+        if item_logprob is not None:
+            logprobs.append(item_logprob)
 
         ref_norm, hyp_norm = normalize(item["text"]), normalize(hyp)
         ref_words, hyp_words = ref_norm.split(), hyp_norm.split()
@@ -159,6 +186,7 @@ def main():
             "cer": round(char_err / max(len(ref_chars), 1), 4),
             "terms_expected": expected,
             "terms_found": found,
+            "avg_logprob": round(item_logprob, 4) if item_logprob is not None else None,
         })
         print(f"[{i}/{len(items)}] WER={details[-1]['wer']:.2f} CER={details[-1]['cer']:.2f} | {hyp[:50]}")
 
@@ -167,7 +195,12 @@ def main():
         "model": model_id,
         "adapter": args.adapter_path,
         "beam_size": beam_size,
+        "context": args.context,
         "num_items": len(items),
+        # 건당 평균 처리 시간 — 속도는 타협 불가 기준이라 리포트에 남긴다
+        "sec_per_item": round((time.monotonic() - started) / max(len(items), 1), 3),
+        "avg_logprob_mean": round(sum(logprobs) / len(logprobs), 4) if logprobs else None,
+        "avg_logprob_min": round(min(logprobs), 4) if logprobs else None,
         "wer": round(total_word_err / max(total_words, 1), 4),
         "cer": round(total_char_err / max(total_chars, 1), 4),
         "term_recall": round(total_term_found / max(total_term_expected, 1), 4) if total_term_expected else None,
@@ -183,6 +216,8 @@ def main():
     print(f"WER        : {report['wer']:.4f}")
     print(f"CER        : {report['cer']:.4f}")
     print(f"용어 재현율 : {report['term_recall']}")
+    print(f"건당 시간   : {report['sec_per_item']}초")
+    print(f"avg_logprob : 평균 {report['avg_logprob_mean']} / 최저 {report['avg_logprob_min']}")
     print(f"리포트 저장 : {args.output}")
 
 
