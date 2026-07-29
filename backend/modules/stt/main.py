@@ -84,10 +84,12 @@ async def lifespan(app: FastAPI):
     app.state.active_recorders = {}
     app.state.active_participants = {}
 
-    # 통화(오디오 릴레이) 방: {session_id: VoiceRoom} — "각자 PC" 모드에서 ?voice=1로
-    # 접속한 참가자끼리 서로 목소리를 듣게 해줌. 전사용 청킹(2~28초 버퍼링)과 별개로,
-    # 받은 프레임을 즉시 나머지 참가자에게 흘려보내는 경로 (services/audio_relay.py).
-    app.state.voice_rooms = {}
+    # 회의 중계방: {session_id: SessionRoom} — "각자 PC" 모드 참가자끼리
+    #  ① 확정 전사(final)를 서로 공유하고(항상 — 각자 자기 소켓에서 자기 목소리만
+    #     전사되므로, 중계가 없으면 회의 중에 본인 발언만 보임)
+    #  ② ?voice=1이면 오디오도 주고받음(통화)
+    # 자세한 설계는 services/session_relay.py 참고.
+    app.state.session_rooms = {}
 
     yield  # 서버 동작
 

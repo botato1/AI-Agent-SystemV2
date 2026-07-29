@@ -636,7 +636,10 @@ function renderPartial(data) {
 }
 
 function renderFinal(data) {
-  if (tentativeSpan) {
+  // data.remote=true면 같은 회의의 다른 참가자가 말한 내용(서버가 중계해준 것).
+  // 내 잠정 텍스트는 내가 말할 때만 지운다 — 남의 발언이 들어왔다고 내가 말하던
+  // 잠정 텍스트를 지워버리면 화면이 튄다.
+  if (!data.remote && tentativeSpan) {
     tentativeSpan.remove();
     tentativeSpan = null;
   }
@@ -655,7 +658,11 @@ function renderFinal(data) {
     transcriptEl.appendChild(span);
   });
   transcriptEl.appendChild(document.createElement("br"));
-  log(`✅ final 청크 수신 (offset=${data.chunk_offset_sec}s, latency=${data.latency_sec}s, speaker=${data.speaker})`);
+  log(
+    data.remote
+      ? `👥 다른 참가자 발언 수신 (speaker=${data.speaker}, offset=${data.chunk_offset_sec}s)`
+      : `✅ final 청크 수신 (offset=${data.chunk_offset_sec}s, latency=${data.latency_sec}s, speaker=${data.speaker})`
+  );
 }
 
 async function start() {

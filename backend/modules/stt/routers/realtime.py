@@ -9,7 +9,7 @@ from ..services.realtime_service import RealtimeSTTSession
 from ..services.speaker_id_service import LiveSpeakerIdentifier
 from ..services.meeting_store import MeetingRecord
 from ..services.refine_service import refine_meeting
-from ..services import audio_relay
+from ..services import session_relay
 
 router = APIRouter()
 
@@ -97,7 +97,10 @@ async def _finalize_abnormal(
 _AUDIO_QUEUE_MAX = 512
 
 
-async def _stt_worker(websocket: WebSocket, session, audio_q: asyncio.Queue) -> None:
+async def _stt_worker(
+    websocket: WebSocket, session, audio_q: asyncio.Queue,
+    room=None, participant_key: str | None = None,
+) -> None:
     """
     전사 전담 태스크 — 수신 루프에서 분리한 이유가 핵심이다.
 
@@ -109,13 +112,25 @@ async def _stt_worker(websocket: WebSocket, session, audio_q: asyncio.Queue) -> 
     None을 받으면 잔여 버퍼를 마지막 청크로 처리하고 종료한다(회의 종료 신호).
     이 태스크만 partial/final을 전송하므로, 한 소켓에 두 코루틴이 동시에 쓰는 상황은
     생기지 않는다(session_end는 이 태스크가 끝난 뒤 수신 루프가 보냄).
+
+    room이 있으면(각자 PC 모드) 확정 전사를 같은 회의의 다른 참가자에게도 보낸다 —
+    각 참가자는 자기 소켓에서 자기 목소리만 전사되므로, 이게 없으면 회의 중에 본인
+    발언만 보인다. 잠정 전사는 공유하지 않는다(1초마다 갱신돼 트래픽이 인원수만큼
+    곱해지고, 남의 화면에서 내 잠정 텍스트가 계속 바뀌면 산만함).
     """
+    def share_final(result: dict) -> None:
+        if room is None or participant_key is None:
+            return
+        # 받는 쪽이 "남의 발언"임을 구분할 수 있게 표시해서 보낸다
+        room.broadcast_json_nowait(participant_key, {**result, "remote": True})
+
     while True:
         item = await audio_q.get()
         if item is None:
             result = await session.flush_remaining()
             if result:
                 await websocket.send_json(result)
+                share_final(result)
             return
 
         session.push_audio(item)
@@ -129,11 +144,13 @@ async def _stt_worker(websocket: WebSocket, session, audio_q: asyncio.Queue) -> 
             chunk, offset_sec = session.pop_chunk()
             result = await session.process_chunk(chunk, offset_sec)
             await websocket.send_json(result)
+            share_final(result)
 
 
 async def _run_session(
     websocket: WebSocket, session, recorder, session_id: str,
-    participant_key: str, active_key: str, mode: str, voice: bool = False,
+    participant_key: str, active_key: str, mode: str,
+    group: bool = False, voice: bool = False,
 ) -> None:
     """
     연결 하나의 수신 루프 본체 — 새로 만든 세션이든, 재연결로 이어받은 세션이든
@@ -144,31 +161,27 @@ async def _run_session(
     # rename API가 진행 중인 회의에도 이름 수정을 전파할 수 있게 레지스트리에 등록.
     websocket.app.state.active_sessions[active_key] = session
 
-    # 통화방 참여는 아래 try 안에서 한다 — 참여 직후의 send_json이 실패하면(접속하자마자
-    # 끊긴 경우 등) 정리 없이 빠져나가 통화방에 유령 참가자가 남기 때문.
-    # 다만 finally가 참조해야 하므로 변수 자체는 try 밖에서 선언한다.
-    room = None
-    # 수신 루프는 "읽기 → 릴레이 → 큐 적재"만 하고, 전사는 워커가 큐를 소비하며 담당한다
+    # 각자 PC 모드면 중계방에 참여한다 — 통화를 안 켜도 확정 전사는 서로 공유해야 하므로
+    # (각 참가자는 자기 소켓에서 자기 목소리만 전사되어, 중계가 없으면 회의 중에 본인
+    #  발언만 보인다). 통화(오디오)는 voice=1일 때만 슬롯을 받아 추가로 참여.
+    room = session_relay.get_room(websocket.app.state, session_id) if group else None
+    voice_slot = room.join(participant_key, websocket, voice) if room is not None else None
+
+    # 수신 루프는 "읽기 → 중계 → 큐 적재"만 하고, 전사는 워커가 큐를 소비하며 담당한다
     # (전사를 수신 루프에서 await하면 그동안 통화 오디오가 끊긴다 — _stt_worker 참고)
     audio_q: asyncio.Queue = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
-    worker = asyncio.create_task(_stt_worker(websocket, session, audio_q))
+    worker = asyncio.create_task(_stt_worker(websocket, session, audio_q, room, participant_key))
 
     logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
 
     try:
-        # 통화(오디오 릴레이) 참여 — 요청한 연결만. 기존 클라이언트는 바이너리 수신을
-        # 예상하지 않으므로(JSON.parse에서 깨짐) 옵트인이어야 한다.
-        if voice:
-            joined = audio_relay.get_room(websocket.app.state, session_id)
-            my_slot = joined.join(participant_key, websocket)
-            if my_slot is not None:
-                room = joined  # 상한 초과로 슬롯을 못 받으면 전사만 진행하고 음성은 미참여
-                await websocket.send_json({
-                    "session_id": session_id,
-                    "type": "voice_ready",
-                    "slot": my_slot,
-                    "participants": room.size,
-                })
+        if voice_slot is not None:
+            await websocket.send_json({
+                "session_id": session_id,
+                "type": "voice_ready",
+                "slot": voice_slot,
+                "participants": room.voice_size,
+            })
 
         while True:
             message = await websocket.receive()
@@ -206,10 +219,10 @@ async def _run_session(
             if not data:
                 continue
 
-            # 통화 릴레이는 전사보다 먼저, 도착 즉시. 기다리지 않으므로(broadcast_nowait)
+            # 통화 중계는 전사보다 먼저, 도착 즉시. 기다리지 않으므로(nowait)
             # 느린 수신자가 있어도 이 루프는 안 멈춘다.
-            if room is not None:
-                room.broadcast_nowait(participant_key, data)
+            if voice_slot is not None:
+                room.broadcast_audio_nowait(participant_key, data)
 
             try:
                 audio_q.put_nowait(data)
@@ -242,9 +255,9 @@ async def _run_session(
             websocket.app.state.active_sessions.pop(active_key, None)
         if room is not None:
             # leave()는 같은 키로 새 연결이 들어와 있으면 알아서 건너뛴다
-            # (늦게 끝난 옛 연결이 새 연결을 통화에서 쫓아내지 않도록)
+            # (늦게 끝난 옛 연결이 새 연결을 중계방에서 쫓아내지 않도록)
             room.leave(participant_key, websocket)
-            audio_relay.drop_room_if_empty(websocket.app.state, session_id)
+            session_relay.drop_room_if_empty(websocket.app.state, session_id)
 
     try:
         await websocket.close()
@@ -381,9 +394,9 @@ async def realtime_stt_ws(
         )
         mode = ("재연결 — " if is_reconnect else "") + mode_desc
 
-    # 통화는 각자 PC 모드에서만 의미가 있다 — 공용 마이크 모드는 참가자가 한 공간에
-    # 모여 있어 서로 목소리를 되돌려주면 하울링만 생긴다.
+    # 중계(전사 공유·통화)는 각자 PC 모드에서만 의미가 있다 — 공용 마이크 모드는 한
+    # 소켓이 회의 전체를 담당하므로 공유할 상대가 없고, 통화는 같은 공간이라 하울링만 생긴다.
     await _run_session(
         websocket, session, recorder, session_id, participant_key, active_key, mode,
-        voice=bool(voice) and bool(participant_name),
+        group=bool(participant_name), voice=bool(voice),
     )
