@@ -103,9 +103,16 @@ def extract(transcript: str) -> dict:
     for key, default in fallback.items():
         parsed.setdefault(key, default)
 
+    # LLM이 배열 안에 dict가 아닌 값(문자열 등)을 섞어 보낼 수 있으므로, status
+    # 검증 루프에서 .get()/할당을 시도하기 전에 걸러낸다 (지수 리뷰 반영 - 순서가
+    # 바뀌면 아래 루프에서 AttributeError로 이 함수 전체가 죽어 요약/결정/할일이
+    # 통째로 날아간다).
+    parsed["topics"] = [t for t in parsed.get("topics", []) if isinstance(t, dict)]
+    parsed["action_items"] = [t for t in parsed.get("action_items", []) if isinstance(t, dict)]
+
     # status 값 검증 - 스키마에 없는 값이 오면 reopened_no_conclusion으로 안전하게 처리
     valid_statuses = {"confirmed", "reconfirmed", "reopened_no_conclusion"}
-    for topic in parsed.get("topics", []):
+    for topic in parsed["topics"]:
         if topic.get("status") not in valid_statuses:
             topic["status"] = "reopened_no_conclusion"
 

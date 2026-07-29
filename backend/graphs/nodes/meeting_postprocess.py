@@ -7,109 +7,31 @@
 # meeting_ws_router.py가 저장해둔 .pcm 파일을 workspace_files에 등록하는 것부터 시작한다.
 # audio_upload는 이미 source_file_id가 있다고 가정한다 (실제 STT 실행 연동은 별도 후속 작업).
 
-import json
-import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
-
 from backend.db.crud import content_chunk_crud, file_crud, meeting_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.meeting_postprocess_state import MeetingPostprocessState
-from backend.modules.post_meeting import decision_transition, indexer
+from backend.modules.post_meeting import decision_transition, indexer, llm_extractor
 from backend.modules.rag.document_loader import load_document
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-
 RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
-
-_SUMMARY_PROMPT = """당신은 팀 회의록을 정리하는 비서입니다. 아래 회의 전문을 읽고 요약하세요.
-
-[회의 전문]
-{transcript}
-
-반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 덧붙이지 마세요.
-
-{{
-  "full_summary": "회의 전체 내용을 여러 문단으로 정리",
-  "short_summary": "핵심만 한 문단으로",
-  "discussion_points": ["주요 논의 주제1", "주요 논의 주제2"]
-}}"""
-
-_EXTRACT_PROMPT = """당신은 회의에서 결정사항과 할 일을 추출하는 비서입니다. 아래 회의 전문을 읽으세요.
-
-[회의 전문]
-{transcript}
-
-"~로 확정하자/~로 가자/~는 OO가 담당하자" 같은 표현을 결정사항으로, 담당자가 명시된 작업을 할 일로 추출하세요.
-
-결정사항마다 status를 아래 세 값 중 하나로 분류하세요 (과거 결정 이력과 비교하는 게 아니라,
-이번 회의 전문 안에서 그 논의가 어떻게 마무리됐는지로 판단):
-- "confirmed": 새 값/방침이 이번 회의에서 확정됨 (기존 결정을 뒤집는 경우 포함)
-- "reopened_no_conclusion": 다시 논의했지만 결론 없이 끝남 (다음에 다시 얘기하기로 함 등)
-- "reconfirmed": 기존에 이미 정해진 내용을 그대로 재확인만 함 (새로운 내용 없음)
-
-반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 덧붙이지 마세요.
-
-{{
-  "decisions": [
-    {{"title": "짧은 제목", "decision_text": "결정 내용", "reason": "결정 이유(없으면 빈 문자열)", "status": "confirmed"}}
-  ],
-  "tasks": [
-    {{"title": "할 일 내용", "assignee_label": "담당자 이름(없으면 빈 문자열)"}}
-  ]
-}}"""
 
 
 class _PostprocessFailure(Exception):
     """meeting.status를 failed로 남기고 종료해야 하는 예상된 실패."""
 
 
-def _call_llm_json(prompt: str, fallback: dict) -> dict:
+def _parse_due_date(due_date_str: str | None):
+    """llm_extractor가 뽑은 'YYYY-MM-DD' 문자열을 datetime으로 변환. 실패하면 None(마감일 없음 취급)."""
+    if not due_date_str:
+        return None
     try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "format": "json"},
-            timeout=120.0,
-        )
-        response.raise_for_status()
-        raw_text = response.json().get("response", "").strip()
-        parsed = json.loads(raw_text)
-        if not isinstance(parsed, dict):
-            raise ValueError(f"응답이 JSON 객체가 아님: {parsed!r}")
-        return parsed
-    except (httpx.HTTPError, json.JSONDecodeError, ValueError, TypeError) as e:
-        print(f"[meeting_postprocess] LLM 호출 실패: {repr(e)}")
-        return fallback
-
-
-def _generate_summary(full_transcript: str) -> dict:
-    parsed = _call_llm_json(
-        _SUMMARY_PROMPT.format(transcript=full_transcript),
-        fallback={"full_summary": "", "short_summary": "", "discussion_points": []},
-    )
-    return {
-        "full_summary": str(parsed.get("full_summary", "")),
-        "short_summary": str(parsed.get("short_summary", "")),
-        "discussion_points": parsed.get("discussion_points") or [],
-    }
-
-
-def _extract_decisions_and_tasks(full_transcript: str) -> dict:
-    parsed = _call_llm_json(
-        _EXTRACT_PROMPT.format(transcript=full_transcript),
-        fallback={"decisions": [], "tasks": []},
-    )
-    decisions = parsed.get("decisions")
-    tasks = parsed.get("tasks")
-    # LLM이 배열 안에 dict가 아닌 값을 섞어 보낼 수 있으므로 여기서 걸러낸다
-    # (호출부에서 다시 .get()을 부르면 AttributeError로 노드 전체가 죽는 걸 방지).
-    decisions = [d for d in decisions if isinstance(d, dict)] if isinstance(decisions, list) else []
-    tasks = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
-    return {"decisions": decisions, "tasks": tasks}
+        return datetime.strptime(due_date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
 
 
 def _ensure_source_file(db, meeting) -> uuid.UUID:
@@ -206,26 +128,32 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         segment_chunks = content_chunk_crud.get_chunks_by_file(db, file_id, chunk_type="meeting_segment")
         segment_chunk_ids = [str(c.id) for c in segment_chunks]
 
-        # 3. 요약 생성 및 저장
-        summary_data = _generate_summary(full_transcript)
+        # 3. 요약 + 결정사항 + 할 일 — llm_extractor.extract()로 LLM 호출 한 번에 통합 추출
+        #    (기존엔 이 노드가 자체 프롬프트로 요약/추출을 따로 호출했는데, 승주가 이미
+        #    설계해둔 llm_extractor.extract()와 별개로 돌고 있었음 - 여기로 통합)
+        #    dict가 아닌 topic/action_item 방어는 extract() 내부(status 검증 루프 이전)에서
+        #    처리한다 - 지수 리뷰 반영: 여기서 필터링하면 이미 extract() 내부에서 먼저
+        #    죽은 뒤라 아무 소용이 없었음.
+        extraction = llm_extractor.extract(full_transcript)
+
         summary_row = meeting_crud.upsert_summary(
             db,
             meeting_id,
-            full_summary=summary_data["full_summary"],
-            short_summary=summary_data["short_summary"],
-            discussion_points=summary_data["discussion_points"],
-            generation_status="completed" if summary_data["full_summary"] else "failed",
+            full_summary=extraction["full_summary"],
+            short_summary=extraction["short_summary"],
+            discussion_points=extraction["discussion_points"],
+            generation_status="completed" if extraction["full_summary"] else "failed",
             generated_at=datetime.now(timezone.utc),
         )
 
-        # 4. 결정사항 / 할 일 추출 및 저장
-        extraction = _extract_decisions_and_tasks(full_transcript)
-
+        # 4. 결정사항 / 할 일 저장
         # decision_transition.process_topics()가 확정/재논의/재확인 상태에 따라
         # 기존 active decision을 superseded로 전이시키거나 새로 active를 등록한다
         # (post_meeting 파이프라인 2-3 설계 재사용 - 여기서 직접 만들지 않는다).
+        # llm_extractor가 이미 status 값을 검증해서 채워주지만, process_topics()도
+        # 자체적으로 한 번 더 화이트리스트 검증한다 (지수 리뷰 반영 - PR #65).
         topics = [
-            d for d in extraction["decisions"]
+            d for d in extraction["topics"]
             if str(d.get("title") or "").strip() and str(d.get("decision_text") or "").strip()
         ]
         new_decisions = decision_transition.process_topics(
@@ -242,7 +170,7 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         decision_ids = [str(d.id) for d in new_decisions]
 
         task_ids: list[str] = []
-        for t in extraction["tasks"]:
+        for t in extraction["action_items"]:
             title = str(t.get("title") or "").strip()
             if not title:
                 continue
@@ -253,7 +181,9 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
                 title=title,
                 meeting_id=meeting_id,
                 status="open",
-                assignee_label=str(t.get("assignee_label") or "") or None,
+                assignee_label=str(t.get("assignee") or "") or None,
+                description=str(t.get("description") or "") or None,
+                due_at=_parse_due_date(t.get("due_date")),
             )
             task_ids.append(str(row.id))
 
@@ -263,14 +193,14 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
             "full_transcript": full_transcript,
             "meeting_segment_ids": [str(s.id) for s in segments],
             "segment_chunk_ids": segment_chunk_ids,
-            "full_summary": summary_data["full_summary"],
-            "short_summary": summary_data["short_summary"],
-            "discussion_points": summary_data["discussion_points"],
-            "summary_generation_status": "completed" if summary_data["full_summary"] else "failed",
+            "full_summary": extraction["full_summary"],
+            "short_summary": extraction["short_summary"],
+            "discussion_points": extraction["discussion_points"],
+            "summary_generation_status": "completed" if extraction["full_summary"] else "failed",
             "meeting_summary_id": str(summary_row.id),
-            "extracted_decisions": extraction["decisions"],
+            "extracted_decisions": extraction["topics"],
             "decision_ids": decision_ids,
-            "extracted_tasks": extraction["tasks"],
+            "extracted_tasks": extraction["action_items"],
             "task_ids": task_ids,
         }
 

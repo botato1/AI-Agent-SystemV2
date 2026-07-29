@@ -29,6 +29,24 @@ def test_merge_and_rank_candidates_respects_top_k():
     assert result[0]["id"] == "d9"
 
 
+def test_merge_and_rank_candidates_includes_decision_results():
+    doc_results = [{"id": "d1", "score": 0.5}]
+    meeting_results = [{"id": "m1", "score": 0.4}]
+    decision_results = [{"id": "dec1", "score": 0.9}]
+
+    result = merge_and_rank_candidates(doc_results, meeting_results, decision_results, top_k=3)
+
+    assert [r["id"] for r in result] == ["dec1", "d1", "m1"]
+
+
+def test_merge_and_rank_candidates_decision_results_optional():
+    """decision_results를 생략해도 기존 2종 병합과 동일하게 동작해야 한다 (하위 호환)."""
+    doc_results = [{"id": "d1", "score": 0.9}]
+    meeting_results = [{"id": "m1", "score": 0.5}]
+    result = merge_and_rank_candidates(doc_results, meeting_results, top_k=2)
+    assert [r["id"] for r in result] == ["d1", "m1"]
+
+
 def test_filter_by_relevance_drops_low_score_candidates():
     candidates = [{"id": "a", "score": 0.9}, {"id": "b", "score": 0.2}, {"id": "c", "score": 0.4}]
     result = filter_by_relevance(candidates, min_score=0.4)
