@@ -73,11 +73,12 @@ def run_judgment_pipeline(
             return None
 
         if popup["type"] == "contradiction":
-            # decision 기반 모순은 DB 저장이 decision_judgment.judge() 안에서 이미
-            # 끝났으므로, 여기선 실시간 push용 정보만 반환한다 (알림 테이블엔 안 남김).
+            # decision 기반이든 document 기반이든, priority.select_popup()이 이미
+            # 최종 선택한 popup을 그대로 쓴다 (decision_result["popup"]는 document_judgment가
+            # 대신 판단한 경우 None이라 인덱싱하면 TypeError).
             return {
-                "contradiction_id": decision_result["popup"]["contradiction_id"],
-                "message": decision_result["popup"]["message"],
+                "contradiction_id": popup["contradiction_id"],
+                "message": popup["message"],
             }
 
         if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
