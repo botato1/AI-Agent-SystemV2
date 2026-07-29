@@ -77,11 +77,18 @@ class Qwen3ASREngine:
         audio: 파일 경로(str) 또는 16kHz float32 numpy 배열.
         initial_prompt: 컨텍스트 바이어싱 텍스트. Whisper의 initial_prompt와
                         이름만 같고 동작이 다르다(모델이 학습으로 배운 기능).
+
+        processor.apply_transcription_request()는 시스템 메시지에 언어 힌트만
+        넣고 컨텍스트를 받을 통로가 없다(transformers 5.13 기준 `prompt` 인자
+        없음 — 넘기면 조용히 무시된다). 채팅 템플릿이 시스템 역할의 text 조각을
+        전부 이어붙이므로, 언어와 컨텍스트를 같이 넣으려면 대화를 직접 만들어야
+        한다.
         """
-        inputs = self.processor.apply_transcription_request(
-            audio=audio,
-            language=language,
-            prompt=initial_prompt,
+        inputs = self.processor.apply_chat_template(
+            [self._build_conversation(audio, language, initial_prompt)],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
         ).to(self.model.device, self.model.dtype)
 
         prompt_len = inputs["input_ids"].shape[1]
@@ -100,6 +107,32 @@ class Qwen3ASREngine:
         avg_logprob = self._avg_logprob(outputs, generated_ids, beam_size)
 
         return [_Segment(0.0, 0.0, text.strip(), avg_logprob)], _Info(language)
+
+    @staticmethod
+    def _build_conversation(audio, language: str | None, context: str | None) -> list[dict]:
+        """
+        시스템 메시지 = 언어 힌트 + 컨텍스트, 유저 메시지 = 오디오.
+
+        언어는 "ko" 같은 코드로 줘도 resolve_language가 "Korean"으로 바꿔준다
+        (모델이 학습 때 본 형태가 전체 이름이라 코드 그대로 넣으면 안 됨).
+        """
+        from transformers.models.qwen3_asr.processing_qwen3_asr import resolve_language
+
+        parts = []
+        if language:
+            parts.append(resolve_language(language))
+        if context:
+            parts.append(context)
+
+        system_content = [{"type": "text", "text": "\n".join(parts)}] if parts else []
+        audio_content = (
+            {"type": "audio", "path": audio} if isinstance(audio, str)
+            else {"type": "audio", "audio": audio}
+        )
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": [audio_content]},
+        ]
 
     @staticmethod
     def _avg_logprob(outputs, generated_ids, beam_size: int) -> float:

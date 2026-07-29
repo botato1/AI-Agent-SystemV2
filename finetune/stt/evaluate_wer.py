@@ -64,6 +64,32 @@ def load_model(model_id: str, adapter_path: str | None = None):
     return WhisperModel(model_id, device=DEVICE, compute_type=COMPUTE_TYPE)
 
 
+# ── AI-Hub 한국어 음성 전사 규약 태그 ──────────────────────────────────────
+# 정답 텍스트에 라벨링 기호가 섞여 있는데, 이걸 안 풀면 모델이 정확히 맞혀도
+# 오류로 잡혀서 CER이 부풀려진다(held-out 500건 중 231건이 태그 포함).
+#
+#   (표기형)/(발음형)  이중 전사. 예: (1대16.8)/(일 대 십육 점 팔)
+#   n/ o/ b/ l/ u/     잡음·겹침·숨소리·웃음·불명 — 발화가 아니므로 통째로 제거
+#   어/ 그/ 뭐/        간투어 — 실제로 말한 내용이므로 단어는 남기고 기호만 제거
+#   +                  반복/재시작 발화 마커
+#   *                  불명확 발화 마커
+#
+# 이중 전사는 표기형을 택한다. Whisper 계열이 "1대16.8" 형태로 출력하기 때문에
+# 발음형을 정답으로 잡으면 숫자를 맞혀도 전부 오류가 된다 — 숫자 인식이
+# 핵심 관심사인 만큼 이 선택이 결과를 크게 좌우한다.
+_AIHUB_DUAL = re.compile(r"\(([^()]*)\)\s*/\s*\(([^()]*)\)")
+_AIHUB_EVENT = re.compile(r"(?<![가-힣A-Za-z0-9])[bnlou]\s*/")
+_AIHUB_FILLER = re.compile(r"([가-힣]+)\s*/")
+
+
+def strip_aihub_tags(text: str) -> str:
+    """AI-Hub 전사 규약 태그를 실제 발화 텍스트로 되돌린다."""
+    text = _AIHUB_DUAL.sub(r"\1", text)      # 이중 전사 → 표기형
+    text = _AIHUB_EVENT.sub(" ", text)       # 음향 이벤트 태그 제거
+    text = _AIHUB_FILLER.sub(r"\1 ", text)   # 간투어는 단어만 남김
+    return text.replace("+", " ").replace("*", " ")
+
+
 def normalize(text: str) -> str:
     """비교 전 정규화: 유니코드 정규화, 소문자화, 문장부호 제거, 공백 정리."""
     text = unicodedata.normalize("NFKC", text).lower()
@@ -118,12 +144,28 @@ def main():
     #    프롬프트를 그대로 받아적는 문제가 실측으로 확인됐다. Whisper 계열
     #    모델에 이 옵션을 쓸 때는 그 사실을 감안할 것.
     parser.add_argument("--context", default=None, help="컨텍스트 바이어싱 텍스트 파일 경로")
+    # 기본값은 raw — 기존 리포트와 그대로 비교할 수 있게 동작을 바꾸지 않는다.
+    # AI-Hub 매니페스트를 평가할 때만 aihub를 줘서 태그를 풀고 측정한다.
+    parser.add_argument("--ref-format", choices=["raw", "aihub"], default="raw",
+                        help="정답 텍스트 형식. aihub면 전사 규약 태그를 풀고 비교")
     args = parser.parse_args()
     beam_size = args.beam_size if args.beam_size is not None else PRECISE_BEAM_SIZE
     model_id = args.model or WHISPER_MODEL_PRECISE
 
     with open(args.manifest, encoding="utf-8") as f:
         items = [json.loads(line) for line in f if line.strip()]
+    stripped = 0
+    if args.ref_format == "aihub":
+        for item in items:
+            cleaned = strip_aihub_tags(item["text"])
+            if cleaned != item["text"]:
+                stripped += 1
+            item["text"] = cleaned
+        # 태그가 하나도 안 걸리면 형식을 잘못 지정한 것 — 조용히 넘기면
+        # 부풀려진 CER을 정상 수치로 착각하게 된다.
+        if stripped == 0:
+            raise SystemExit("❌ --ref-format aihub인데 태그가 하나도 안 걸림 — 매니페스트 형식 확인 필요")
+        print(f"AI-Hub 태그 정리: {stripped}/{len(items)}건의 정답 텍스트 변경됨")
     terms = []
     if args.terms:
         with open(args.terms, encoding="utf-8") as f:
@@ -196,6 +238,7 @@ def main():
         "adapter": args.adapter_path,
         "beam_size": beam_size,
         "context": args.context,
+        "ref_format": args.ref_format,
         "num_items": len(items),
         # 건당 평균 처리 시간 — 속도는 타협 불가 기준이라 리포트에 남긴다
         "sec_per_item": round((time.monotonic() - started) / max(len(items), 1), 3),
