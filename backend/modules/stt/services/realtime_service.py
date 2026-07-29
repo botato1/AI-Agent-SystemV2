@@ -19,6 +19,7 @@ from ..core.config import (
     REALTIME_PARTIAL_MIN_SEC,
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
+    REALTIME_FINAL_USES_FAST_MODEL,
     CONF_AVG_LOGPROB_THRESHOLD,
     CONF_NO_SPEECH_THRESHOLD,
 )
@@ -38,7 +39,10 @@ class RealtimeSTTSession:
     """
     실시간 회의 오디오를 VAD 기준으로 청크 분할해 전사하는 세션.
     - 잠정 텍스트: 1초 주기로 Fast 모델(turbo)이 버퍼를 훑어 Local Agreement 방식으로 스트리밍
-    - 확정 텍스트: 발화가 끊긴 지점에서 Precise 모델(large-v3)이 청크를 확정 전사
+    - 확정 텍스트: 발화가 끊긴 지점에서 청크를 확정 전사.
+      기본값은 Fast 모델(turbo) — 회의 중에는 응답성이 UX를 좌우하고, 정확도는 회의 종료 후
+      정밀 재분석(large-v3)이 최종본을 다시 만들어 책임진다(REALTIME_FINAL_USES_FAST_MODEL).
+      이 설정을 끄면 확정 전사도 Precise 모델(large-v3)이 담당한다.
 
     시간(초) 고정 분할 대신 '말이 끊기는 지점'을 기준으로 잘라야
     문장이 중간에 잘려 정확도가 떨어지는 걸 방지할 수 있음.
@@ -231,8 +235,12 @@ class RealtimeSTTSession:
         # 절대 시각"으로 변환 (각자 PC 모드가 아니면 base_offset_sec=0이라 그대로임)
         offset_sec = offset_sec + self.base_offset_sec
 
+        # 회의 중 자막은 사람이 기다리는 유일한 구간이라 응답성이 UX를 좌우한다.
+        # 정확도는 회의 종료 후 정밀 재분석(large-v3)이 책임지므로, 여기서는 빠른 모델을 쓴다.
+        # (실측: turbo 0.26초·건 vs large-v3 1.73초·건, 정확도 차 1.35%p — config 주석 참고)
+        final_model = self.fast_model if REALTIME_FINAL_USES_FAST_MODEL else self.precise_model
         precise_task = loop.run_in_executor(
-            None, self._transcribe, self.precise_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt
+            None, self._transcribe, final_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt
         )
         if self.fixed_speaker is not None:
             # 각자 PC 모드 — 참가자가 이미 자기 이름으로 접속했으므로 화자 식별 자체가 불필요
