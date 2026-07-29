@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from jose import JWTError
+from jose import ExpiredSignatureError, JWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,7 @@ from backend.schemas.auth_schema import (
     AccountDeleteResponse,
 )
 
-from backend.db.crud import auth_crud
+from backend.db.crud import auth_crud, workspace_crud
 
 from backend.core.security import (
     hash_password,
@@ -48,6 +48,7 @@ from backend.core.security import (
     create_password_reset_token,
     verify_password_reset_token,
     password_fingerprint,
+    verify_workspace_invite_token,
 )
 
 from backend.core.config import settings
@@ -179,11 +180,33 @@ def signup(db: Session, request: SignupRequest) -> SignupResponse:
             detail="이미 사용 중인 아이디 또는 이메일입니다.",
         )
 
+    invite_status = None
+    if request.invite_token:
+        try:
+            payload = verify_workspace_invite_token(request.invite_token)
+            if payload.get("sub") == request.email:
+                workspace_crud.add_member(
+                    db,
+                    workspace_id=uuid.UUID(payload["workspace_id"]),
+                    user_id=user.id,
+                    added_by=uuid.UUID(payload["invited_by"]),
+                    role=payload["role"],
+                )
+                invite_status = "joined"
+            else:
+                invite_status = "invite_invalid"
+        except ExpiredSignatureError:
+            invite_status = "invite_expired"
+        except JWTError:
+            invite_status = "invite_invalid"
+            # 초대 토큰이 잘못됐어도 회원가입 자체는 막지 않음
+
     return SignupResponse(
         status="success",
         user=UserPublicSchema.model_validate(user),
         message="회원가입이 완료되었습니다.",
         error=None,
+        invite_status=invite_status,
     )
 
 
