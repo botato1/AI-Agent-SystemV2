@@ -52,7 +52,7 @@ class Contradiction(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "source_type IN ('meeting_segment','room_message')",
+            "source_type IN ('meeting_segment','room_message','meeting_summary')",
             name="chk_contradictions_source_type",
         ),
         CheckConstraint(
@@ -67,7 +67,9 @@ class Contradiction(Base):
             "(source_type = 'meeting_segment' AND meeting_segment_id IS NOT NULL "
             "AND room_message_id IS NULL) OR "
             "(source_type = 'room_message' AND room_message_id IS NOT NULL "
-            "AND meeting_segment_id IS NULL)",
+            "AND meeting_segment_id IS NULL) OR "
+            "(source_type = 'meeting_summary' AND meeting_segment_id IS NULL "
+            "AND room_message_id IS NULL)",
             name="chk_contradictions_source_exclusive",
         ),
         CheckConstraint(
