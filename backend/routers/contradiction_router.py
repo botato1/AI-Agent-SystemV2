@@ -60,9 +60,12 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
             f"'{contradiction.statement_text_snapshot}'라고 하셨는데, 기존 자료와 다릅니다."
         )
 
+    resolution = contradiction_crud.get_resolution(db, contradiction.id)
+
     schema = ContradictionSchema.model_validate(contradiction)
     schema.reference_source_name = source_name
     schema.display_message = display_message
+    schema.resolution_type = resolution.resolution_type if resolution else None
     return schema
 
 
@@ -199,3 +202,30 @@ def get_change_summary_api(
             detail="변경 요약 초안을 찾을 수 없습니다.",
         )
     return ChangeSummaryDraftSchema.model_validate(draft)
+
+# 모순 되돌리기 ("유지"로 처리된 것만 다시 미해결로)
+@router.post("/{contradiction_id}/reopen", response_model=ContradictionSchema)
+def reopen_contradiction_api(
+    workspace_id: uuid.UUID,
+    contradiction_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    contradiction = _get_contradiction_or_404(db, contradiction_id, workspace_id)
+
+    if contradiction.status == "unresolved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 미해결 상태입니다.",
+        )
+
+    resolution = contradiction_crud.get_resolution(db, contradiction_id)
+    if not resolution or resolution.resolution_type != "keep_reference":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="'유지'로 처리된 모순만 되돌릴 수 있습니다.",
+        )
+
+    updated = contradiction_crud.reopen_contradiction(db, contradiction_id)
+    return _to_contradiction_schema(db, updated)
