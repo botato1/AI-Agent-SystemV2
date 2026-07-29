@@ -127,10 +127,29 @@ REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정
 # attendees/participant_name으로 이미 받고 있어서, 임의로 고른 목록이 아니라 그 회의에
 # 실제로 참여 중인 사람 이름을 힌트로 줄 수 있다.
 #
-# 주의: 목록이 길수록 말하지 않은 용어를 지어내는 부작용이 커짐(그리고 Whisper 프롬프트는
-# 224토큰 제한). terms.txt를 의도적으로 짧게 유지하고, 늘릴 때는 반드시 회귀 측정할 것.
-# 부작용이 보이면 INITIAL_PROMPT_ENABLED=0으로 즉시 끌 수 있음(서버 재시작만 필요).
-INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+# ⛔ 2026-07-29: 실시간 회의에서 인식이 무너져 기본값을 끔으로 되돌림.
+#
+# 무슨 일이 있었나: 짧은 청크(2~3초)에서 모델이 오디오 대신 **프롬프트 문장 자체를
+# 받아적었다.** 실제 회의록에 남은 결과:
+#     '참석자&영어팀 회의. 참섭자&영어필.'
+#     '참석자&용어&'
+# Whisper의 initial_prompt는 "앞서 나온 문맥"으로 주입되는데, 실제 음성 정보가 적은
+# 짧은 청크에서는 모델이 그 문맥의 패턴을 이어서 생성해버린다. 목록형 프롬프트
+# ("용어: A, B, C, ...")는 특히 이어붙이기 쉬운 형태라 더 취약했다.
+#
+# 왜 사전에 못 잡았나: 검증을 파일 단위 긴 오디오(AI Hub 클립, 125초 회의 녹음)로만 했다.
+# held-out CER이 안 나빠졌고 confident도 정상이라 통과시켰는데, **실시간 짧은 청크
+# 경로에서는 한 번도 돌려보지 않았다.** 조건이 다른 데서 검증하고 통과시킨 실수.
+#
+# 버릴 아이디어는 아니다 — 같은 회의 오디오에서 "승주→승준", "WAV→외로", "STT→에스티티"
+# 오인식을 실제로 고쳤다(제보 4건 중 3건 해결). 적용 방식이 틀렸을 뿐이다.
+# 다시 켤 때 지켜야 할 것:
+#   1) 프롬프트를 훨씬 짧게 — 참석자 이름만 쓰고 용어 목록은 빼는 방향부터 시도
+#   2) 짧은 청크에는 적용하지 않기(예: 일정 길이 이상에서만)
+#   3) 반드시 **실시간 경로**에서 검증 — 파일 단위 평가만으로는 이 문제를 못 잡는다
+#
+# INITIAL_PROMPT_ENABLED=1로 실험은 가능하되, 기본값은 끔.
+INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "0").strip().lower() not in ("0", "false", "no")
 TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
 
 # LoRA 파인튜닝 어댑터(finetune/stt/train_lora.py 결과물) 경로 — 설정 시 정밀(Precise) 모델에만
