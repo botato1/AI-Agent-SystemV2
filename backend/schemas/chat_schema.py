@@ -256,7 +256,7 @@ class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
 
     id: UUID
     workspace_id: UUID
-    room_id: UUID
+    room_id: Optional[UUID] = None
     user_id: UUID
 
     title: Optional[str] = Field(
