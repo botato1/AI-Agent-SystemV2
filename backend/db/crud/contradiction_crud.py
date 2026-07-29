@@ -201,6 +201,32 @@ def dismiss_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[
         db.refresh(row)
     return row
 
+def get_resolution(db: Session, contradiction_id: uuid.UUID) -> Optional[ContradictionResolution]:
+    return (
+        db.query(ContradictionResolution)
+        .filter(ContradictionResolution.contradiction_id == contradiction_id)
+        .first()
+    )
+
+
+def reopen_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[Contradiction]:
+    """keep_reference로 해결됐던 모순을 다시 unresolved로 되돌린다.
+    change_acknowledged는 decisions 테이블 전이까지 일으키므로 되돌리기 대상에서
+    제외해야 한다 - 그 검증은 호출부(라우터)에서 미리 하고, 여기선 단순히
+    해결 기록을 지우고 상태만 되돌린다."""
+    contradiction = db.get(Contradiction, contradiction_id)
+    if not contradiction:
+        return None
+
+    resolution = get_resolution(db, contradiction_id)
+    if resolution:
+        db.delete(resolution)
+
+    contradiction.status = "unresolved"
+    db.commit()
+    db.refresh(contradiction)
+    return contradiction
+
 
 def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Optional[ChangeSummaryDraft]:
     return (
