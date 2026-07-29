@@ -1,7 +1,7 @@
 import numpy as np
 import soundfile as sf
 import torch
-from transformers import AutoProcessor, WhisperForConditionalGeneration
+from transformers import AutoProcessor, GenerationConfig, WhisperForConditionalGeneration
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
 from ..core.config import logger, REALTIME_SAMPLE_RATE
@@ -16,6 +16,10 @@ _WINDOW_SAMPLES = _WINDOW_SEC * REALTIME_SAMPLE_RATE
 # 없고, 30초 안에서 최대한 늦게(=최근 구간에서) 자연스러운 지점을 찾아 "덜" 채워서 자름.
 _FORCE_CUT_LOOKBACK_SEC = 3.0
 _FORCE_CUT_MIN_SILENCE_MS = 100
+
+# generation_config가 불완전한 모델(주로 커뮤니티 파인튜닝본)을 만났을 때 빌려올 원본.
+# Whisper 계열은 토큰 ID 체계가 공통이라 turbo/large 어느 쪽 원본을 써도 언어 매핑은 동일하다.
+_GENERATION_CONFIG_FALLBACK = "openai/whisper-large-v3"
 
 
 class Segment:
@@ -69,6 +73,20 @@ class TransformersWhisperEngine:
             torch_dtype=self.torch_dtype,
             attn_implementation="sdpa",
         ).to(device)
+
+        # 커뮤니티 파인튜닝 모델은 generation_config에 언어 토큰 매핑(lang_to_id)이
+        # 빠져 있는 경우가 있다. 그러면 transformers가 language 인자를 거부한다:
+        #   ValueError: The generation config is outdated and is thus not compatible
+        #               with the `language` argument to `generate`
+        # 원본(fallback_id)의 설정으로 보완해서 그런 모델도 평가·사용할 수 있게 한다.
+        # 아키텍처가 같으면(turbo 파인튜닝 ← turbo 원본) 토큰 ID 체계가 동일하므로 안전.
+        if getattr(self.model.generation_config, "lang_to_id", None) is None:
+            fallback_id = _GENERATION_CONFIG_FALLBACK
+            logger.warning(
+                f"⚠️ {model_id}의 generation_config에 언어 매핑이 없음 — "
+                f"{fallback_id}의 설정으로 보완합니다."
+            )
+            self.model.generation_config = GenerationConfig.from_pretrained(fallback_id)
 
         # LoRA 파인튜닝 어댑터(finetune/stt/train_lora.py 결과물)를 얹어서 로드.
         # 임시 검증용 — 정식으로 채택되기 전까지는 환경변수로만 켜지도록 해서 기본 동작엔 영향 없음.
