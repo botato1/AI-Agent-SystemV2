@@ -8,13 +8,13 @@ from backend.db.mixins import created_at_col, updated_at_col, uuid_pk
 
 
 class AiChatSession(Base):
-    """채팅방(room) 안에 존재. 기록은 사용자별 비공개."""
+    """워크스페이스 단독 AI Chat 세션(room_id 없음) 또는 특정 채팅방에 연결된 세션. 기록은 사용자별 비공개."""
 
     __tablename__ = "ai_chat_sessions"
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
-    room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=False)
+    room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title = Column(String(200), nullable=True)
     created_at = created_at_col()
@@ -23,9 +23,14 @@ class AiChatSession(Base):
 
     __table_args__ = (
         Index(
-            "idx_ai_chat_sessions_owner", "workspace_id", "room_id", "user_id",
+            "idx_ai_chat_sessions_owner_room", "workspace_id", "room_id", "user_id",
             unique=True,
-            postgresql_where=text("deleted_at IS NULL"),
+            postgresql_where=text("deleted_at IS NULL AND room_id IS NOT NULL"),
+        ),
+        Index(
+            "idx_ai_chat_sessions_owner_workspace", "workspace_id", "user_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND room_id IS NULL"),
         ),
     )
 
