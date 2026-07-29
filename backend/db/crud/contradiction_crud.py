@@ -99,6 +99,7 @@ def create_contradiction(
     session_room_id: Optional[uuid.UUID] = None,
     severity: str = "medium",
     cooldown_minutes: int = 30,
+    commit: bool = True,
     **extra_fields,
 ) -> Contradiction:
     """
@@ -109,6 +110,9 @@ def create_contradiction(
     reference_type='decision'인 경우 reference_file_id 대신 reference_decision_id를,
     session_meeting_id 또는 session_room_id를 반드시 채워야
     already_popped_in_session_for_decision()으로 세션당 1회 체크가 가능하다.
+
+    [추가] commit=False면 flush만 하고 커밋은 호출부에 맡긴다 - post_meeting
+    파이프라인의 원자적 1단계 커밋 구조에 이 함수가 끼어들 때 필요.
     """
     row = Contradiction(
         workspace_id=workspace_id,
@@ -128,8 +132,11 @@ def create_contradiction(
         **extra_fields,
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 
