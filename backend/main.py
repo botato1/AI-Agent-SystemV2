@@ -13,11 +13,11 @@ from backend.routers.task_router import router as task_router
 from backend.routers.stt_router import router as stt_router
 from backend.routers.auth_router import router as auth_router
 from backend.routers.workspace_router import router as workspace_router
-from backend.routers.meeting_router import router as meeting_router
+from backend.routers.meeting_router import router as meeting_router, decisions_router as decisions_router
 from backend.routers.meeting_ws_router import router as meeting_ws_router
 from backend.routers.contradiction_router import router as contradiction_router
 from backend.routers.worktree_router import router as worktree_router
-from backend.routers.ai_chat_router import router as ai_chat_router
+from backend.routers.ai_chat_router import router as ai_chat_router, standalone_router as ai_chat_standalone_router
 from backend.routers.notification_router import router as notification_router
 from backend.routers.notification_router import router as notification_router, preferences_router as notification_preferences_router
 from backend.modules.rag.chroma_client import warm_up_reranker
@@ -56,10 +56,12 @@ app.include_router(task_router)
 app.include_router(stt_router)
 app.include_router(workspace_router)
 app.include_router(meeting_router)
+app.include_router(decisions_router)
 app.include_router(meeting_ws_router)
 app.include_router(contradiction_router)
 app.include_router(worktree_router)
 app.include_router(ai_chat_router)
+app.include_router(ai_chat_standalone_router)
 app.include_router(notification_router)
 app.include_router(notification_preferences_router)
 
