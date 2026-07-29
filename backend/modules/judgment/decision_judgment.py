@@ -29,7 +29,7 @@ from backend.db.modules import Decision
 from backend.modules.llm.ollama_client import _call_ollama
 from backend.modules.rag import chroma_client
 
-DECISION_MATCH_THRESHOLD = 0.75  # TBD - 실험 후 조정 (post_meeting.decision_transition과 동일 값 사용)
+DECISION_MATCH_THRESHOLD = float(os.getenv("DECISION_MATCH_THRESHOLD", "0.75"))  # TBD - 실험 후 조정 (post_meeting.decision_transition과 동일 값 사용)
 
 # [수정 - 2026.07.27] confidence/Model2 이원화 제거. 판단은 배치1~3 통합
 # 파인튜닝 모델(re-call-model1-unified-v1) 하나로, 단계별 개별 호출.
@@ -96,6 +96,11 @@ def _find_matching_decision(
         top_k=1,
         collection_name=chroma_client.DECISION_COLLECTION,
     )
+    if results:
+        print(
+            f"[_find_matching_decision] statement={statement!r} "
+            f"top1_score={results[0]['score']:.4f} threshold={DECISION_MATCH_THRESHOLD}"
+        )
     if not results or results[0]["score"] < DECISION_MATCH_THRESHOLD:
         return None
 
