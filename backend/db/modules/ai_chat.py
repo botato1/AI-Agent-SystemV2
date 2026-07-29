@@ -46,27 +46,36 @@ class AiChatMessage(Base):
 
 
 class AiMessageSource(Base):
-    """AI 답변 근거. source_type에 따라 chunk_id 또는 code_fact_id 중 하나만 채운다."""
+    """AI 답변 근거. source_type에 따라 chunk_id/code_fact_id/decision_id 중 하나만 채운다.
+
+    decision은 workspace_files에 속하지 않으므로 file_id는 decision 타입일 때 NULL —
+    content_chunk/code_fact 타입일 때만 필수로 채워야 한다.
+    """
 
     __tablename__ = "ai_message_sources"
 
     id = uuid_pk()
     ai_message_id = Column(UUID(as_uuid=True), ForeignKey("ai_chat_messages.id"), nullable=False)
     source_type = Column(String(30), nullable=False)
-    file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=False)
+    file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     chunk_id = Column(UUID(as_uuid=True), ForeignKey("content_chunks.id"), nullable=True)
     code_fact_id = Column(UUID(as_uuid=True), ForeignKey("code_facts.id"), nullable=True)
+    decision_id = Column(UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=True)
     similarity_score = Column(Numeric(5, 4), nullable=True)
     display_order = Column(Integer, nullable=False, server_default="0")
     created_at = created_at_col()
 
     __table_args__ = (
         CheckConstraint(
-            "source_type IN ('content_chunk','code_fact')", name="chk_ai_message_sources_type"
+            "source_type IN ('content_chunk','code_fact','decision')", name="chk_ai_message_sources_type"
         ),
         CheckConstraint(
-            "(source_type = 'content_chunk' AND chunk_id IS NOT NULL AND code_fact_id IS NULL) OR "
-            "(source_type = 'code_fact' AND code_fact_id IS NOT NULL AND chunk_id IS NULL)",
+            "(source_type = 'content_chunk' AND file_id IS NOT NULL AND chunk_id IS NOT NULL "
+            "AND code_fact_id IS NULL AND decision_id IS NULL) OR "
+            "(source_type = 'code_fact' AND file_id IS NOT NULL AND code_fact_id IS NOT NULL "
+            "AND chunk_id IS NULL AND decision_id IS NULL) OR "
+            "(source_type = 'decision' AND decision_id IS NOT NULL "
+            "AND file_id IS NULL AND chunk_id IS NULL AND code_fact_id IS NULL)",
             name="chk_ai_message_sources_exclusive",
         ),
         Index("idx_ai_message_sources_message", "ai_message_id", "display_order"),
