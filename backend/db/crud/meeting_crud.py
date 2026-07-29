@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from backend.db.modules import Task, Decision, Meeting, MeetingSegment, MeetingSummary
+from backend.db.modules import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary, User
 
 
 def create_meeting(
@@ -124,10 +124,11 @@ def update_meeting_status(db: Session, meeting_id: uuid.UUID, status: str, **fie
         db.refresh(row)
     return row
 
-def update_meeting_title(db: Session, meeting_id: uuid.UUID, title: str) -> Optional[Meeting]:
+def update_meeting_info(db: Session, meeting_id: uuid.UUID, **fields) -> Optional[Meeting]:
     row = get_meeting(db, meeting_id)
     if row:
-        row.title = title
+        for key, value in fields.items():
+            setattr(row, key, value)
         db.commit()
         db.refresh(row)
     return row
@@ -176,6 +177,22 @@ def list_decisions_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Decisi
         .order_by(Decision.decided_at.desc())
         .all()
     )
+
+def list_decisions_by_workspace(db: Session, workspace_id: uuid.UUID, status: str | None = None) -> list[Decision]:
+    query = db.query(Decision).filter(Decision.workspace_id == workspace_id, Decision.deleted_at.is_(None))
+    query = query.filter(Decision.status == (status or "active"))
+    return query.order_by(Decision.decided_at.desc()).all()
+
+
+def get_decision_history_chain(db: Session, decision_id: uuid.UUID) -> list[Decision]:
+    """supersedes_decision_id를 따라가며 이 결정의 전체 버전 이력을 모은다.
+    (최신 -> 과거 순, 현재 버전도 포함)"""
+    chain: list[Decision] = []
+    current = db.get(Decision, decision_id)
+    while current:
+        chain.append(current)
+        current = db.get(Decision, current.supersedes_decision_id) if current.supersedes_decision_id else None
+    return chain
 
 
 # [수정 - 리뷰 반영] ActionItem -> Task 팀 컨벤션으로 모델/함수명 전면 변경.
@@ -287,3 +304,19 @@ def update_speaker_labels(db: Session, meeting_id: uuid.UUID, mapping: dict[str,
     db.commit()
     db.refresh(meeting)
     return meeting
+
+def set_attendees(db: Session, meeting_id: uuid.UUID, user_ids: list[uuid.UUID]) -> list[tuple[MeetingAttendee, User]]:
+    """참석자 목록을 통째로 교체한다."""
+    db.query(MeetingAttendee).filter(MeetingAttendee.meeting_id == meeting_id).delete(synchronize_session=False)
+    db.add_all([MeetingAttendee(meeting_id=meeting_id, user_id=uid) for uid in user_ids])
+    db.commit()
+    return get_attendees(db, meeting_id)
+
+
+def get_attendees(db: Session, meeting_id: uuid.UUID) -> list[tuple[MeetingAttendee, User]]:
+    return (
+        db.query(MeetingAttendee, User)
+        .join(User, MeetingAttendee.user_id == User.id)
+        .filter(MeetingAttendee.meeting_id == meeting_id)
+        .all()
+    )
