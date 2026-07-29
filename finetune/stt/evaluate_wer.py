@@ -34,20 +34,26 @@ from stt.core.config import (  # noqa: E402
 )
 
 
-def load_model(adapter_path: str | None = None):
+def load_model(model_id: str, adapter_path: str | None = None):
     """
-    서버와 동일한 기준(아키텍처별 엔진 자동 선택)으로 정밀 모델 로딩.
+    서버와 동일한 기준(아키텍처별 엔진 자동 선택)으로 모델 로딩.
+
+    model_id를 바꿔가며 서로 다른 모델을 같은 평가셋으로 비교할 수 있다
+    (예: large-v3 vs large-v3-turbo vs 한국어 파인튜닝된 turbo).
+
     adapter_path를 주면 LoRA 어댑터를 얹어서 로드 (파인튜닝 전/후 비교용).
-    faster-whisper 엔진에서는 어댑터 로딩을 지원하지 않음(peft가 ctranslate2
+    ⚠️ 어댑터는 학습에 쓴 모델과 구조가 같아야 한다 — large-v3로 학습한 어댑터를
+    turbo(디코더 레이어 32→4)에 얹으면 로딩 단계에서 실패한다.
+    faster-whisper 엔진에서는 어댑터 로딩 자체를 지원하지 않음(peft가 ctranslate2
     포맷을 다루지 않음) — transformers 엔진에서만 의미 있음.
     """
     if STT_ENGINE == "transformers":
         from stt.services.whisper_engine import TransformersWhisperEngine
-        return TransformersWhisperEngine(WHISPER_MODEL_PRECISE, device=DEVICE, adapter_path=adapter_path)
+        return TransformersWhisperEngine(model_id, device=DEVICE, adapter_path=adapter_path)
     if adapter_path:
         raise SystemExit("faster-whisper 엔진은 LoRA 어댑터 로딩을 지원하지 않음 (transformers 엔진에서만 가능)")
     from faster_whisper import WhisperModel
-    return WhisperModel(WHISPER_MODEL_PRECISE, device=DEVICE, compute_type=COMPUTE_TYPE)
+    return WhisperModel(model_id, device=DEVICE, compute_type=COMPUTE_TYPE)
 
 
 def normalize(text: str) -> str:
@@ -97,8 +103,11 @@ def main():
     # beam 크기는 정확도/속도 트레이드오프의 가장 큰 레버라 실측 비교가 필요함.
     # 미지정 시 서버 설정(PRECISE_BEAM_SIZE)을 그대로 써서 기존 동작과 동일.
     parser.add_argument("--beam-size", type=int, default=None, help=f"빔 크기 (미지정 시 서버 설정값 {PRECISE_BEAM_SIZE})")
+    # 모델을 바꿔가며 같은 평가셋으로 비교하기 위한 옵션 (예: turbo 계열, 한국어 파인튜닝 모델)
+    parser.add_argument("--model", default=None, help=f"모델 ID (미지정 시 서버 설정값 {WHISPER_MODEL_PRECISE})")
     args = parser.parse_args()
     beam_size = args.beam_size if args.beam_size is not None else PRECISE_BEAM_SIZE
+    model_id = args.model or WHISPER_MODEL_PRECISE
 
     with open(args.manifest, encoding="utf-8") as f:
         items = [json.loads(line) for line in f if line.strip()]
@@ -107,9 +116,9 @@ def main():
         with open(args.terms, encoding="utf-8") as f:
             terms = [line.strip() for line in f if line.strip()]
 
-    print(f"엔진={STT_ENGINE}, 모델={WHISPER_MODEL_PRECISE}, 어댑터={args.adapter_path or '없음(베이스)'}, "
+    print(f"엔진={STT_ENGINE}, 모델={model_id}, 어댑터={args.adapter_path or '없음(베이스)'}, "
           f"beam={beam_size}, 평가 대상={len(items)}개")
-    model = load_model(args.adapter_path)
+    model = load_model(model_id, args.adapter_path)
 
     total_word_err = total_words = 0
     total_char_err = total_chars = 0
@@ -155,7 +164,7 @@ def main():
 
     report = {
         "engine": STT_ENGINE,
-        "model": WHISPER_MODEL_PRECISE,
+        "model": model_id,
         "adapter": args.adapter_path,
         "beam_size": beam_size,
         "num_items": len(items),
