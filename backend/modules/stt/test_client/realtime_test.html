@@ -43,6 +43,8 @@
     <div style="margin-top:6px;"><label>세션 ID: </label><input id="sessionId" value="test-session-1" /></div>
     <div style="margin-top:6px;">
       <label>각자 PC 모드 - 내 이름: </label><input id="participantName" placeholder="비워두면 공용 마이크 모드" />
+      <label style="margin-left:12px"><input type="checkbox" id="voiceCall" /> 통화 켜기(서로 목소리 듣기)</label>
+      <span id="voiceHint" style="color:#b45309;font-size:12px;margin-left:6px"></span>
       <span style="font-size:12px;color:#888;">(입력하면 화자식별 없이 이 이름으로 바로 라벨링됨. 같은 세션 ID로 여러 명이 각자 접속하면 하나의 회의로 병합)</span>
     </div>
   </fieldset>
@@ -127,6 +129,8 @@ const speakerCountInput = document.getElementById("speakerCount");
 const enrollRowsEl = document.getElementById("enrollRows");
 const sharedMicSectionEl = document.getElementById("sharedMicSection");
 const guestEnrollSectionEl = document.getElementById("guestEnrollSection");
+const voiceCallInput = document.getElementById("voiceCall");
+const voiceHintEl = document.getElementById("voiceHint");
 
 // 두 모드(각자 PC / 공용 마이크)는 섞어 쓸 수 없어(백엔드가 회의 하나를 하나의
 // 모드로만 처리함) — 각자 PC 모드용 이름을 입력하면 공용 마이크 모드 UI를 잠가서
@@ -136,8 +140,18 @@ function updateModeExclusivity() {
   sharedMicSectionEl.classList.toggle("mode-disabled", groupMode);
   guestEnrollSectionEl.classList.toggle("mode-disabled", groupMode);
   participantNameInput.disabled = [...document.querySelectorAll(".attendee-cb:checked")].length > 0;
+
+  // 통화는 각자 PC 모드에서만 의미가 있다 — 공용 마이크 모드는 한 공간에 모여 있어
+  // 서로 목소리를 되돌려주면 하울링만 생긴다(서버도 이 경우 voice를 무시함)
+  voiceCallInput.disabled = !groupMode;
+  if (!groupMode) voiceCallInput.checked = false;
+  voiceHintEl.textContent = !groupMode
+    ? "각자 PC 모드에서만 사용할 수 있어요"
+    : (voiceCallInput.checked ? "헤드폰을 꼭 써주세요 (스피커로 들으면 하울링이 생겨요)" : "");
 }
 participantNameInput.addEventListener("input", updateModeExclusivity);
+voiceCallInput.addEventListener("change", updateModeExclusivity);
+updateModeExclusivity();
 
 function log(msg) {
   const line = document.createElement("div");
@@ -161,12 +175,72 @@ function wsUrl() {
     // 각자 PC 모드 — 화자식별 없이 이 이름으로 바로 라벨링됨. attendees와는 같이 안 씀
     // (백엔드가 participant_name이 있으면 attendees 로직 자체를 안 탐)
     query = `?participant_name=${encodeURIComponent(participantName)}`;
+    // 통화(오디오 릴레이)는 옵트인 — 켜면 이 연결이 바이너리 프레임도 받게 된다
+    if (voiceCallInput.checked) query += "&voice=1";
   } else {
     // 공용 마이크 모드 — 전역 프로필 참석자가 체크돼 있으면 attendees 파라미터로 전달
     const checked = [...document.querySelectorAll(".attendee-cb:checked")].map((c) => c.value);
     query = checked.length ? `?attendees=${encodeURIComponent(checked.join(","))}` : "";
   }
   return httpBase().replace(/^http/, "ws") + `/api/ws/stt/${encodeURIComponent(sessionIdInput.value)}` + query;
+}
+
+// ──────────────────────────────────────────
+// 통화 재생부 (오디오 릴레이 수신)
+//
+// 서버는 [1바이트 발신자 슬롯][PCM16LE] 형태의 바이너리 프레임을 보낸다.
+// 발신자별로 재생 타임라인을 따로 관리하는 게 핵심 — 여러 사람 프레임이 섞여
+// 도착하는데 한 타임라인에 이어붙이면 서로 밀어내면서 소리가 뭉개진다.
+// 각 발신자의 다음 재생 시각에 예약해두면 Web Audio가 알아서 믹싱해준다.
+// ──────────────────────────────────────────
+const VOICE_JITTER_SEC = 0.12;  // 네트워크 흔들림 흡수용 여유. 작을수록 지연이 짧지만 끊김이 잦아짐
+const VOICE_MAX_LEAD_SEC = 0.6; // 이보다 많이 밀리면 밀린 만큼 버리고 현재로 당김(클럭 드리프트/일시적 폭주 대응)
+let voiceCtx = null;
+const voiceNextAt = new Map();  // 발신자 슬롯 → 다음 프레임을 재생할 시각
+
+function ensureVoiceContext() {
+  // 서버 오디오가 16kHz라 컨텍스트도 16kHz로 맞춘다 — 리샘플링을 브라우저에 맡기면
+  // 프레임 경계마다 미세한 아티팩트가 생길 수 있어서.
+  if (!voiceCtx) voiceCtx = new AudioContext({ sampleRate: REALTIME_SAMPLE_RATE });
+  if (voiceCtx.state === "suspended") voiceCtx.resume();
+  return voiceCtx;
+}
+
+function playVoiceFrame(arrayBuffer) {
+  const ctx = ensureVoiceContext();
+  const bytes = new Uint8Array(arrayBuffer);
+  if (bytes.length < 3) return;             // 헤더(1) + 최소 샘플 1개(2)
+  const slot = bytes[0];
+  const pcm = new DataView(arrayBuffer, 1); // 헤더 뒤부터가 오디오
+  const sampleCount = Math.floor((arrayBuffer.byteLength - 1) / 2);
+
+  const buf = ctx.createBuffer(1, sampleCount, REALTIME_SAMPLE_RATE);
+  const channel = buf.getChannelData(0);
+  for (let i = 0; i < sampleCount; i++) channel[i] = pcm.getInt16(i * 2, true) / 0x8000;
+
+  const now = ctx.currentTime;
+  let startAt = voiceNextAt.get(slot) ?? 0;
+  if (startAt < now + VOICE_JITTER_SEC) {
+    // 처음이거나 버퍼가 말라붙은 경우 — 지터 여유를 두고 다시 시작
+    startAt = now + VOICE_JITTER_SEC;
+  } else if (startAt > now + VOICE_MAX_LEAD_SEC) {
+    // 너무 앞서 예약돼 있음(지연 누적) — 밀린 분을 버리고 현재로 당겨서 대화가 밀리지 않게
+    startAt = now + VOICE_JITTER_SEC;
+  }
+
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start(startAt);
+  voiceNextAt.set(slot, startAt + buf.duration);
+}
+
+function resetVoicePlayback() {
+  voiceNextAt.clear();
+  if (voiceCtx) {
+    voiceCtx.close().catch(() => {});
+    voiceCtx = null;
+  }
 }
 
 // 브라우저 오디오(보통 44.1k/48kHz Float32) → 서버가 기대하는 16kHz PCM16LE로 변환
@@ -592,9 +666,17 @@ async function start() {
   ws.onclose = () => { setStatus(false); log("WebSocket 연결 종료"); };
   ws.onerror = (e) => { log("WebSocket 에러: " + JSON.stringify(e)); };
   ws.onmessage = (event) => {
+    // 통화를 켜면 서버가 바이너리(상대방 목소리)도 보낸다 — JSON.parse에 넘기면 깨지므로 먼저 분기
+    if (event.data instanceof ArrayBuffer) {
+      playVoiceFrame(event.data);
+      return;
+    }
     const data = JSON.parse(event.data);
     if (data.type === "partial") renderPartial(data);
     else if (data.type === "final") renderFinal(data);
+    else if (data.type === "voice_ready") {
+      log(`🔊 통화 참여됨 (내 슬롯=${data.slot}, 현재 ${data.participants}명) — 하울링 방지를 위해 헤드폰을 써주세요`);
+    }
     else if (data.type === "session_end") {
       log("✅ 서버가 잔여 버퍼 처리 완료 — 세션 정상 종료");
       ws.close();
@@ -628,6 +710,7 @@ function stop() {
   if (sourceNode) sourceNode.disconnect();
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
   if (audioContext) audioContext.close();
+  resetVoicePlayback();  // 통화 재생 컨텍스트와 발신자별 타임라인 정리
 
   // 바로 끊지 않고 "end"를 보내서 서버가 잔여 버퍼(마지막 발언)를 처리하게 함.
   // 서버가 session_end로 응답하면 onmessage에서 소켓을 닫는다.
