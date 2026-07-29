@@ -180,6 +180,13 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
                         continue
                     if not decision or decision.workspace_id != workspace_uuid:
                         continue
+                    # [참고 - 지수 리뷰] Decision 모델엔 category_id 컬럼이 없어서
+                    # content_chunk처럼 Postgres에서 2차 category 검증을 할 수 없다.
+                    # category 스코핑은 search_hybrid() 호출 시 Chroma where 필터
+                    # 하나에만 의존한다 - indexer.index_decisions()가 category_id를
+                    # 정확히 넣고 있어서 지금은 안전하지만, MVP가 워크스페이스당
+                    # 카테고리 1개뿐이라 실질적 위험이 낮은 것도 있다. 카테고리가
+                    # 여러 개로 늘어나면 Decision에 category_id 컬럼 추가를 재검토할 것.
                     if decision.status != "active":
                         # superseded/cancelled된 결정은 이제 유효하지 않으므로 근거로 안 씀
                         continue
