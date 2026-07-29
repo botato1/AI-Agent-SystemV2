@@ -260,8 +260,12 @@ class RealtimeSTTSession:
                 seg["speaker"] = speaker_label
 
         if self.recorder is not None:
-            # NAS 위 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로
-            await loop.run_in_executor(None, self.recorder.add_chunk, audio, precise_segments, offset_sec)
+            # NAS 위 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로.
+            # speaker를 함께 넘겨 각자 PC 모드에서 참가자별 트랙을 따로 남기게 한다
+            # (믹스본은 목소리가 겹쳐 있어 회의 후 재전사에 쓸 수 없음).
+            await loop.run_in_executor(
+                None, self.recorder.add_chunk, audio, precise_segments, offset_sec, speaker_label
+            )
 
         logger.info(
             f"🎙️ [{self.session_id}] 청크 처리 완료 "

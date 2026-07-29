@@ -78,6 +78,125 @@ def _merge_adjacent_turns(tracks: list[dict]) -> list[dict]:
     return merged
 
 
+async def _transcribe_turns(
+    app_state, meeting_id: str, turns: list[dict],
+    audio_of: "callable", initial_prompt: str | None,
+) -> list[dict]:
+    """
+    화자 턴 목록을 받아 각 턴의 오디오만 잘라 정밀 전사한다.
+
+    audio_of(turn) -> (오디오 배열, 샘플레이트): 턴이 어느 오디오에서 나왔는지는
+    호출부가 결정한다(공용 마이크는 회의 오디오 하나, 각자 PC는 화자별 트랙).
+    """
+    loop = asyncio.get_event_loop()
+
+    def _transcribe_clip(clip: np.ndarray) -> list:
+        segments, _info = app_state.stt_model.transcribe(
+            clip,
+            language=WHISPER_LANGUAGE,
+            beam_size=PRECISE_BEAM_SIZE,
+            vad_filter=True,
+            initial_prompt=initial_prompt,
+            condition_on_previous_text=False,
+        )
+        return list(segments)
+
+    refined: list[dict] = []
+    for i, turn in enumerate(turns, 1):
+        start, end = turn["start"], turn["end"]
+        if end - start < MIN_TURN_SEC:
+            continue
+        audio, sample_rate = audio_of(turn)
+        if audio is None:
+            continue
+        clip = audio[int(start * sample_rate): int(end * sample_rate)]
+        if len(clip) == 0:
+            continue
+
+        engine_segments = await loop.run_in_executor(None, _transcribe_clip, clip)
+        text = " ".join(seg.text.strip() for seg in engine_segments).strip()
+        if not text:
+            continue
+
+        refined.append({
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "text": text,
+            "speaker": turn["speaker"],
+            "confident": all(
+                seg.avg_logprob >= CONF_AVG_LOGPROB_THRESHOLD
+                and seg.no_speech_prob <= CONF_NO_SPEECH_THRESHOLD
+                for seg in engine_segments
+            ),
+            "user_edited": False,
+        })
+        if i % 20 == 0:
+            logger.info(f"🔬 [{meeting_id}] 턴 전사 진행 {i}/{len(turns)}")
+    return refined
+
+
+async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> dict:
+    """
+    "각자 PC" 모드 재분석 — 화자분리 없이 전사만 다시 돌린다.
+
+    화자는 이미 확정돼 있으므로, 실시간 세그먼트의 시간·화자 정보를 턴으로 재사용하고
+    **참가자별 트랙**에서 오디오를 잘라 정밀 모델로 다시 전사한다.
+    믹스본(audio.wav)을 쓰면 안 되는 이유: 여러 목소리가 겹쳐 있어서, 각자의 깨끗한
+    스트림으로 뽑은 실시간 결과보다 오히려 나빠질 수 있다.
+
+    트랙이 없는 회의(이 기능 이전에 녹음된 것)는 재전사를 건너뛴다.
+    """
+    tracks_meta = meta.get("speaker_tracks") or {}
+    if not tracks_meta:
+        logger.info(f"↩️ [{meeting_id}] 각자 PC 모드 — 참가자별 트랙이 없어 재전사 생략(옛 회의)")
+        meta["refined"] = True
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return meta
+
+    # 화자별 트랙을 미리 한 번씩만 읽어둔다 (턴마다 파일을 여는 건 낭비)
+    tracks: dict[str, tuple] = {}
+    for speaker, filename in tracks_meta.items():
+        path = os.path.join(meeting_dir, filename)
+        if not os.path.isfile(path):
+            logger.warning(f"⚠️ [{meeting_id}] 트랙 파일 없음: {filename} — 이 화자는 실시간 결과 유지")
+            continue
+        audio, sample_rate = sf.read(path, dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        tracks[speaker] = (audio, sample_rate)
+
+    realtime_segments = meta.get("segments", [])
+    turns = _merge_adjacent_turns([
+        {"start": s["start"], "end": s["end"], "speaker": s.get("speaker")}
+        for s in realtime_segments if s.get("speaker") in tracks
+    ])
+    if not turns:
+        logger.info(f"↩️ [{meeting_id}] 각자 PC 모드 — 재전사할 턴이 없음")
+        meta["refined"] = True
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return meta
+
+    logger.info(f"🔬 [{meeting_id}] 각자 PC 모드 재전사 시작 (화자 {len(tracks)}명 / 턴 {len(turns)}개)")
+    refined_segments = await _transcribe_turns(
+        app_state, meeting_id, turns,
+        audio_of=lambda t: tracks.get(t["speaker"], (None, REALTIME_SAMPLE_RATE)),
+        initial_prompt=build_initial_prompt(list(tracks.keys())),
+    )
+    refined_segments.sort(key=lambda s: s["start"])
+
+    meta["realtime_segments"] = realtime_segments
+    meta["segments"] = refined_segments
+    meta["refined"] = True
+    meta["refined_at"] = datetime.now(timezone.utc).isoformat()
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"✅ [{meeting_id}] 각자 PC 모드 재전사 완료 (segments={len(refined_segments)})")
+    return meta
+
+
 async def _refine(meeting_id: str, app_state) -> dict | None:
     meeting_dir = os.path.join(MEETINGS_DIR, meeting_id)
     meta_path = os.path.join(meeting_dir, "transcript.json")
@@ -91,14 +210,11 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         logger.info(f"↩️ [{meeting_id}] 이미 재분석 완료된 회의 — 건너뜀")
         return meta
     if meta.get("speaker_mode") == "group":
-        # "각자 PC" 모드 — 오디오(믹싱본)는 있지만, 참가자가 이미 자기 이름으로
-        # 접속해 화자가 확정돼 있음. 여기서 pyannote 화자분리를 돌리면 오히려
-        # 익명 라벨(SPEAKER_00 등)로 덮어써서 이미 정확한 정보를 퇴화시키므로 생략.
-        logger.info(f"↩️ [{meeting_id}] 각자 PC 모드 회의 — 화자 재분석 생략(이미 확정된 화자)")
-        meta["refined"] = True
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-        return meta
+        # "각자 PC" 모드 — 참가자가 이미 자기 이름으로 접속해 화자가 확정돼 있으므로
+        # pyannote 화자분리는 돌리지 않는다(익명 라벨로 덮어쓰면 정확한 정보가 퇴화).
+        # 대신 참가자별 트랙으로 전사만 다시 돌려 텍스트 품질을 끌어올린다 —
+        # 실시간은 빠른 모델(turbo)로 뽑은 잠정본이기 때문.
+        return await _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state)
 
     wav_path = os.path.join(meeting_dir, meta.get("audio_file", "audio.wav"))
     audio, sample_rate = sf.read(wav_path, dtype="float32")
@@ -129,52 +245,15 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     turns = _merge_adjacent_turns(diarization_tracks)
     logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 병합 후 {len(turns)}개, 턴별 전사 시작")
 
-    # 2. 턴별 정밀 전사
+    # 2. 턴별 정밀 전사 (각자 PC 모드와 같은 헬퍼를 씀 — 차이는 오디오 출처뿐)
     # 최종 회의록이 되는 경로라 인식 힌트를 여기에도 적용한다. 등록 프로필이 있으면
     # 그 이름들이 곧 참석자이므로 힌트에 넣고, 없으면 용어만 들어간다.
     enrolled_names = list(np.load(profiles_path).files) if enrolled_count else []
-    initial_prompt = build_initial_prompt(enrolled_names)
-
-    def _transcribe_clip(clip: np.ndarray) -> list:
-        segments, _info = app_state.stt_model.transcribe(
-            clip,
-            language=WHISPER_LANGUAGE,
-            beam_size=PRECISE_BEAM_SIZE,
-            vad_filter=True,
-            initial_prompt=initial_prompt,
-            condition_on_previous_text=False,
-        )
-        return list(segments)
-
-    refined_segments: list[dict] = []
-    for i, turn in enumerate(turns, 1):
-        turn_start, turn_end = turn["start"], turn["end"]
-        if turn_end - turn_start < MIN_TURN_SEC:
-            continue
-        clip = audio[int(turn_start * sample_rate): int(turn_end * sample_rate)]
-        if len(clip) == 0:
-            continue
-
-        engine_segments = await loop.run_in_executor(None, _transcribe_clip, clip)
-        text = " ".join(seg.text.strip() for seg in engine_segments).strip()
-        if not text:
-            continue
-
-        confident = all(
-            seg.avg_logprob >= CONF_AVG_LOGPROB_THRESHOLD
-            and seg.no_speech_prob <= CONF_NO_SPEECH_THRESHOLD
-            for seg in engine_segments
-        )
-        refined_segments.append({
-            "start": round(turn_start, 2),
-            "end": round(turn_end, 2),
-            "text": text,
-            "speaker": turn["speaker"],
-            "confident": confident,
-            "user_edited": False,
-        })
-        if i % 20 == 0:
-            logger.info(f"🔬 [{meeting_id}] 턴 전사 진행 {i}/{len(turns)}")
+    refined_segments = await _transcribe_turns(
+        app_state, meeting_id, turns,
+        audio_of=lambda _turn: (audio, sample_rate),  # 공용 마이크는 회의 오디오 하나뿐
+        initial_prompt=build_initial_prompt(enrolled_names),
+    )
 
     # 3. 사전 등록 프로필이 있으면 익명 라벨(SPEAKER_00 등) → 실제 이름으로 매핑
     if enrolled_count:

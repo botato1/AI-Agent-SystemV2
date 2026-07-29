@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import time
 import wave
@@ -14,6 +15,12 @@ from ..core.config import logger, MEETINGS_DIR, REALTIME_SAMPLE_RATE
 # 서버가 도중에 죽으면 최대 N-1청크 분량의 JSON이 유실될 수 있지만, WAV에는 오디오가
 # 남아있어 재분석으로 복구 가능하므로 허용 가능한 트레이드오프.
 _JSON_SAVE_EVERY_N_CHUNKS = 5
+
+
+def _track_filename(speaker: str) -> str:
+    """화자 이름으로 안전한 트랙 파일명을 만든다 (경로 구분자·특수문자 제거)."""
+    safe = re.sub(r"[^\w가-힣]", "_", speaker).strip("_") or "unknown"
+    return f"track_{safe}.wav"
 
 
 class MeetingRecord:
@@ -57,6 +64,9 @@ class MeetingRecord:
             "speaker_mode": speaker_mode,  # enrolled(사전등록) | auto(자동감지) | group(각자 PC)
             "refined": False,              # C-4 정밀 재분석 완료 여부 (후속 작업에서 사용)
             "audio_file": "audio.wav",
+            # 각자 PC 모드에서만 채워짐: {화자: 트랙 파일명}. 정밀 재분석이 겹치지 않은
+            # 개별 트랙으로 재전사할 때 쓴다 (없으면 재전사를 건너뜀 — 옛 회의 호환).
+            "speaker_tracks": {},
             "segments": [],
         }
 
@@ -66,6 +76,10 @@ class MeetingRecord:
 
         self._wav = None
         self._mix_buffer: np.ndarray | None = None
+        # 참가자별 원본 트랙 (믹싱 모드 전용): 화자 → 회의 시작 기준 절대 위치에 놓인 오디오.
+        # 믹스본은 여러 목소리가 겹쳐 있어서 회의 후 재전사에 쓰면 오히려 실시간 결과보다
+        # 나빠질 수 있다. 각자의 깨끗한 스트림을 따로 남겨둬야 정밀 재분석이 의미를 갖는다.
+        self._tracks: dict[str, np.ndarray] = {}
         if mixed_audio:
             self._mix_buffer = np.zeros(0, dtype=np.float32)
         else:
@@ -109,11 +123,16 @@ class MeetingRecord:
             return
         np.savez(os.path.join(self.dir, "profiles.npz"), **profiles)
 
-    def add_chunk(self, audio: np.ndarray, segments: list[dict], absolute_offset_sec: float | None = None) -> None:
+    def add_chunk(
+        self, audio: np.ndarray, segments: list[dict],
+        absolute_offset_sec: float | None = None, speaker: str | None = None,
+    ) -> None:
         """
         확정된 청크 하나의 오디오와 세그먼트들을 저장. (블로킹 I/O — executor에서 호출할 것)
         absolute_offset_sec: 믹싱 모드에서 이 오디오를 회의 시작 기준 몇 초 지점에
         합산할지. 겹치는 구간은 파형을 더해서(mix) 동시 발화도 반영됨.
+        speaker: 믹싱 모드에서 이 오디오가 누구 것인지. 주면 참가자별 트랙에도 따로 쌓는다
+        (회의 후 재전사는 겹치지 않은 개별 트랙을 써야 실시간 결과보다 나아진다).
         """
         if self._finalized:
             return
@@ -123,6 +142,15 @@ class MeetingRecord:
             if end_sample > len(self._mix_buffer):
                 self._mix_buffer = np.pad(self._mix_buffer, (0, end_sample - len(self._mix_buffer)))
             self._mix_buffer[start_sample:end_sample] += audio
+
+            if speaker:
+                track = self._tracks.get(speaker)
+                if track is None:
+                    track = np.zeros(0, dtype=np.float32)
+                if end_sample > len(track):
+                    track = np.pad(track, (0, end_sample - len(track)))
+                track[start_sample:end_sample] += audio
+                self._tracks[speaker] = track
         elif self._wav is not None:
             pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
             self._wav.writeframes(pcm16.tobytes())
@@ -174,12 +202,17 @@ class MeetingRecord:
             self._wav.close()
         elif self._mix_buffer is not None and len(self._mix_buffer) > 0:
             # 스트리밍 append 없이 메모리에 모아뒀던 믹싱 결과를 한 번에 파일로 씀
-            with wave.open(os.path.join(self.dir, "audio.wav"), "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(REALTIME_SAMPLE_RATE)
-                pcm16 = np.clip(self._mix_buffer * 32768.0, -32768, 32767).astype(np.int16)
-                wf.writeframes(pcm16.tobytes())
+            self._write_wav("audio.wav", self._mix_buffer)
+            # 참가자별 트랙도 함께 저장 — 회의 후 재전사는 목소리가 겹치지 않은
+            # 개별 트랙을 써야 실시간 결과(각자 깨끗한 스트림으로 뽑은 것)보다 나아진다.
+            for speaker, buffer in self._tracks.items():
+                if len(buffer) == 0:
+                    continue
+                filename = _track_filename(speaker)
+                self._write_wav(filename, buffer)
+                self._meta["speaker_tracks"][speaker] = filename
+            if self._tracks:
+                logger.info(f"💾 참가자별 트랙 {len(self._meta['speaker_tracks'])}개 저장: {self.meeting_id}")
 
         if not self._meta["segments"]:
             # 접속만 하고 발화 없이 끝난 세션 — 빈 회의 폴더가 계속 쌓이지 않게 정리
@@ -194,6 +227,14 @@ class MeetingRecord:
             f"💾 회의록 저장 완료: {self.meeting_id} "
             f"(status={status}, segments={len(self._meta['segments'])})"
         )
+
+    def _write_wav(self, filename: str, buffer: np.ndarray) -> None:
+        """float32 버퍼를 16kHz mono PCM16 WAV로 저장."""
+        with wave.open(os.path.join(self.dir, filename), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(REALTIME_SAMPLE_RATE)
+            wf.writeframes(np.clip(buffer * 32768.0, -32768, 32767).astype(np.int16).tobytes())
 
     def _save_json(self) -> None:
         path = os.path.join(self.dir, "transcript.json")
