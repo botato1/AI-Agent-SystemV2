@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
+from backend.modules.rag.document_loader import load_document
 from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
@@ -224,7 +225,8 @@ def save_summary_as_document(
     short_summary: str,
     discussion_points: list[str],
 ):
-    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤 meeting_summaries에 연결한다.
+    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤
+    청킹+임베딩(ChromaDB)까지 마치고 meeting_summaries에 연결한다.
 
     부가 기능이라 실패해도 예외를 밖으로 던지지 않는다 — 이미 저장된 요약/결정사항/할일까지
     실패 처리되는 걸 막기 위함. 실패 시 None을 반환하고 로그만 남긴다.
@@ -258,8 +260,24 @@ def save_summary_as_document(
             file_size_bytes=len(content_bytes),
             sha256_hash=hashlib.sha256(content_bytes).hexdigest(),
             version_group_id=uuid.uuid4(),
-            analysis_status="completed",
+            analysis_status="pending",
         )
+
+        chunks = [
+            {"style": "title", "content": f"{title} 회의 요약", "page_number": 1},
+            {"style": "heading", "content": "전체 요약", "page_number": 1},
+            {"style": "body", "content": full_summary, "page_number": 1},
+            {"style": "heading", "content": "핵심 요약", "page_number": 1},
+            {"style": "body", "content": short_summary, "page_number": 1},
+            {"style": "heading", "content": "논의 사항", "page_number": 1},
+            {"style": "body", "content": "\n".join(f"- {p}" for p in discussion_points), "page_number": 1},
+        ]
+        load_result = load_document(db, workspace_file.id, chunks=chunks)
+        if load_result.get("status") == "success":
+            file_crud.update_analysis_status(db, workspace_file.id, "completed")
+        else:
+            file_crud.update_analysis_status(db, workspace_file.id, "failed", error=str(load_result))
+            print(f"[meeting_service] 요약 문서 임베딩 실패 (meeting_id={meeting_id}): {load_result}")
 
         meeting_crud.update_summary_file(db, meeting_id, workspace_file.id)
         return workspace_file
@@ -270,7 +288,7 @@ def save_summary_as_document(
         return None
     
 def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, category_id: str) -> None:
-    """run_meeting_postprocess 실행 후 완료되면 워크스페이스 멤버에게 알림."""
+    """run_meeting_postprocess 실행 후 완료되면 요약을 문서로 저장하고 워크스페이스 멤버에게 알림."""
     result = run_meeting_postprocess(
         meeting_id=meeting_id, workspace_id=workspace_id, category_id=category_id,
     )
@@ -281,6 +299,20 @@ def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, ca
     try:
         meeting = meeting_crud.get_meeting(db, uuid.UUID(meeting_id))
         title = meeting.title if meeting else "회의"
+
+        if meeting:
+            save_summary_as_document(
+                db,
+                meeting_id=meeting.id,
+                workspace_id=meeting.workspace_id,
+                category_id=meeting.category_id,
+                uploaded_by=meeting.started_by,
+                title=title,
+                full_summary=result.get("full_summary", ""),
+                short_summary=result.get("short_summary", ""),
+                discussion_points=result.get("discussion_points", []),
+            )
+
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
             if not notification_crud.is_notification_enabled(
                 db, uuid.UUID(workspace_id), member.user_id, "meeting_summary_ready",
