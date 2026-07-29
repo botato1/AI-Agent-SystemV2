@@ -6,16 +6,16 @@
 1순위: 1-1 Case 3 (decision 대비 모순)
 2순위: 1-2 모순 (문서 대비 모순)
 3순위: 1-1 Case 0 (결정 리마인더)
-4순위: 1-1 Case 4 (반복 논의 알림)
-5순위: 1-2 문서 추천
+4순위: 1-2 문서 추천
+
+[수정] 반복 논의 알림(구 Case 4)은 기능 자체를 없애기로 해서 우선순위에서 제외.
 """
 
 _PRIORITY_ORDER = [
     ("decision_judgment", "3"),   # 1순위: decision 대비 모순
     ("document_judgment", "contradiction"),  # 2순위: 문서 대비 모순
     ("decision_judgment", "0"),   # 3순위: 결정 리마인더
-    ("decision_judgment", "4"),   # 4순위: 반복 논의 알림
-    ("document_judgment", "recommendation"),  # 5순위: 문서 추천
+    ("document_judgment", "recommendation"),  # 4순위: 문서 추천
 ]
 
 
