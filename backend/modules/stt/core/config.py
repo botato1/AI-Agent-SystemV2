@@ -92,9 +92,20 @@ PRECISE_BEAM_SIZE = WHISPER_BEAM_SIZE
 # 실시간 자막은 어차피 잠정 표시이고 몇 초 뒤 확정본으로, 회의 후엔 재분석본으로 대체되므로
 # 이 구간의 1.35%p를 내주고 6.6배 응답성을 얻는 편이 낫다고 판단.
 #
-# ⚠️ 이 트레이드오프는 "회의록을 정밀 재분석이 다시 만들어준다"는 전제에 기댄다.
-# 재분석이 없는 경로(현재 각자 PC 모드)에서는 turbo 결과가 그대로 최종본이 되므로 주의.
-REALTIME_FINAL_USES_FAST_MODEL = True
+# ⛔ 2026-07-29: 실제 회의 음성으로 검증한 결과 False로 되돌림.
+#
+# AI Hub 평가셋(일반 회의 음성)에서는 1.35%p 차이였지만, 정작 우리 회의에서 중요한
+# **팀 용어**에서 turbo가 확실히 뒤졌다. 같은 오디오(참가자 트랙)를 둘로 전사한 결과:
+#     large-v3 : "임베딩 처리하고 있습니다 ... 웹소켓 재연결 로직"
+#     turbo    : "인베딩 처리하고 있습니다 ... 랩소켓 재연결 로직"
+# 전문용어 인식이 이 제품의 차별점이라, 여기서 지는 건 6.6배 속도로도 상쇄가 안 된다.
+#
+# 응답성 손해가 생각보다 작다는 점도 고려했다 — 회의 중 "실시간으로 흐르는" 느낌은
+# 1초 주기 잠정 전사(partial, turbo)가 이미 담당하고, 확정본은 그걸 뒤에서 교정하는
+# 역할이라 몇 초 늦어도 체감이 크지 않다.
+#
+# True로 켜면 실시간 확정도 turbo가 담당한다(속도 우선이 필요할 때).
+REALTIME_FINAL_USES_FAST_MODEL = os.getenv("REALTIME_FINAL_USES_FAST_MODEL", "0").strip().lower() not in ("0", "false", "no")
 
 # 신뢰도 게이팅 임계값 (이 기준 미달이면 모순 감지 엔진으로 안 보내고 보류)
 #
@@ -169,9 +180,19 @@ REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정
 INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "0").strip().lower() not in ("0", "false", "no")
 TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
 
-# LoRA 파인튜닝 어댑터(finetune/stt/train_lora.py 결과물) 경로 — 설정 시 정밀(Precise) 모델에만
-# 적용됨(어댑터가 large-v3 기준으로 학습됐고, fast 모델은 turbo라 구조가 다름).
-# 검증 전 임시 기능이라 기본값은 비활성(None) — 프로덕션 동작에 영향 없음.
+# LoRA 파인튜닝 어댑터 경로 — 설정 시 정밀(Precise) 모델에만 적용됨
+# (어댑터가 large-v3 기준으로 학습됐고, fast 모델은 turbo라 구조가 다름).
+#
+# ⛔ 2026-07-29: 쓰지 않기로 결론. 파인튜닝은 다섯 번 시도해 모두 성과가 없었다.
+#   v4 (large-v3, AI Hub 5K)         : CER 11.66% → 11.18% (0.48%p)
+#   v5 (large-v3, 25K + MLP까지)      : CER 12.96% — 오히려 악화
+#   ghost613/...turbo-korean         : CER 30.82% — 사용 불가
+#   o0dimplz0o/...Zeroth-KO-v2       : CER 12.00% — turbo 순정(12.15%)과 노이즈 차
+#   그리고 결정적으로, 팀 용어가 잔뜩 든 실제 회의 음성을 순정 large-v3와 v4 어댑터로
+#   각각 전사해보니 **출력이 글자 하나까지 완전히 동일**했다. 어댑터가 실제 음성에서
+#   아무것도 바꾸지 않는다는 뜻 — AI Hub에서 보이던 0.48%p조차 실사용에선 나타나지 않는다.
+#
+# 기본값 None 유지(=미적용). 재실험할 때만 환경변수로 켤 것.
 LORA_ADAPTER_PATH = os.getenv("LORA_ADAPTER_PATH")
 
 # ──────────────────────────────────────────
