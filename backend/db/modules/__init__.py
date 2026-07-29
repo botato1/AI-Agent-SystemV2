@@ -20,6 +20,7 @@ from .code import CodeAnalysis, CodeFact, CodeSymbol
 from .content_chunk import ContentChunk
 from .similarity import FileSimilarity
 from .meeting import Task, Decision, Meeting, MeetingSegment, MeetingSummary
+from .history import RelatedHistoryMatch
 from .contradiction import ChangeSummaryDraft, Contradiction, ContradictionResolution
 from .ai_chat import AiChatMessage, AiChatSession, AiMessageSource
 from .notification import Notification
@@ -35,6 +36,7 @@ __all__ = [
     "ContentChunk",
     "FileSimilarity",
     "Meeting", "MeetingSegment", "MeetingSummary", "Decision", "Task",
+    "RelatedHistoryMatch",
     "Contradiction", "ContradictionResolution", "ChangeSummaryDraft",
     "AiChatSession", "AiChatMessage", "AiMessageSource",
     "Notification",
