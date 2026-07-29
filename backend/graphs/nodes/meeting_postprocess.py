@@ -131,12 +131,10 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         # 3. 요약 + 결정사항 + 할 일 — llm_extractor.extract()로 LLM 호출 한 번에 통합 추출
         #    (기존엔 이 노드가 자체 프롬프트로 요약/추출을 따로 호출했는데, 승주가 이미
         #    설계해둔 llm_extractor.extract()와 별개로 돌고 있었음 - 여기로 통합)
+        #    dict가 아닌 topic/action_item 방어는 extract() 내부(status 검증 루프 이전)에서
+        #    처리한다 - 지수 리뷰 반영: 여기서 필터링하면 이미 extract() 내부에서 먼저
+        #    죽은 뒤라 아무 소용이 없었음.
         extraction = llm_extractor.extract(full_transcript)
-        # LLM이 배열 안에 dict가 아닌 값을 섞어 보낼 수 있으므로 여기서 걸러낸다
-        # (호출부에서 다시 .get()을 부르면 AttributeError로 노드 전체가 죽는 걸 방지 -
-        #  기존 _extract_decisions_and_tasks가 하던 방어를 그대로 유지).
-        extraction["topics"] = [t for t in extraction["topics"] if isinstance(t, dict)]
-        extraction["action_items"] = [t for t in extraction["action_items"] if isinstance(t, dict)]
 
         summary_row = meeting_crud.upsert_summary(
             db,
