@@ -1,8 +1,8 @@
 # backend/graphs/nodes/ai_chat_answer.py
 
 # 채팅방별 개인 AI Chat 세션에서 질문에 답하는 노드.
-# 문서(DOCUMENT_COLLECTION)+회의(MEETING_COLLECTION)를 RAG로 검색해서
-# 근거 기반 답변을 생성한다.
+# 문서(DOCUMENT_COLLECTION)+회의(MEETING_COLLECTION)+결정사항(DECISION_COLLECTION)을
+# RAG로 검색해서 근거 기반 답변을 생성한다.
 #
 # 주의: 이 노드는 DB에 아무것도 쓰지 않는다. 채팅 메시지/근거자료 저장은
 # 답변 생성이 성공한 뒤 라우터가 ai_chat_crud.add_ai_exchange()로
@@ -14,9 +14,15 @@ import uuid
 import httpx
 
 from backend.db.crud import content_chunk_crud
+from backend.db.modules import Decision
 from backend.db.session import SessionLocal
 from backend.graphs.states.ai_chat_state import AIChatState
-from backend.modules.rag.chroma_client import DOCUMENT_COLLECTION, MEETING_COLLECTION, search_hybrid
+from backend.modules.rag.chroma_client import (
+    DECISION_COLLECTION,
+    DOCUMENT_COLLECTION,
+    MEETING_COLLECTION,
+    search_hybrid,
+)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
@@ -33,7 +39,7 @@ NO_RESULTS_ANSWER = "업로드된 자료에서 관련 내용을 찾지 못했습
 LLM_FAILURE_ANSWER = "지금은 답변을 생성할 수 없습니다. 잠시 후 다시 시도해주세요."
 SEARCH_FAILURE_ANSWER = "지금은 검색 시스템에 문제가 있어 답변을 생성할 수 없습니다. 잠시 후 다시 시도해주세요."
 
-_ANSWER_PROMPT = """당신은 팀 워크스페이스에 업로드된 문서와 회의 내용을 바탕으로 질문에 답하는 도우미입니다.
+_ANSWER_PROMPT = """당신은 팀 워크스페이스에 업로드된 문서, 회의 내용, 확정된 결정사항을 바탕으로 질문에 답하는 도우미입니다.
 
 [근거 자료]
 {context}
@@ -49,14 +55,18 @@ _ANSWER_PROMPT = """당신은 팀 워크스페이스에 업로드된 문서와 �
 
 
 def merge_and_rank_candidates(
-    doc_results: list[dict], meeting_results: list[dict], top_k: int = TOP_K_FINAL
+    doc_results: list[dict],
+    meeting_results: list[dict],
+    decision_results: list[dict] | None = None,
+    top_k: int = TOP_K_FINAL,
 ) -> list[dict]:
-    """문서/회의 검색 결과를 score 기준으로 병합 정렬한다.
+    """문서/회의/결정사항 검색 결과를 score 기준으로 병합 정렬한다.
 
     search_hybrid()는 collection_name에 컬렉션 하나만 받을 수 있어
-    문서/회의를 각각 따로 검색한 뒤 여기서 합친다.
+    문서/회의/결정사항을 각각 따로 검색한 뒤 여기서 합친다.
+    decision_results는 선택값 — 생략하면 기존 문서/회의 2종 병합과 동일하게 동작한다.
     """
-    combined = list(doc_results) + list(meeting_results)
+    combined = list(doc_results) + list(meeting_results) + list(decision_results or [])
     combined.sort(key=lambda r: r.get("score", 0.0), reverse=True)
     return combined[:top_k]
 
@@ -129,11 +139,15 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
             query_text=user_message, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=MEETING_COLLECTION,
         )
+        decision_results = search_hybrid(
+            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            top_k=TOP_K_PER_COLLECTION, collection_name=DECISION_COLLECTION,
+        )
     except Exception as e:
         print(f"[ai_chat_answer] 검색 실패: {repr(e)}")
-        doc_results, meeting_results = [], []
+        doc_results, meeting_results, decision_results = [], [], []
 
-    candidates = merge_and_rank_candidates(doc_results, meeting_results, top_k=TOP_K_FINAL)
+    candidates = merge_and_rank_candidates(doc_results, meeting_results, decision_results, top_k=TOP_K_FINAL)
     candidates = filter_by_relevance(candidates)
 
     if not candidates:
@@ -154,8 +168,24 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
                 for row in content_chunk_crud.list_rag_searchable_chunk_files(db, workspace_uuid)
             }
 
-            resolved = []
+            # (candidate, kind, chunk_또는_decision) — decision은 content_chunks에 없어서
+            # 완전히 다른 테이블/조건으로 역참조해야 한다 (chroma_id로 못 찾음).
+            resolved: list[tuple[dict, str, object]] = []
             for candidate in candidates:
+                if candidate.get("collection") == DECISION_COLLECTION:
+                    decision_id_str = candidate.get("document_id") or candidate.get("id")
+                    try:
+                        decision = db.get(Decision, uuid.UUID(decision_id_str))
+                    except (TypeError, ValueError):
+                        continue
+                    if not decision or decision.workspace_id != workspace_uuid:
+                        continue
+                    if decision.status != "active":
+                        # superseded/cancelled된 결정은 이제 유효하지 않으므로 근거로 안 씀
+                        continue
+                    resolved.append((candidate, "decision", decision))
+                    continue
+
                 chunk = content_chunk_crud.get_chunk_by_chroma_id(db, candidate["id"])
                 if chunk is None:
                     # ChromaDB엔 있는데 Postgres 쪽 원본 청크가 없는 경우(고아 데이터) — 스킵
@@ -168,7 +198,7 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
                     # 요청 범위와 다른 워크스페이스/카테고리이거나, 원본 파일이 삭제/구버전/
                     # 미완료 분석 상태인 청크는 근거로 쓰지 않는다.
                     continue
-                resolved.append((candidate, chunk))
+                resolved.append((candidate, "content_chunk", chunk))
         finally:
             db.close()
     except Exception as e:
@@ -187,7 +217,14 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
             "retrieved_sources": [],
         }
 
-    context_texts = [chunk.chunk_text for _, chunk in resolved]
+    context_texts = []
+    for _, kind, obj in resolved:
+        if kind == "decision":
+            text = obj.decision_text if not obj.reason else f"{obj.decision_text}\n(결정 이유: {obj.reason})"
+            context_texts.append(text)
+        else:
+            context_texts.append(obj.chunk_text)
+
     prompt = build_answer_prompt(context_texts, chat_history, user_message)
     answer = _call_llm_answer(prompt)
 
@@ -199,16 +236,24 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
             "error": "LLM 호출 실패",
         }
 
-    sources = [
-        {
-            "source_type": "content_chunk",
-            "file_id": chunk.file_id,
-            "chunk_id": chunk.id,
-            "similarity_score": clamp_similarity_score(candidate.get("score")),
-            "display_order": i,
-        }
-        for i, (candidate, chunk) in enumerate(resolved)
-    ]
+    sources = []
+    for i, (candidate, kind, obj) in enumerate(resolved):
+        score = clamp_similarity_score(candidate.get("score"))
+        if kind == "decision":
+            sources.append({
+                "source_type": "decision",
+                "decision_id": obj.id,
+                "similarity_score": score,
+                "display_order": i,
+            })
+        else:
+            sources.append({
+                "source_type": "content_chunk",
+                "file_id": obj.file_id,
+                "chunk_id": obj.id,
+                "similarity_score": score,
+                "display_order": i,
+            })
 
     return {
         "answer": answer,
