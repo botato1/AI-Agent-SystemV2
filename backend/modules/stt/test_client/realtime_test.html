@@ -683,7 +683,16 @@ async function start() {
     }
   };
 
-  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // 통화를 켰으면 재생 컨텍스트를 여기서(=사용자 클릭 핸들러 안에서) 만든다.
+  // 첫 수신 프레임에서 늦게 만들면 사용자 제스처 밖이라 브라우저가 suspended로 둘 수 있음.
+  if (voiceCallInput.checked) ensureVoiceContext();
+
+  // 통화 시 스피커 소리가 마이크로 되돌아가는 걸 줄이려면 에코 제거를 명시해야 한다
+  // (기본값에 의존하지 않음). 다만 브라우저 에코 제거는 WebRTC 재생 경로 기준이라
+  // Web Audio로 튼 소리에는 잘 안 걸린다 — 헤드폰 안내가 여전히 필요.
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
   audioContext = new AudioContext();
   sourceNode = audioContext.createMediaStreamSource(mediaStream);
 

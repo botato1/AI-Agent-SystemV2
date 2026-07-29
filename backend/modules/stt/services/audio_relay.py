@@ -48,6 +48,9 @@ class VoiceRoom:
         # 참가자키 → (WebSocket, 발신자 인덱스)
         self._members: dict[str, tuple[WebSocket, int]] = {}
         self._free_slots: list[int] = list(range(_MAX_PARTICIPANTS))
+        # 참가자키 → 진행 중인 전송 태스크. 실시간 오디오는 밀린 프레임을 쌓아봐야
+        # 지연만 누적되므로, 직전 전송이 안 끝났으면 이번 프레임을 버리는 데 쓴다.
+        self._inflight: dict[str, asyncio.Task] = {}
 
     @property
     def size(self) -> int:
@@ -57,7 +60,11 @@ class VoiceRoom:
         """통화 참여. 부여된 발신자 인덱스를 반환하고, 자리가 없으면 None."""
         existing = self._members.get(participant_key)
         if existing is not None:
-            # 재연결 — 소켓만 갈아끼우고 인덱스는 유지해서 수신 측 버퍼가 리셋되지 않게 함
+            # 같은 이름으로 이미 들어와 있음(브라우저 탭 두 개 등) — 소켓만 최신 것으로
+            # 갈아끼우고 슬롯은 유지한다. 수신 측이 슬롯별로 재생 버퍼를 들고 있어서
+            # 번호가 바뀌면 버퍼가 새로 잡히기 때문.
+            # (끊김 후 재연결은 이 경로가 아니다 — 연결 종료 시 finally에서 leave()가
+            #  이미 멤버를 지우므로, 재접속은 아래의 새 참가자 경로를 타고 새 슬롯을 받는다)
             _, slot = existing
             self._members[participant_key] = (websocket, slot)
             return slot
@@ -82,32 +89,43 @@ class VoiceRoom:
         _, slot = self._members.pop(participant_key)
         self._free_slots.append(slot)
         self._free_slots.sort()
+        # 아직 안 끝난 전송이 있으면 취소 — 이미 나간 사람에게 계속 보내려 매달릴 이유가 없다
+        pending = self._inflight.pop(participant_key, None)
+        if pending is not None and not pending.done():
+            pending.cancel()
         logger.info(f"🔇 [{self.session_id}] 통화 퇴장: {participant_key} (슬롯 {slot} 반납, 남은 {self.size}명)")
 
-    async def broadcast(self, sender_key: str, pcm: bytes) -> None:
+    async def _send(self, key: str, websocket: WebSocket, payload: bytes) -> None:
+        """전송 실패(이미 끊긴 소켓 등)는 삼킨다 — 릴레이 실패가 호출부를 깨뜨리면 안 된다."""
+        try:
+            await websocket.send_bytes(payload)
+        except Exception as exc:
+            logger.debug(f"🔇 [{self.session_id}] 음성 전달 실패({key}) — 무시하고 계속: {exc!r}")
+
+    def broadcast_nowait(self, sender_key: str, pcm: bytes) -> None:
         """
-        발신자를 뺀 나머지 참가자에게 오디오를 전달.
+        발신자를 뺀 나머지 참가자에게 오디오를 전달. **기다리지 않는다.**
+
+        await로 전송을 기다리면 수신자 한 명이 느릴 때(소켓 버퍼가 참) 그 사람이
+        드레인될 때까지 발신자의 수신 루프까지 멈춘다 — 느린 참가자 하나가 방 전체를
+        막는 구조가 된다. 실시간 오디오는 밀린 프레임을 쌓아봐야 지연만 누적되므로,
+        직전 전송이 아직 안 끝난 상대에게는 이번 프레임을 그냥 버린다(큐잉 대신 드롭).
 
         자기 목소리를 되돌려주면 하울링이 생기므로 발신자는 반드시 제외한다.
-        전송 실패(이미 끊긴 소켓 등)는 무시한다 — 통화가 안 되는 것보다 전사가
-        멈추는 게 더 큰 문제라, 릴레이 실패가 STT 루프를 깨뜨리면 안 된다.
         """
         entry = self._members.get(sender_key)
         if entry is None:
             return
         _, sender_slot = entry
 
-        targets = [(key, ws) for key, (ws, _) in self._members.items() if key != sender_key]
-        if not targets:
-            return
-
         payload = bytes([sender_slot]) + pcm
-        results = await asyncio.gather(
-            *(ws.send_bytes(payload) for _, ws in targets), return_exceptions=True
-        )
-        for (key, _), result in zip(targets, results):
-            if isinstance(result, Exception):
-                logger.debug(f"🔇 [{self.session_id}] 음성 전달 실패({key}) — 무시하고 계속: {result!r}")
+        for key, (websocket, _) in self._members.items():
+            if key == sender_key:
+                continue
+            prev = self._inflight.get(key)
+            if prev is not None and not prev.done():
+                continue  # 아직 밀려 있음 — 이 프레임은 버린다
+            self._inflight[key] = asyncio.create_task(self._send(key, websocket, payload))
 
 
 def get_room(app_state, session_id: str) -> VoiceRoom:

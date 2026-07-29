@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -90,6 +91,46 @@ async def _finalize_abnormal(
     logger.info(f"⏸️ 연결 끊김({cause}): {session_id}/{participant_key} — {RECONNECT_GRACE_SEC}초 안에 재접속하면 회의가 이어짐")
 
 
+# 수신 루프와 전사를 잇는 큐의 상한(프레임 수). 브라우저가 약 85ms 단위로 보내므로
+# 512면 약 43초치 — 전사가 일시적으로 밀려도 흡수되고, 그 이상 밀리면 오래된 오디오를
+# 붙잡고 있어봐야 회의 진행을 못 따라가므로 버린다.
+_AUDIO_QUEUE_MAX = 512
+
+
+async def _stt_worker(websocket: WebSocket, session, audio_q: asyncio.Queue) -> None:
+    """
+    전사 전담 태스크 — 수신 루프에서 분리한 이유가 핵심이다.
+
+    전사를 수신 루프 안에서 await하면, 청크 확정(process_chunk, 약 1.7초) 동안
+    websocket.receive()를 못 불러서 그 참가자의 오디오를 읽지도 남에게 릴레이하지도
+    못한다. 통화에서는 청크마다 목소리가 1.7초씩 통째로 끊기는 현상으로 나타난다.
+    큐로 분리하면 전사가 아무리 오래 걸려도 수신·릴레이는 계속 돈다.
+
+    None을 받으면 잔여 버퍼를 마지막 청크로 처리하고 종료한다(회의 종료 신호).
+    이 태스크만 partial/final을 전송하므로, 한 소켓에 두 코루틴이 동시에 쓰는 상황은
+    생기지 않는다(session_end는 이 태스크가 끝난 뒤 수신 루프가 보냄).
+    """
+    while True:
+        item = await audio_q.get()
+        if item is None:
+            result = await session.flush_remaining()
+            if result:
+                await websocket.send_json(result)
+            return
+
+        session.push_audio(item)
+
+        # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
+        partial = await session.maybe_stream_partial()
+        if partial:
+            await websocket.send_json(partial)
+
+        if session.should_flush():
+            chunk, offset_sec = session.pop_chunk()
+            result = await session.process_chunk(chunk, offset_sec)
+            await websocket.send_json(result)
+
+
 async def _run_session(
     websocket: WebSocket, session, recorder, session_id: str,
     participant_key: str, active_key: str, mode: str, voice: bool = False,
@@ -107,6 +148,10 @@ async def _run_session(
     # 끊긴 경우 등) 정리 없이 빠져나가 통화방에 유령 참가자가 남기 때문.
     # 다만 finally가 참조해야 하므로 변수 자체는 try 밖에서 선언한다.
     room = None
+    # 수신 루프는 "읽기 → 릴레이 → 큐 적재"만 하고, 전사는 워커가 큐를 소비하며 담당한다
+    # (전사를 수신 루프에서 await하면 그동안 통화 오디오가 끊긴다 — _stt_worker 참고)
+    audio_q: asyncio.Queue = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
+    worker = asyncio.create_task(_stt_worker(websocket, session, audio_q))
 
     logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
 
@@ -134,9 +179,10 @@ async def _run_session(
 
             if message.get("text") is not None:
                 if message["text"] == "end":
-                    result = await session.flush_remaining()
-                    if result:
-                        await websocket.send_json(result)
+                    # 워커에게 종료를 알리고 잔여 버퍼 처리가 끝날 때까지 기다린다.
+                    # 여기서 기다려야 아래 session_end가 마지막 final보다 먼저 나가지 않는다.
+                    await audio_q.put(None)
+                    await worker
 
                     is_meeting_over = _leave(websocket.app.state, session_id, participant_key)
 
@@ -160,22 +206,17 @@ async def _run_session(
             if not data:
                 continue
 
-            # 통화 릴레이는 전사 경로보다 먼저, 도착 즉시 흘려보낸다.
-            # (전사용 청킹은 발화가 끊길 때까지 2~28초를 모으므로 통화에 쓸 수 없음)
+            # 통화 릴레이는 전사보다 먼저, 도착 즉시. 기다리지 않으므로(broadcast_nowait)
+            # 느린 수신자가 있어도 이 루프는 안 멈춘다.
             if room is not None:
-                await room.broadcast(participant_key, data)
+                room.broadcast_nowait(participant_key, data)
 
-            session.push_audio(data)
-
-            # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
-            partial = await session.maybe_stream_partial()
-            if partial:
-                await websocket.send_json(partial)
-
-            if session.should_flush():
-                chunk, offset_sec = session.pop_chunk()
-                result = await session.process_chunk(chunk, offset_sec)
-                await websocket.send_json(result)
+            try:
+                audio_q.put_nowait(data)
+            except asyncio.QueueFull:
+                # 전사가 크게 밀린 상황. 오래된 오디오를 붙잡고 있어봐야 회의를 못 따라가므로
+                # 버린다 — 통화(릴레이)는 위에서 이미 처리됐으니 대화 자체는 계속된다.
+                logger.warning(f"⚠️ [{session_id}/{participant_key}] 전사 큐 포화 — 오디오 프레임 버림")
 
     except WebSocketDisconnect:
         # 결과 전송(send) 도중 클라이언트가 끊긴 경우 — receive 경로와 동일하게 처리
@@ -185,6 +226,16 @@ async def _run_session(
         logger.exception(f"❌ 실시간 STT 세션 에러 [{session_id}]")
         await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "에러", participant_key)
     finally:
+        # 정상 종료(end)면 이미 끝나 있고, 끊김/에러면 여기서 정리해야 태스크가 안 남는다.
+        if not worker.done():
+            worker.cancel()
+        # 워커 안에서 난 예외가 조용히 묻히지 않게 회수 (취소는 정상 경로라 무시)
+        with contextlib.suppress(asyncio.CancelledError):
+            try:
+                await worker
+            except Exception:
+                logger.exception(f"❌ 전사 워커 비정상 종료 [{session_id}/{participant_key}]")
+
         # 어떤 경로로 끝나든(정상/끊김/에러) 레지스트리에서 제거.
         # 같은 키로 새 연결이 이미 등록됐을 수 있으므로 내 세션일 때만 제거.
         if websocket.app.state.active_sessions.get(active_key) is session:
