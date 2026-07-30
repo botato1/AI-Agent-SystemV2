@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Meeting,
+  MeetingStart,
   startMeetingApi,
+  beginScheduledMeetingApi,
   pauseMeetingApi,
   resumeMeetingApi,
   mapSpeakerNamesApi,
   renameMeetingApi,
+  setMeetingAttendeesApi,
 } from "../services/meeting";
 
 export type LiveMeetingStatus =
@@ -190,28 +193,9 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     silentGain.connect(audioContext.destination);
   }
 
-  async function start(title: string, relatedRoomId?: string) {
-    if (status === "recording" || status === "connecting") return;
-
-    setErrorMessage(null);
-    setStatus("connecting");
-    setSegments([]);
-    setPartial({ confirmed: "", tentative: "" });
-    setContradictionAlerts([]);
-    isIntentionalCloseRef.current = false;
-    reconnectDeadlineRef.current = null;
-    clearReconnectTimer();
-
-    const res = await startMeetingApi(workspaceId, title, relatedRoomId);
-    if (res.status !== "success" || !res.meeting) {
-      setStatus("error");
-      setErrorMessage(res.message);
-      return;
-    }
-
-    // 재연결 시에도 그대로 재사용할 값 — React state(meeting)는 비동기라 클로저에서
-    // 참조하면 오래된 값을 읽을 위험이 있어, 여기 지역 변수로 직접 들고 있는다.
-    const meetingData = res.meeting;
+  // 회의 생성(신규 시작이든, 예약된 회의를 시작하든)이 끝난 뒤 실제로 WS를 붙이고 마이크를
+  // 켜는 부분 - start()와 beginScheduled() 둘 다 이 지점부터 완전히 동일하게 동작한다.
+  function beginSession(meetingData: MeetingStart) {
     setMeeting(meetingData);
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || window.location.origin;
@@ -336,6 +320,52 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     connect();
   }
 
+  function resetSessionState() {
+    setErrorMessage(null);
+    setStatus("connecting");
+    setSegments([]);
+    setPartial({ confirmed: "", tentative: "" });
+    setContradictionAlerts([]);
+    isIntentionalCloseRef.current = false;
+    reconnectDeadlineRef.current = null;
+    clearReconnectTimer();
+  }
+
+  async function start(title: string, relatedRoomId?: string, attendeeIds?: string[]) {
+    if (status === "recording" || status === "connecting") return;
+    resetSessionState();
+
+    const res = await startMeetingApi(workspaceId, title, relatedRoomId);
+    if (res.status !== "success" || !res.meeting) {
+      setStatus("error");
+      setErrorMessage(res.message);
+      return;
+    }
+
+    // 시작 전 미리 고른 참석자가 있으면 회의 생성 직후 바로 지정 - 녹음 자체를
+    // 막을 필요는 없으니 결과를 기다리지 않는다 (실패해도 회의 상세에서 나중에 다시 지정 가능)
+    if (attendeeIds && attendeeIds.length > 0) {
+      setMeetingAttendeesApi(workspaceId, res.meeting.id, attendeeIds);
+    }
+
+    beginSession(res.meeting);
+  }
+
+  // 예약해둔 회의를 실제 녹음으로 전환한다 - 참석자는 예약 시점에 이미 지정돼 있으므로 다시 넘길 필요 없음
+  async function beginScheduled(meetingId: string) {
+    if (status === "recording" || status === "connecting") return;
+    resetSessionState();
+
+    const res = await beginScheduledMeetingApi(workspaceId, meetingId);
+    if (res.status !== "success" || !res.meeting) {
+      setStatus("error");
+      setErrorMessage(res.message);
+      return;
+    }
+
+    beginSession(res.meeting);
+  }
+
   async function pause() {
     if (status !== "recording" || !meeting) return;
     const res = await pauseMeetingApi(workspaceId, meeting.id);
@@ -436,6 +466,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     contradictionAlerts,
     errorMessage,
     start,
+    beginScheduled,
     pause,
     resume,
     stop,
