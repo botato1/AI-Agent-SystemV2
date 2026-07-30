@@ -19,6 +19,7 @@ class Meeting(Base):
     related_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     source_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     title = Column(String(200), nullable=False)
+    title_is_auto = Column(Boolean, nullable=False, server_default="false")
     location = Column(String(200), nullable=True)
     topic = Column(String(200), nullable=True)
     recording_mode = Column(String(20), nullable=False, server_default="single_device")
