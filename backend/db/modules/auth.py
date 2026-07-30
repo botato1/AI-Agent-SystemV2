@@ -49,3 +49,15 @@ class RefreshToken(Base):
     revoked_at = Column(DateTime(timezone=True), nullable=True)
     device_info = Column(String(255), nullable=True)
     created_at = created_at_col()
+
+class UserVoiceProfile(Base):
+    """화자 인식용 목소리 프로필. 실제 음성 데이터/지문은 STT 서버(8002)가 관리하고,
+    여기는 우리 User와 8002의 speaker_name 매핑만 저장한다."""
+
+    __tablename__ = "user_voice_profiles"
+
+    id = uuid_pk()
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, unique=True)
+    speaker_name = Column(String(100), nullable=False)
+    detected_text = Column(Text, nullable=True)
+    registered_at = created_at_col()
