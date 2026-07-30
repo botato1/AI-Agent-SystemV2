@@ -65,10 +65,13 @@ WHISPER_LANGUAGE = "ko"
 WHISPER_BEAM_SIZE = 1
 
 if STT_ENGINE == "qwen":
-    # 잠정/확정 전사에 같은 모델을 쓴다 — Whisper large-v3보다 빨라서(실측 2~4배)
-    # 잠정용 경량 모델을 따로 둘 이유가 없다.
     WHISPER_MODEL_SIZE = os.getenv("QWEN_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B-hf")
-    WHISPER_MODEL_FAST = WHISPER_MODEL_SIZE
+    # 잠정(partial) 전사는 1초마다 버퍼 전체(최대 28초)를 다시 훑는다. 여기에 확정용
+    # 2B 모델을 쓰면 처리가 오디오 유입 속도를 못 따라가 전사 큐가 포화되고 프레임이
+    # 버려진다(실측 확인 — 확정 지연 1.5~3.5초, 큐 포화 경고 폭주).
+    # Whisper에서 확정=large-v3 / 잠정=turbo로 나눴던 것과 같은 이유다. 잠정 텍스트는
+    # 어차피 확정 패스가 덮어쓰므로 정확도를 조금 양보해도 된다.
+    WHISPER_MODEL_FAST = os.getenv("QWEN_ASR_MODEL_FAST", "Qwen/Qwen3-ASR-0.6B-hf")
     WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE
 elif STT_ENGINE == "transformers":
     WHISPER_MODEL_SIZE = "openai/whisper-large-v3"

@@ -322,13 +322,16 @@ class RealtimeSTTSession:
             return None
         if self._buffer_duration_sec() < REALTIME_PARTIAL_MIN_SEC:
             return None
-        self._last_partial_at = now
 
         buffer = self._materialize_buffer()
         loop = asyncio.get_event_loop()
         segments = await loop.run_in_executor(
             None, self._transcribe, self.fast_model, buffer, FAST_BEAM_SIZE
         )
+        # 주기는 전사가 '끝난' 시점부터 잰다. 시작 시점에 찍으면 전사가 주기보다
+        # 오래 걸릴 때 끝나자마자 다음 잠정이 곧바로 돌아 확정 전사가 굶는다
+        # (실측: 잠정이 워커를 독점해 전사 큐가 포화되고 오디오 프레임이 버려짐).
+        self._last_partial_at = time.monotonic()
         text = " ".join(seg["text"] for seg in segments).strip()
         words = text.split()
 

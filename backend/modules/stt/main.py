@@ -52,10 +52,12 @@ async def lifespan(app: FastAPI):
 
     # 실시간 회의 STT용 Fast Pass 모델 (2-pass 구조, 저지연 초안 전사 담당)
     if WHISPER_MODEL_FAST == WHISPER_MODEL_PRECISE:
-        # qwen 엔진처럼 잠정/확정에 같은 모델을 쓰는 경우 — 같은 가중치를 두 번
-        # 올리면 GPU 메모리만 두 배로 먹는다. 인스턴스를 공유한다.
+        # 잠정/확정에 같은 모델을 쓰도록 설정된 경우 — 같은 가중치를 두 번 올리면
+        # GPU 메모리만 두 배로 먹는다. 인스턴스를 공유한다.
+        # ⚠️ 성능상 권장하지 않는다. 잠정 전사는 1초마다 버퍼 전체를 다시 훑기
+        #    때문에 확정용 모델을 그대로 쓰면 전사 큐가 포화된다(실측 확인).
         app.state.stt_model_fast = app.state.stt_model
-        logger.info("♻️  잠정 전사에 확정 모델 인스턴스 재사용 (동일 모델)")
+        logger.info("♻️  잠정 전사에 확정 모델 인스턴스 재사용 (동일 모델 — 지연 주의)")
     else:
         logger.info(f"🧠 STT 모델 로딩 중... 엔진={STT_ENGINE} / 모델={WHISPER_MODEL_FAST} / {DEVICE}")
         app.state.stt_model_fast = _load_whisper_model(WHISPER_MODEL_FAST)
