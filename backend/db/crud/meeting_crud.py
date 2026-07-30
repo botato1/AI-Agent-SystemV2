@@ -5,7 +5,8 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
-
+from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from backend.db.modules import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary, User
 
 
@@ -320,3 +321,129 @@ def get_attendees(db: Session, meeting_id: uuid.UUID) -> list[tuple[MeetingAtten
         .filter(MeetingAttendee.meeting_id == meeting_id)
         .all()
     )
+
+def get_segment(db: Session, segment_id: uuid.UUID) -> Optional[MeetingSegment]:
+    return db.query(MeetingSegment).filter(MeetingSegment.id == segment_id).first()
+
+def list_recent_meetings(db: Session, workspace_id: uuid.UUID, limit: int = 10) -> list[Meeting]:
+    return (
+        db.query(Meeting)
+        .filter(Meeting.workspace_id == workspace_id, Meeting.deleted_at.is_(None))
+        .order_by(Meeting.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def count_meetings(db: Session, workspace_id: uuid.UUID) -> int:
+    return (
+        db.query(Meeting)
+        .filter(Meeting.workspace_id == workspace_id, Meeting.deleted_at.is_(None))
+        .count()
+    )
+
+def get_last_meeting_at(db: Session, workspace_id: uuid.UUID) -> Optional[datetime]:
+    row = (
+        db.query(Meeting)
+        .filter(
+            Meeting.workspace_id == workspace_id,
+            Meeting.deleted_at.is_(None),
+            Meeting.started_at.isnot(None),
+        )
+        .order_by(Meeting.started_at.desc())
+        .first()
+    )
+    return row.started_at if row else None
+
+
+def get_week_meeting_stats(db: Session, workspace_id: uuid.UUID, week_start: datetime, week_end: datetime) -> dict:
+    meetings = (
+        db.query(Meeting)
+        .filter(
+            Meeting.workspace_id == workspace_id,
+            Meeting.deleted_at.is_(None),
+            Meeting.started_at >= week_start,
+            Meeting.started_at < week_end,
+        )
+        .all()
+    )
+    return {
+        "count": len(meetings),
+        "duration_ms": sum(m.duration_ms or 0 for m in meetings),
+    }
+
+def get_meeting_by_source_file_id(db: Session, file_id: uuid.UUID) -> Optional[Meeting]:
+    """RAG 검색 결과(청크의 file_id)로 그 회의를 역추적할 때 사용."""
+    return (
+        db.query(Meeting)
+        .filter(Meeting.source_file_id == file_id, Meeting.deleted_at.is_(None))
+        .first()
+    )
+
+
+def search_meetings_by_text(db: Session, workspace_id: uuid.UUID, q: str) -> list[Meeting]:
+    """제목/주제/요약에 대한 단순 텍스트 매칭."""
+    pattern = f"%{q}%"
+    return (
+        db.query(Meeting)
+        .outerjoin(MeetingSummary, MeetingSummary.meeting_id == Meeting.id)
+        .filter(
+            Meeting.workspace_id == workspace_id,
+            Meeting.deleted_at.is_(None),
+            or_(
+                Meeting.title.ilike(pattern),
+                Meeting.topic.ilike(pattern),
+                MeetingSummary.short_summary.ilike(pattern),
+            ),
+        )
+        .all()
+    )
+
+
+def list_meetings_by_date_range(
+    db: Session, workspace_id: uuid.UUID,
+    date_from: Optional[datetime] = None, date_to: Optional[datetime] = None,
+) -> list[Meeting]:
+    query = db.query(Meeting).filter(Meeting.workspace_id == workspace_id, Meeting.deleted_at.is_(None))
+    if date_from:
+        query = query.filter(Meeting.started_at >= date_from)
+    if date_to:
+        query = query.filter(Meeting.started_at <= date_to)
+    return query.order_by(Meeting.started_at.desc()).all()
+
+
+def list_upcoming_meetings(db: Session, workspace_id: uuid.UUID) -> list[Meeting]:
+    return (
+        db.query(Meeting)
+        .filter(
+            Meeting.workspace_id == workspace_id,
+            Meeting.deleted_at.is_(None),
+            Meeting.status == "scheduled",
+        )
+        .order_by(Meeting.scheduled_at.asc())
+        .all()
+    )
+
+def add_segment_safe(db: Session, meeting_id: uuid.UUID, content: str, start_ms: int, end_ms: int, **fields) -> MeetingSegment:
+    """여러 WS 연결이 동시에 세그먼트를 저장해도(각자 PC 모드) segment_index 충돌 없이 삽입한다.
+    충돌 시 최대 5회 재시도."""
+    for _ in range(5):
+        current_max = (
+            db.query(func.max(MeetingSegment.segment_index))
+            .filter(MeetingSegment.meeting_id == meeting_id)
+            .scalar()
+        )
+        next_index = (current_max + 1) if current_max is not None else 0
+        try:
+            row = MeetingSegment(
+                meeting_id=meeting_id, content=content, start_ms=start_ms, end_ms=end_ms,
+                segment_index=next_index, **fields,
+            )
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return row
+        except IntegrityError:
+            db.rollback()
+            continue
+    raise RuntimeError(f"세그먼트 저장 재시도 초과 (meeting_id={meeting_id})")
