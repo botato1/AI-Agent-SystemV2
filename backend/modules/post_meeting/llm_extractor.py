@@ -81,8 +81,6 @@ def extract(transcript: str) -> dict:
     실패 시 모든 값이 비어있는 안전한 기본값을 반환한다 (파이프라인 중단 방지).
     """
     prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript=transcript)
-    # 회의 전체 요약/결정 추출은 비동기 처리 - 처음부터 Model2(Qwen3-8B)로 감
-    raw = _call_ollama(prompt, timeout=300.0, model=OLLAMA_MODEL_HEAVY)  # 긴 회의 전체를 읽어야 하니 타임아웃 넉넉히
 
     fallback = {
         "full_summary": "",
@@ -92,14 +90,25 @@ def extract(transcript: str) -> dict:
         "action_items": [],
     }
 
-    try:
-        json_str = _extract_json_block(raw)
-        # strict=False: LLM이 문자열 값 안에 이스케이프 안 된 제어문자(줄바꿈 등)를
-        # 넣는 경우가 있어, JSON 표준상 금지된 이런 문자도 관대하게 허용한다.
-        parsed = json.loads(json_str, strict=False)
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"[llm_extractor] JSON 파싱 실패, 빈 결과로 폴백: {e}\n원본 응답: {raw[:500]}")
-        return fallback
+    # [수정] LLM이 가끔 JSON 문법을 깨는 노이즈(엉뚱한 따옴표/구두점 등)를 내는 게
+    # 실측으로 반복 확인됨 - 다시 호출하면 대부분 성공하므로, 사람이 스크립트를
+    # 수동 재실행하던 걸 함수 내부 재시도로 자동화. post-meeting은 회의당 1회
+    # 비동기로 도는 파이프라인이라 재시도 지연은 문제되지 않음.
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        # 회의 전체 요약/결정 추출은 비동기 처리 - 처음부터 Model2(Qwen3-8B)로 감
+        raw = _call_ollama(prompt, timeout=300.0, model=OLLAMA_MODEL_HEAVY)  # 긴 회의 전체를 읽어야 하니 타임아웃 넉넉히
+        try:
+            json_str = _extract_json_block(raw)
+            # strict=False: LLM이 문자열 값 안에 이스케이프 안 된 제어문자(줄바꿈 등)를
+            # 넣는 경우가 있어, JSON 표준상 금지된 이런 문자도 관대하게 허용한다.
+            parsed = json.loads(json_str, strict=False)
+            break
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"[llm_extractor] JSON 파싱 실패 ({attempt}/{max_attempts}), 재시도: {e}")
+            if attempt == max_attempts:
+                print(f"[llm_extractor] {max_attempts}회 모두 실패, 빈 결과로 폴백\n원본 응답: {raw[:500]}")
+                return fallback
 
     # 최소 형태 검증 - 키가 없으면 기본값으로 채움
     for key, default in fallback.items():
