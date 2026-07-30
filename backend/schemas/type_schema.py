@@ -212,6 +212,7 @@ MeetingInputType = Literal[
 ]
 
 MeetingStatus = Literal[
+    "scheduled",
     "created",
     "recording",
     "paused",
