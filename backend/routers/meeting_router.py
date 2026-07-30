@@ -196,7 +196,7 @@ async def upload_meeting_api(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
-        title=title,
+        title=resolved_title,
         title_is_auto=title_is_auto,
         location=location,
         topic=topic,
