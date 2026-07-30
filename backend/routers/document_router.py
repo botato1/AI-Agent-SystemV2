@@ -2,7 +2,9 @@
 
 from typing import Literal
 from uuid import UUID
+from pathlib import Path
 
+from fastapi.responses import FileResponse
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query, BackgroundTasks, status
 from sqlalchemy.orm import Session
 
@@ -275,4 +277,28 @@ def get_document_figures_api(
             {"figure_id": f.id, "page_number": f.page_number, "type": f.figure_type, "image_url": f.image_url}
             for f in figures
         ]
+    )
+
+# 원본 파일 다운로드/스트리밍
+@router.get("/{document_id}/file")
+def get_document_file_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    workspace_file = _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    file_path = Path(workspace_file.storage_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 파일을 찾을 수 없습니다.",
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type=workspace_file.mime_type or "application/octet-stream",
+        filename=workspace_file.original_filename,
     )
