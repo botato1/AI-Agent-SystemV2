@@ -1,6 +1,10 @@
 # backend/services/auth_service.py
 
+import os
 import uuid
+from typing import Optional
+
+import httpx
 from pathlib import Path
 
 from datetime import datetime, timedelta, timezone
@@ -32,6 +36,7 @@ from backend.schemas.auth_schema import (
     PasswordResetConfirmResponse,
     AccountDeleteRequest,
     AccountDeleteResponse,
+    VoiceProfileResponse,
 )
 
 from backend.db.crud import auth_crud, workspace_crud
@@ -487,6 +492,7 @@ PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
 ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MAX_PROFILE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
 
+STT_SERVER_BASE_URL = os.getenv("STT_SERVER_BASE_URL", "http://61.81.98.82:8002")
 
 def _delete_old_profile_image(old_image_url: str | None) -> None:
     """기존 프로필 이미지 파일을 삭제한다. 실패해도 무시(치명적이지 않음)."""
@@ -543,3 +549,146 @@ def update_profile_image(db: Session, access_token: str, filename: str, file_con
         message="프로필 이미지가 변경되었습니다.",
         error=None,
     )
+
+def get_voice_profile_script() -> str:
+    try:
+        response = httpx.get(f"{STT_SERVER_BASE_URL}/api/profiles/script", timeout=10.0)
+        response.raise_for_status()
+        return response.json().get("script", "")
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에서 문장을 가져오지 못했습니다.",
+        )
+
+
+def register_voice_profile(
+    db: Session, access_token: str, audio_bytes: bytes, speaker_name_override: Optional[str] = None,
+) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    if auth_crud.get_voice_profile(db, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 목소리가 등록돼 있습니다. 재등록하려면 먼저 삭제해주세요.",
+        )
+
+    params = {"speaker_name": speaker_name_override} if speaker_name_override else {}
+    try:
+        response = httpx.post(
+            f"{STT_SERVER_BASE_URL}/api/profiles",
+            params=params,
+            content=audio_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에 등록하지 못했습니다.",
+        )
+
+    if result.get("name_extraction_failed") and not speaker_name_override:
+        return VoiceProfileResponse(
+            registered=False,
+            name_extraction_failed=True,
+            detected_text=result.get("detected_text"),
+        )
+
+    speaker_name = result.get("speaker_name") or speaker_name_override
+    row = auth_crud.create_voice_profile(
+        db, user_id=user.id, speaker_name=speaker_name, detected_text=result.get("detected_text"),
+    )
+    return VoiceProfileResponse(
+        registered=True, registered_at=row.registered_at,
+        speaker_name=speaker_name, detected_text=result.get("detected_text"),
+    )
+
+
+def get_voice_profile_status(db: Session, access_token: str) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    row = auth_crud.get_voice_profile(db, UUID(user_pk))
+    if not row:
+        return VoiceProfileResponse(registered=False)
+    return VoiceProfileResponse(
+        registered=True, registered_at=row.registered_at,
+        speaker_name=row.speaker_name, detected_text=row.detected_text,
+    )
+
+
+def rename_voice_profile(db: Session, access_token: str, new_name: str) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    row = auth_crud.get_voice_profile(db, UUID(user_pk))
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="등록된 목소리가 없습니다.",
+        )
+
+    try:
+        response = httpx.patch(
+            f"{STT_SERVER_BASE_URL}/api/profiles/{row.speaker_name}/rename",
+            params={"new_name": new_name},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에서 이름 변경에 실패했습니다.",
+        )
+
+    updated = auth_crud.update_voice_profile_speaker_name(db, UUID(user_pk), new_name)
+    return VoiceProfileResponse(registered=True, registered_at=updated.registered_at, speaker_name=new_name)
+
+
+def remove_voice_profile(db: Session, access_token: str) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    row = auth_crud.get_voice_profile(db, UUID(user_pk))
+    speaker_name = row.speaker_name if row else None
+
+    auth_crud.delete_voice_profile(db, UUID(user_pk))
+
+    if speaker_name:
+        try:
+            httpx.delete(f"{STT_SERVER_BASE_URL}/api/profiles/{speaker_name}", timeout=10.0)
+        except httpx.HTTPError as e:
+            print(f"[auth_service] 8002 프로필 삭제 실패: {repr(e)}")
+
+    return VoiceProfileResponse(registered=False)
