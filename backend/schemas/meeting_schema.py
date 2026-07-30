@@ -29,7 +29,7 @@ TODO:
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -83,6 +83,7 @@ class MeetingSchema(TimestampSchema, SoftDeleteSchema):
         max_length=200,
     )
     location: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
     input_type: MeetingInputType
     status: MeetingStatus
 
@@ -259,6 +260,8 @@ class MeetingStartRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     related_room_id: Optional[UUID] = None
     location: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    recording_mode: Literal["single_device", "individual"] = "single_device"
 
 
 class MeetingResponse(TimestampSchema):
@@ -270,11 +273,14 @@ class MeetingResponse(TimestampSchema):
 
     title: str
     location: Optional[str] = None
+    topic: Optional[str] = None
+    recording_mode: str = "single_device"
     input_type: MeetingInputType
     status: MeetingStatus
 
     started_by: UUID
     started_at: Optional[datetime] = None
+    scheduled_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
 
@@ -359,6 +365,7 @@ class SpeakerLabelMappingRequest(BaseModel):
 class MeetingTitleUpdateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     location: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
 
 class MeetingAttendeeResponse(BaseModel):
     user_id: UUID
@@ -375,9 +382,47 @@ class AttendeeMappingRequest(BaseModel):
 class MeetingExportResponse(BaseModel):
     meeting_id: UUID
     title: str
+    topic: Optional[str] = None
     location: Optional[str] = None
     started_at: Optional[datetime] = None
     attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
     short_summary: Optional[str] = None
     filtered_transcript: Optional[str] = None
     segments: list[MeetingSegmentResponse] = Field(default_factory=list)
+
+class MeetingRecentItem(BaseModel):
+    id: UUID
+    title: str
+    started_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+    attendee_count: int
+    preview: Optional[str] = None
+    contradiction_count: int
+
+
+class MeetingRecentListResponse(BaseModel):
+    meetings: list[MeetingRecentItem] = Field(default_factory=list)
+    total_count: int
+
+class MeetingScheduleRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    location: Optional[str] = Field(default=None, max_length=200)
+    scheduled_at: datetime
+    attendee_ids: list[UUID] = Field(default_factory=list)
+
+
+class UpcomingMeetingItem(BaseModel):
+    id: UUID
+    title: str
+    topic: Optional[str] = None
+    location: Optional[str] = None
+    scheduled_at: datetime
+    attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+
+
+class UpcomingMeetingListResponse(BaseModel):
+    meetings: list[UpcomingMeetingItem] = Field(default_factory=list)
+
+class MeetingJoinResponse(BaseModel):
+    ws_ticket: str
