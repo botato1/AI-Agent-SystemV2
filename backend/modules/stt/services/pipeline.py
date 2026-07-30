@@ -1,7 +1,7 @@
 import asyncio
 from .stt_service import run_whisper_stt
 from .diarize_service import run_diarization
-from ..core.config import logger
+from ..core.config import logger, is_confident
 
 
 def merge_transcript_with_diarization(whisper_segments: list, diarization_tracks: list) -> list:
@@ -9,6 +9,11 @@ def merge_transcript_with_diarization(whisper_segments: list, diarization_tracks
     STT 세그먼트와 화자분리 트랙을 시간 겹침(overlap) 기준으로 병합.
     각 STT 세그먼트마다 시간상 가장 많이 겹치는 화자를 배정한다.
     배치 업로드 파이프라인과 회의 후 정밀 재분석(C-4)이 공유하는 핵심 로직.
+
+    반환 형태는 팀 공통 세그먼트 스키마를 지킨다:
+      {start, end, text, speaker, confident, user_edited}
+    실시간 경로(realtime_service)와 같은 모양이어야 모순 감지 엔진이 어느 경로로
+    만들어진 세그먼트든 동일한 필드를 참조할 수 있다.
     """
     final_result = []
     for seg in whisper_segments:
@@ -30,6 +35,7 @@ def merge_transcript_with_diarization(whisper_segments: list, diarization_tracks
             "end": end,
             "speaker": best_speaker,
             "text": text,
+            "confident": is_confident(seg.get("avg_logprob"), seg.get("no_speech_prob")),
             "user_edited": False
         })
     return final_result

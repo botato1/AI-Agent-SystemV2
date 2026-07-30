@@ -13,8 +13,7 @@ from ..core.config import (
     WHISPER_LANGUAGE,
     PRECISE_BEAM_SIZE,
     REALTIME_SAMPLE_RATE,
-    CONF_AVG_LOGPROB_THRESHOLD,
-    CONF_NO_SPEECH_THRESHOLD,
+    is_confident,
     MIN_SPEAKERS,
     build_context_hint,
 )
@@ -123,9 +122,10 @@ async def _transcribe_turns(
             "end": round(end, 2),
             "text": text,
             "speaker": turn["speaker"],
+            # 턴 하나가 여러 엔진 세그먼트로 쪼개질 수 있으므로, 하나라도 신뢰도가
+            # 낮으면 턴 전체를 저신뢰로 본다(보수적 판정).
             "confident": all(
-                seg.avg_logprob >= CONF_AVG_LOGPROB_THRESHOLD
-                and seg.no_speech_prob <= CONF_NO_SPEECH_THRESHOLD
+                is_confident(getattr(seg, "avg_logprob", None), getattr(seg, "no_speech_prob", None))
                 for seg in engine_segments
             ),
             "user_edited": False,

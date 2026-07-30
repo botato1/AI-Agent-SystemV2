@@ -21,8 +21,7 @@ from ..core.config import (
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
     REALTIME_FINAL_USES_FAST_MODEL,
-    CONF_AVG_LOGPROB_THRESHOLD,
-    CONF_NO_SPEECH_THRESHOLD,
+    is_confident,
 )
 
 
@@ -44,11 +43,15 @@ def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
 class RealtimeSTTSession:
     """
     실시간 회의 오디오를 VAD 기준으로 청크 분할해 전사하는 세션.
-    - 잠정 텍스트: 1초 주기로 Fast 모델(turbo)이 버퍼를 훑어 Local Agreement 방식으로 스트리밍
-    - 확정 텍스트: 발화가 끊긴 지점에서 청크를 확정 전사.
-      기본값은 Fast 모델(turbo) — 회의 중에는 응답성이 UX를 좌우하고, 정확도는 회의 종료 후
-      정밀 재분석(large-v3)이 최종본을 다시 만들어 책임진다(REALTIME_FINAL_USES_FAST_MODEL).
-      이 설정을 끄면 확정 전사도 Precise 모델(large-v3)이 담당한다.
+    - 잠정 텍스트: 1초 주기로 Fast 모델이 버퍼를 훑어 Local Agreement 방식으로 스트리밍.
+      화자도 함께 판정해 붙인다(_partial_speaker).
+    - 확정 텍스트: 발화가 끊긴 지점에서 Precise 모델로 확정 전사.
+      REALTIME_FINAL_USES_FAST_MODEL=1이면 확정도 Fast 모델이 담당한다(속도 우선).
+
+    Fast/Precise가 어느 모델인지는 엔진 설정에 따라 다르다 — config.py의
+    WHISPER_MODEL_FAST / WHISPER_MODEL_PRECISE 참고. Fast를 따로 두는 이유는
+    정확도가 아니라 **지연**이다: 잠정 전사는 1초마다 버퍼 전체를 다시 훑기 때문에
+    여기에 확정용 모델을 쓰면 전사 큐가 포화되고 오디오 프레임이 버려진다(실측 확인).
 
     시간(초) 고정 분할 대신 '말이 끊기는 지점'을 기준으로 잘라야
     문장이 중간에 잘려 정확도가 떨어지는 걸 방지할 수 있음.
@@ -212,12 +215,6 @@ class RealtimeSTTSession:
             for seg in segments
         ]
 
-    def _is_confident(self, seg: dict) -> bool:
-        return (
-            seg["avg_logprob"] >= CONF_AVG_LOGPROB_THRESHOLD
-            and seg["no_speech_prob"] <= CONF_NO_SPEECH_THRESHOLD
-        )
-
     def _apply_offset_and_confidence(self, segments: list[dict], offset_sec: float) -> None:
         # 공통 세그먼트 계약: {start, end, text, speaker, confident, user_edited}
         # — 정밀 재분석(refine_service) 결과와 같은 모양을 유지해야
@@ -225,7 +222,7 @@ class RealtimeSTTSession:
         for seg in segments:
             seg["start"] = round(seg["start"] + offset_sec, 2)
             seg["end"] = round(seg["end"] + offset_sec, 2)
-            seg["confident"] = self._is_confident(seg)
+            seg["confident"] = is_confident(seg.get("avg_logprob"), seg.get("no_speech_prob"))
             seg["user_edited"] = False
 
     async def process_chunk(self, audio: np.ndarray, offset_sec: float) -> dict:

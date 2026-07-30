@@ -160,6 +160,26 @@ else:
 #    "신뢰도 신호가 두 개"라고 가정하는 코드를 새로 쓰면 안 된다.
 CONF_NO_SPEECH_THRESHOLD = 0.6      # 이보다 높으면 침묵/노이즈를 잘못 들었을 가능성
 
+
+def is_confident(avg_logprob: float | None, no_speech_prob: float | None) -> bool:
+    """
+    세그먼트를 신뢰할 수 있는지 판정 — 이 판단의 **유일한** 구현.
+
+    임계값과 판정 로직을 한곳에 두는 이유: 예전엔 실시간(realtime_service), 정밀
+    재분석(refine_service), 배치 업로드(pipeline) 세 경로가 각자 판정했고 배치
+    경로는 아예 빠뜨려서 팀 공통 스키마(confident 필드)를 위반하고 있었다.
+    임계값을 조정할 때 한 곳만 고치면 나머지가 조용히 낡는 구조였다.
+
+    값이 없으면(엔진이 해당 신호를 주지 않으면) 통과시킨다 — 신호 부재를
+    '신뢰 못 함'으로 처리하면 전부 저신뢰로 표시돼 플래그가 무의미해진다.
+    (Qwen 엔진은 no_speech_prob를 내지 않아 항상 0.0이다.)
+    """
+    if avg_logprob is not None and avg_logprob < CONF_AVG_LOGPROB_THRESHOLD:
+        return False
+    if no_speech_prob is not None and no_speech_prob > CONF_NO_SPEECH_THRESHOLD:
+        return False
+    return True
+
 # VAD 기반 청크 분할 설정 (시간이 아니라 '말이 끊기는 지점' 기준으로 자름)
 REALTIME_SAMPLE_RATE = 16000
 REALTIME_MIN_CHUNK_SEC = 2      # 너무 짧은 청크는 흘려보내지 않음

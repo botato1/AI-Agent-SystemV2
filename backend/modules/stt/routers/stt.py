@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 import wave
 import json
@@ -6,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from ..services.pipeline import process_audio_pipeline
 from ..utils.file_handler import save_upload_file
-from ..core.config import UPLOAD_DIR, logger
+from ..core.config import UPLOAD_DIR, logger, STT_ENGINE, WHISPER_MODEL_PRECISE, COMPUTE_TYPE
 
 router = APIRouter()
 
@@ -32,6 +33,7 @@ async def stt_endpoint(
 ):
     """오디오 파일을 수신하여 분석(STT+화자분리)하고, 결과를 JSON 파일로 서버에 보관합니다."""
     try:
+        started = time.monotonic()
         logger.info(f"📥 새로운 오디오 업로드 수신: {file.filename}")
 
         original_filename = file.filename
@@ -89,15 +91,20 @@ async def stt_endpoint(
                 "user_edited": False,
 
                 "transcription": transcription_result,
+                # ⚠️ 이 값들은 실제 설정에서 읽는다. 예전에는 하드코딩돼 있어서
+                #    엔진을 바꿔도 "faster-whisper-large-v3"라고 보고했고,
+                #    initial_prompt_applied는 힌트를 제거한 뒤에도 계속 true였다.
+                #    프론트/모순 감지가 이 값을 근거로 판단하므로 거짓 보고는 위험하다.
                 "metadata": {
                     "duration_sec": actual_duration,
                     "original_format": original_ext,
                     "original_filename": original_filename,
-                    "model_used": "faster-whisper-large-v3",
-                    "vad_applied": True,
-                    "initial_prompt_applied": True,
-                    "total_time_sec": 0.0,
-                    "compute_type": "float16",
+                    "stt_engine": STT_ENGINE,
+                    "model_used": WHISPER_MODEL_PRECISE,
+                    "vad_applied": True,          # stt_service가 vad_filter=True로 호출
+                    "initial_prompt_applied": False,  # 배치 경로는 힌트를 쓰지 않음
+                    "total_time_sec": round(time.monotonic() - started, 2),
+                    "compute_type": COMPUTE_TYPE,
                     "original_file_url": file_url
                 }
             },
