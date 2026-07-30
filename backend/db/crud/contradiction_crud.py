@@ -11,8 +11,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
-from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution
+from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
 
 
 def make_deduplication_key(
@@ -338,3 +339,28 @@ def update_change_summary_draft(
         db.commit()
         db.refresh(row)
     return row
+
+def count_by_meeting(db: Session, meeting_id: uuid.UUID) -> int:
+    """session_meeting_id(결정 기반)와 meeting_segment_id 역추적(문서 기반) 둘 다 커버한다."""
+    return (
+        db.query(Contradiction)
+        .outerjoin(MeetingSegment, Contradiction.meeting_segment_id == MeetingSegment.id)
+        .filter(
+            or_(
+                Contradiction.session_meeting_id == meeting_id,
+                MeetingSegment.meeting_id == meeting_id,
+            )
+        )
+        .count()
+    )
+
+def count_in_range(db: Session, workspace_id: uuid.UUID, start: datetime, end: datetime) -> int:
+    return (
+        db.query(Contradiction)
+        .filter(
+            Contradiction.workspace_id == workspace_id,
+            Contradiction.detected_at >= start,
+            Contradiction.detected_at < end,
+        )
+        .count()
+    )
