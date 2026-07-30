@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.security import verify_ws_ticket
 from backend.core.ws_ticket_store import consume_ticket
-from backend.db.crud import meeting_crud, file_crud, contradiction_crud, notification_crud, workspace_crud
+from backend.db.crud import meeting_crud, file_crud, contradiction_crud, notification_crud, workspace_crud, auth_crud
 from backend.db.session import get_db, SessionLocal
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.services.stt_stream_client import SttStreamClient
@@ -29,6 +29,19 @@ MEETING_RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 _PAUSED_STREAMS: dict[uuid.UUID, asyncio.Event] = {}
+_ACTIVE_CONNECTIONS: dict[uuid.UUID, int] = {}
+
+def _register_connection(meeting_id: uuid.UUID) -> None:
+    _ACTIVE_CONNECTIONS[meeting_id] = _ACTIVE_CONNECTIONS.get(meeting_id, 0) + 1
+
+def _unregister_connection(meeting_id: uuid.UUID) -> bool:
+    """마지막 연결이면 True — 이때만 회의 종료 처리해야 한다."""
+    remaining = _ACTIVE_CONNECTIONS.get(meeting_id, 1) - 1
+    if remaining <= 0:
+        _ACTIVE_CONNECTIONS.pop(meeting_id, None)
+        return True
+    _ACTIVE_CONNECTIONS[meeting_id] = remaining
+    return False
 
 def set_stream_paused(meeting_id: uuid.UUID, paused: bool) -> None:
     """REST pause/resume 엔드포인트가 현재 열려있는 WS 스트림에 신호를 보낼 때 사용.
@@ -171,17 +184,20 @@ async def _process_segment_analysis(
                 print(f"[meeting_ws_router] decision 모순 알림 전송 실패: {repr(e)}")
 
 
-def _open_recording_file(meeting_id: uuid.UUID):
+def _open_recording_file(meeting_id: uuid.UUID, participant_name: str | None = None):
     MEETING_RECORDING_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}.pcm"
+    suffix = f"_{participant_name}" if participant_name else ""
+    path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}{suffix}.pcm"
     return open(path, "ab")
 
 def _extract_stt_confidence(seg: dict) -> float | None:
-    """avg_logprob(로그 확률)을 0~1 범위 신뢰도 점수로 변환. 없으면 None."""
     avg_logprob = seg.get("avg_logprob")
-    if avg_logprob is None:
-        return None
-    return round(math.exp(avg_logprob), 4)
+    if avg_logprob is not None:
+        return round(math.exp(avg_logprob), 4)
+    confident = seg.get("confident")
+    if confident is not None:
+        return 1.0 if confident else 0.5
+    return None
 
 def _resolve_speaker_label(db: Session, meeting_id: uuid.UUID, raw_label: str | None) -> str | None:
     """이 회의에 설정된 화자 매핑을 적용한다. PATCH /speakers가 다른 요청에서 커밋한
@@ -246,7 +262,7 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
-    meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID, next_index: int,
+    meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID,
     meeting_started_by: uuid.UUID, send_lock: asyncio.Lock, processing_lock: asyncio.Lock,
 ) -> None:
     async for data in stt_client.receive():
@@ -255,33 +271,28 @@ async def _relay_stt_to_frontend(
         if msg_type == "partial":
             async with send_lock:
                 await websocket.send_json(data)
-            
+
         elif msg_type == "final":
             for seg in data.get("final", {}).get("segments", []):
                 resolved_speaker = _resolve_speaker_label(db, meeting_id, seg.get("speaker"))
-                seg["speaker"] = resolved_speaker  # WS로 나가는 payload에도 반영
+                seg["speaker"] = resolved_speaker
                 try:
-                    segment_row = meeting_crud.add_segment(
+                    segment_row = meeting_crud.add_segment_safe(
                         db,
                         meeting_id=meeting_id,
                         content=seg.get("text", ""),
                         start_ms=int(seg["start"] * 1000),
                         end_ms=int(seg["end"] * 1000),
-                        segment_index=next_index,
                         speaker_label=resolved_speaker,
                         stt_confidence=_extract_stt_confidence(seg),
                     )
-                    next_index += 1
                 except Exception as e:
                     db.rollback()
                     print(f"[meeting_ws_router] 세그먼트 저장 실패: {repr(e)}")
                     continue
 
-                # 발화 하나 저장될 때마다 모순 탐지를 실행하고, 실제로 발견되면 WS로 실시간 push한다.
                 statement_text = (segment_row.content or "").strip()
                 if statement_text:
-                    # 모순감지+판단파이프라인은 processing_lock으로 직렬화 —
-                    # 둘 다 LLM 호출 동안 DB 커넥션을 물고 있어서 동시 실행 시 풀 고갈됨.
                     _spawn_background_task(_process_segment_analysis(
                         websocket, send_lock, processing_lock,
                         workspace_id, category_id,
@@ -329,26 +340,28 @@ async def meeting_stream_ws(
 
     await websocket.accept()
 
-    stt_client = SttStreamClient(session_id=str(meeting_id))
+    participant_name = None
+    if meeting.recording_mode == "individual":
+        user = auth_crud.get_user_by_id(db, uuid.UUID(payload["sub"]))
+        participant_name = user.display_name if user else payload["sub"]
+
+    stt_client = SttStreamClient(session_id=str(meeting_id), participant_name=participant_name)
     try:
         await stt_client.connect()
     except Exception:
         await websocket.close(code=1011)
         return
 
-    recording_file = _open_recording_file(meeting_id)
-    next_index = len(meeting_crud.get_segments(db, meeting_id))
+    recording_file = _open_recording_file(meeting_id, participant_name)
 
-    # REST pause/resume 엔드포인트가 이 스트림에 신호를 보낼 수 있게 등록.
-    # set()되면 오디오를 저장/전송하지 않고 버림 (일시정지 상태).
-    paused_event = asyncio.Event()
-    _PAUSED_STREAMS[meeting_id] = paused_event
-    send_lock = asyncio.Lock()  # 여러 백그라운드 작업이 동시에 websocket.send_json 하는 것 방지
-    processing_lock = asyncio.Lock()  # 세그먼트별 모순감지+판단파이프라인 직렬화 (DB 커넥션 풀 고갈 방지)
+    _register_connection(meeting_id)
+    paused_event = _PAUSED_STREAMS.get(meeting_id)
+    if paused_event is None:
+        paused_event = asyncio.Event()
+        _PAUSED_STREAMS[meeting_id] = paused_event
+    send_lock = asyncio.Lock()
+    processing_lock = asyncio.Lock()
 
-    # 이 등록 전(WS 핸드셰이크/STT 서버 연결 대기 중)에 /pause REST가 먼저
-    # 처리됐을 수 있다 — 그 경우 set_stream_paused는 아직 없는 이벤트를 조용히
-    # 무시하고 지나간다. 등록 직후 DB 상태를 다시 확인해 놓친 일시정지를 반영한다.
     db.expire_all()
     current_meeting = meeting_crud.get_meeting(db, meeting_id)
     if current_meeting and current_meeting.status == "paused":
@@ -360,7 +373,7 @@ async def meeting_stream_ws(
     stt_task = asyncio.create_task(
         _relay_stt_to_frontend(
             websocket, stt_client, db, meeting_id,
-            meeting.workspace_id, meeting.category_id, next_index,
+            meeting.workspace_id, meeting.category_id,
             meeting.started_by, send_lock, processing_lock,
         )
     )
@@ -372,10 +385,13 @@ async def meeting_stream_ws(
         for task in pending:
             task.cancel()
     finally:
-        _PAUSED_STREAMS.pop(meeting_id, None)
+        is_last = _unregister_connection(meeting_id)
+        if is_last:
+            _PAUSED_STREAMS.pop(meeting_id, None)
         recording_file.close()
         await stt_client.close()
-        _finalize_meeting_if_recording(db, meeting_id)
+        if is_last:
+            _finalize_meeting_if_recording(db, meeting_id)
         try:
             await websocket.close()
         except Exception:
