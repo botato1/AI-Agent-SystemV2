@@ -212,6 +212,9 @@ REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정
 # 92.8%로 올랐고 속도 비용은 0이었다. 그래서 qwen 엔진은 아래 별도 설정을 쓴다.
 INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "0").strip().lower() not in ("0", "false", "no")
 TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
+# Qwen 컨텍스트용 목록은 따로 둔다 — Whisper 프롬프트의 제약(목록형 취약성,
+# 224토큰 한계)이 Qwen에는 없어서 넓게 담는 게 이득이기 때문. terms_context.txt 헤더 참고.
+QWEN_TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms_context.txt")
 
 # ──────────────────────────────────────────
 # Qwen3-ASR 컨텍스트 바이어싱
@@ -284,19 +287,20 @@ logger.info(
 )
 
 
-def _load_prompt_terms() -> list[str]:
-    """terms.txt를 읽어 용어 목록을 반환. '#' 시작 줄은 주석(선정 근거 기록용)."""
-    if not os.path.isfile(TERMS_PATH):
-        logger.warning(f"⚠️ 용어 목록 파일 없음: {TERMS_PATH} — 인식 힌트에 용어를 넣지 않음")
+def _load_prompt_terms(path: str = None) -> list[str]:
+    """용어 목록 파일을 읽어 목록을 반환. '#' 시작 줄은 주석(선정 근거 기록용)."""
+    path = path or TERMS_PATH
+    if not os.path.isfile(path):
+        logger.warning(f"⚠️ 용어 목록 파일 없음: {path} — 인식 힌트에 용어를 넣지 않음")
         return []
-    with open(TERMS_PATH, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return [s for s in (line.strip() for line in f) if s and not s.startswith("#")]
 
 
 PROMPT_TERMS = _load_prompt_terms() if INITIAL_PROMPT_ENABLED else []
 
 # Qwen 컨텍스트는 용어 목록을 그대로 쓴다 — INITIAL_PROMPT_ENABLED와 별개로 켜진다.
-QWEN_CONTEXT_TERMS = _load_prompt_terms() if (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED) else []
+QWEN_CONTEXT_TERMS = _load_prompt_terms(QWEN_TERMS_PATH) if (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED) else []
 
 
 def build_qwen_context(speaker_names=None) -> str | None:
