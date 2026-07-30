@@ -54,6 +54,12 @@ JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v2")
 DECISION_CANDIDATE_TOP_K = int(os.getenv("DECISION_CANDIDATE_TOP_K", "15"))
 DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.3"))
 
+# [수정 - 리뷰 반영] 벡터 후보(top-15)를 전부 topic_match로 순회하면 무관한 발화 하나당
+# 최악의 경우 LLM 호출이 15번까지 순차로 늘어나 체감 지연이 커짐. 후보는 이미 벡터
+# 점수 순 정렬이므로, 상위 몇 개까지만 topic_match로 확인하고 그 안에서 못 찾으면
+# "none"으로 처리한다 (TBD - 실측 후 조정).
+TOPIC_MATCH_MAX_ATTEMPTS = int(os.getenv("TOPIC_MATCH_MAX_ATTEMPTS", "5"))
+
 # 배치1~3 학습 때 쓴 instruction 그대로 - 문구가 조금이라도 다르면 정확도가 크게 떨어짐
 JUDGMENT_STEP_INSTRUCTIONS = {
     "presents_new_value": (
@@ -203,7 +209,7 @@ def judge(
     candidates = _get_candidate_decisions(db, workspace_id, category_id, statement)
 
     decision = None
-    for candidate in candidates:
+    for candidate in candidates[:TOPIC_MATCH_MAX_ATTEMPTS]:
         if _ask_topic_match(candidate.decision_text, candidate.reason or "명시되지 않음", statement):
             decision = candidate
             break
