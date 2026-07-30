@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
-import { Meeting, MeetingStatus } from "../services/meeting";
+import { Meeting, MeetingStatus, MeetingAttendee } from "../services/meeting";
 import { ContradictionSeverity } from "../services/contradiction";
 import {
   UploadIcon,
@@ -16,9 +16,15 @@ import {
   ChevronRightIcon,
   WarningIcon,
   PencilIcon,
+  PersonIcon,
 } from "./icons";
 import ContradictionMessage from "./ContradictionMessage";
 import ChangeSummaryModal from "./ChangeSummaryModal";
+import DocumentPreviewModal from "./DocumentPreviewModal";
+import MeetingAttendeesModal from "./MeetingAttendeesModal";
+import MeetingExportModal from "./MeetingExportModal";
+import MeetingStartModal from "./MeetingStartModal";
+import { hashAvatarColor } from "../data/avatarColors";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -30,7 +36,7 @@ function severityBadge(severity: ContradictionSeverity, t: any) {
   return <span className={`flex-shrink-0 rounded-full px-1.5 py-0.5 text-[11px] ${className}`}>{label}</span>;
 }
 
-type DetailTab = "summary" | "decisions" | "script";
+type DetailTab = "summary" | "minutes" | "script";
 
 const ACCEPTED_EXTENSIONS = ".mp3,.wav,.m4a,.webm";
 const LIVE_ACTIVE_STATUSES: LiveMeetingStatus[] = [
@@ -57,9 +63,74 @@ function formatDuration(ms?: number | null): string {
   return `${mm}:${ss}`;
 }
 
+function formatDateOnly(iso?: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatTimeOnly(iso?: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// 백엔드가 아직 is_initial을 안 보내면 전부 "시작 시 참석자"로 간주 (추가된 참석자 섹션은 비어있게 됨)
+function groupAttendees(attendees: MeetingAttendee[]) {
+  return {
+    initial: attendees.filter((a) => a.is_initial !== false),
+    added: attendees.filter((a) => a.is_initial === false),
+  };
+}
+
 // STT가 준 원본 화자 라벨인지(아직 실명으로 매핑 안 됐는지) 판단
 function isRawSpeakerLabel(label: string | null | undefined): label is string {
   return !!label && /^SPEAKER[_\s]?\d+$/i.test(label.trim());
+}
+
+// 발화 한 줄 - 시간/화자이름/발언이 한 줄에 다 붙어있으면 길어질 때 줄바꿈이 지저분해지므로,
+// 아바타 + (이름·시간 헤더 / 발언 본문) 두 줄 구조로 분리한다
+function SegmentRow({
+  speakerLabel,
+  timeMs,
+  content,
+  hasContradiction,
+  t,
+}: {
+  speakerLabel: string | null | undefined;
+  timeMs: number;
+  content: string;
+  hasContradiction?: boolean;
+  t: any;
+}) {
+  const name = speakerLabel || t.speaker_unknown;
+  // 실명 매핑 안 된 화자(SPEAKER_N)는 "누군지 안다"는 인상을 주지 않게, 색깔+이니셜 대신
+  // 무채색 원 + 사람 아이콘으로 구분해서 보여준다 (Avatar.tsx가 이름 없는 사용자에 쓰는 것과 동일)
+  const isIdentified = !isRawSpeakerLabel(speakerLabel);
+  return (
+    <div className={`flex gap-2 rounded-lg ${hasContradiction ? "-mx-1.5 border border-recall-danger/30 bg-recall-danger/5 px-1.5 py-1" : ""}`}>
+      <div
+        className={`mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white ${
+          isIdentified ? "" : "bg-recall-border text-recall-textMuted"
+        }`}
+        style={isIdentified ? { backgroundColor: hashAvatarColor(name) } : undefined}
+      >
+        {isIdentified ? name.trim().charAt(0).toUpperCase() : <PersonIcon size={13} />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="flex items-baseline gap-1.5">
+          <span className={`font-medium ${isIdentified ? "text-recall-text" : "text-recall-textMuted"}`}>
+            {name}
+          </span>
+          <span className="text-xs text-recall-textMuted/70">{formatDuration(timeMs)}</span>
+          {hasContradiction && (
+            <WarningIcon size={12} className="flex-shrink-0 text-recall-danger" />
+          )}
+        </p>
+        <p className="text-recall-textMuted">{content}</p>
+      </div>
+    </div>
+  );
 }
 
 function uniqueRawSpeakerLabels(labels: (string | null | undefined)[]): string[] {
@@ -184,7 +255,7 @@ interface MeetingsPanelProps {
   livePartial: { confirmed: string; tentative: string };
   liveContradictionAlerts: ContradictionAlert[];
   liveError: string | null;
-  onStartLive: (title: string) => void;
+  onStartLive: (title: string, relatedRoomId?: string, attendeeIds?: string[]) => void;
   onPauseLive: () => void;
   onResumeLive: () => void;
   onStopLive: () => void;
@@ -300,6 +371,8 @@ export default function MeetingsPanel({
     segments,
     summary,
     decisions,
+    attendees,
+    reloadAttendees,
     isDetailLoading,
     isUploading,
     uploadAudio,
@@ -312,8 +385,11 @@ export default function MeetingsPanel({
   const {
     contradictions: workspaceContradictions,
     isLoading: isContradictionsLoading,
+    statusFilter: contradictionStatusFilter,
+    setStatusFilter: setContradictionStatusFilter,
     resolve,
     dismiss,
+    reopen,
     refresh: refreshContradictions,
     pendingSummaryFor,
     changeSummary,
@@ -336,6 +412,10 @@ export default function MeetingsPanel({
   const [isMeetingListOpen, setIsMeetingListOpen] = useState(true);
   const [isContradictionListOpen, setIsContradictionListOpen] = useState(true);
   const [expandedContradictionIds, setExpandedContradictionIds] = useState<Set<string>>(new Set());
+  const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
+  const [showAttendeesModal, setShowAttendeesModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showStartModal, setShowStartModal] = useState(false);
 
   function toggleContradictionExpanded(id: string) {
     setExpandedContradictionIds((prev) => {
@@ -402,9 +482,15 @@ export default function MeetingsPanel({
     setShowUploadModal(false);
   }
 
+  // 기본 회의 제목 - "새 녹음 1" 같은 순번 대신 날짜 기반으로 지어서, 나중에 목록에서 봤을 때
+  // 언제 한 회의인지 바로 알아볼 수 있게 한다 (필요하면 인라인 수정으로 바로 바꿀 수 있음)
+  function defaultMeetingTitle(): string {
+    const d = new Date();
+    return `${d.getMonth() + 1}월 ${d.getDate()}일 회의`;
+  }
+
   function handleStartRecording() {
-    const liveCount = realMeetings.filter((m) => m.input_type === "live_recording").length;
-    onStartLive(`새 녹음 ${liveCount + 1}`);
+    setShowStartModal(true);
   }
 
   return (
@@ -429,11 +515,11 @@ export default function MeetingsPanel({
             <button
               onClick={handleStartRecording}
               disabled={isLiveActive}
-              title={isLiveActive ? "이미 녹음이 진행 중이에요" : undefined}
+              title={isLiveActive ? "이미 진행 중인 회의가 있어요" : undefined}
               className="flex items-center gap-1 rounded-lg border border-recall-border px-2 py-1 text-xs text-recall-text hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <MicIcon size={12} />
-              새 녹음
+              새 회의
             </button>
             <button
               onClick={() => setShowUploadModal(true)}
@@ -576,16 +662,20 @@ export default function MeetingsPanel({
                   {liveStatus === "paused" ? "일시정지 중입니다." : "말씀하시면 실시간으로 자막이 표시됩니다..."}
                 </p>
               ) : (
-                <div className="space-y-2 text-base text-recall-textMuted">
+                <div className="space-y-3 text-base text-recall-textMuted">
                   <UnmappedSpeakerChips
                     labels={uniqueRawSpeakerLabels(liveSegments.map((s) => s.speaker_label))}
                     onAssign={onMapLiveSpeakers}
                   />
                   {liveSegments.map((s, i) => (
-                    <p key={i}>
-                      <span className="font-medium text-recall-text">{s.speaker_label || t.speaker_unknown}</span>{" "}
-                      {s.content}
-                    </p>
+                    <SegmentRow
+                      key={i}
+                      speakerLabel={s.speaker_label}
+                      timeMs={s.start_ms}
+                      content={s.content}
+                      hasContradiction={liveContradictionAlerts.some((a) => a.statement_text === s.content)}
+                      t={t}
+                    />
                   ))}
                   {(livePartial.confirmed || livePartial.tentative) && (
                     <p className="text-recall-textMuted">
@@ -613,15 +703,33 @@ export default function MeetingsPanel({
           </div>
         ) : (
           <>
-            <div className="mb-3">
-              <EditableMeetingTitle
-                title={selectedRealMeeting.title}
-                onRename={(title) => renameMeeting(selectedRealMeeting.id, title)}
-              />
-              <p className="text-sm text-recall-textMuted">
-                {statusBadge(selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
-                {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
-              </p>
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div>
+                <EditableMeetingTitle
+                  title={selectedRealMeeting.title}
+                  onRename={(title) => renameMeeting(selectedRealMeeting.id, title)}
+                />
+                <p className="text-sm text-recall-textMuted">
+                  {statusBadge(selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
+                  {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
+                </p>
+              </div>
+              <div className="flex flex-shrink-0 gap-1.5">
+                <button
+                  onClick={() => setShowAttendeesModal(true)}
+                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2 py-1 text-xs text-recall-text hover:bg-white/5"
+                >
+                  <PersonIcon size={12} />
+                  참석자
+                </button>
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2 py-1 text-xs text-recall-text hover:bg-white/5"
+                >
+                  <DocumentIcon size={12} />
+                  회의록 내보내기
+                </button>
+              </div>
             </div>
 
             {selectedRealMeeting.status === "created" || selectedRealMeeting.status === "processing" ? (
@@ -639,7 +747,7 @@ export default function MeetingsPanel({
                   {(
                     [
                       { key: "summary", label: t.meeting_tab_summary },
-                      { key: "decisions", label: t.meeting_tab_decisions },
+                      { key: "minutes", label: t.meeting_tab_minutes },
                       { key: "script", label: t.meeting_tab_script },
                     ] as { key: DetailTab; label: string }[]
                   ).map((tab) => (
@@ -671,32 +779,108 @@ export default function MeetingsPanel({
                             {summary.full_summary}
                           </p>
                         )}
+                        {/* 요약만 봐도 회의록처럼 결정사항까지 한눈에 보이도록, 결정사항 탭이랑
+                            별개로 여기도 축약된 형태로 같이 보여준다 */}
+                        {decisions.length > 0 && (
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                              {t.meeting_summary_key_decisions}
+                            </p>
+                            <ul className="space-y-1">
+                              {decisions.map((d) => (
+                                <li key={d.id} className="flex gap-1.5 text-sm text-recall-text">
+                                  <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-recall-textMuted" />
+                                  <span>
+                                    <span className="font-medium">{d.title}</span>
+                                    <span className="text-recall-textMuted"> — {d.decision_text}</span>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <p className="text-base text-recall-textMuted">{t.meeting_summary_not_ready}</p>
                     )
-                  ) : detailTab === "decisions" ? (
-                    decisions.length === 0 ? (
-                      <p className="text-base text-recall-textMuted">{t.meeting_no_decisions}</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {decisions.map((d) => (
-                          <div key={d.id} className="rounded-lg border border-recall-border p-2.5">
-                            <p className="text-base font-medium text-recall-text">{d.title}</p>
-                            <p className="mt-1 text-sm text-recall-textMuted">{d.decision_text}</p>
-                            {d.reason && (
-                              <p className="mt-1 text-xs text-recall-textMuted">
-                                {t.decision_reason_label} {d.reason}
+                  ) : detailTab === "minutes" ? (
+                    (() => {
+                      const { initial: initialAttendees, added: addedAttendees } = groupAttendees(attendees);
+                      return (
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-lg font-bold text-recall-text">{selectedRealMeeting.title}</p>
+                            <p className="mt-1 text-sm text-recall-textMuted">
+                              {formatDateOnly(selectedRealMeeting.started_at ?? selectedRealMeeting.created_at)} ·{" "}
+                              {formatTimeOnly(selectedRealMeeting.started_at ?? selectedRealMeeting.created_at)}
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3 border-t border-recall-border pt-3">
+                            <div>
+                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                                {t.meeting_minutes_mode_label}
+                              </p>
+                              <p className="text-sm text-recall-text">
+                                {selectedRealMeeting.is_online === true
+                                  ? t.meeting_minutes_mode_online
+                                  : selectedRealMeeting.is_online === false
+                                    ? t.meeting_minutes_mode_offline
+                                    : t.meeting_minutes_mode_unset}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                                {t.meeting_minutes_location_label}
+                              </p>
+                              <p className="text-sm text-recall-text">
+                                {selectedRealMeeting.location || t.meeting_minutes_datetime_unset}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                              {t.meeting_minutes_attendees_initial}
+                            </p>
+                            {initialAttendees.length === 0 ? (
+                              <p className="text-sm text-recall-textMuted">{t.meeting_minutes_attendees_none}</p>
+                            ) : (
+                              <p className="text-sm text-recall-text">
+                                {initialAttendees.map((a) => a.display_name).join(", ")}
+                              </p>
+                            )}
+                            <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                              {t.meeting_minutes_attendees_added}
+                            </p>
+                            {addedAttendees.length === 0 ? (
+                              <p className="text-sm text-recall-textMuted">{t.meeting_minutes_attendees_none_added}</p>
+                            ) : (
+                              <p className="text-sm text-recall-text">
+                                {addedAttendees.map((a) => a.display_name).join(", ")}
                               </p>
                             )}
                           </div>
-                        ))}
-                      </div>
-                    )
+
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                              {t.meeting_minutes_content_label}
+                            </p>
+                            {summary?.full_summary ? (
+                              <p className="whitespace-pre-line text-base text-recall-text">
+                                {summary.full_summary}
+                              </p>
+                            ) : (
+                              <p className="text-sm text-recall-textMuted">{t.meeting_minutes_content_empty}</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()
                   ) : segments.length === 0 ? (
                     <p className="text-base text-recall-textMuted">{t.meeting_no_script}</p>
                   ) : (
-                    <div className="space-y-2 text-base text-recall-textMuted">
+                    <div className="space-y-3 text-base text-recall-textMuted">
                       <UnmappedSpeakerChips
                         labels={uniqueRawSpeakerLabels(segments.map((s) => s.speaker_label))}
                         onAssign={mapSpeakerNames}
@@ -705,12 +889,13 @@ export default function MeetingsPanel({
                         .slice()
                         .sort((a, b) => a.segment_index - b.segment_index)
                         .map((s) => (
-                          <p key={s.id}>
-                            <span className="font-medium text-recall-text">
-                              {s.speaker_label || t.speaker_unknown}
-                            </span>{" "}
-                            {s.content}
-                          </p>
+                          <SegmentRow
+                            key={s.id}
+                            speakerLabel={s.speaker_label}
+                            timeMs={s.start_ms}
+                            content={s.content}
+                            t={t}
+                          />
                         ))}
                     </div>
                   )}
@@ -757,6 +942,35 @@ export default function MeetingsPanel({
             </p>
           </div>
 
+          {isViewingLive ? (
+            // 녹음 중에는 바로 결정하게 하지 않는다 - 녹음이 끝나기 전에 결정 못 하고 넘어가면
+            // 애매해지므로, 지금은 빨간 배지로 "감지됐다"는 것만 보여주고 처리는 회의가 끝난 뒤에.
+            <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-400">
+              녹음 중에는 확인만 하고, 회의가 끝난 뒤 처리할 수 있어요.
+            </p>
+          ) : (
+            <div className="mb-2 flex gap-0.5">
+              {(
+                [
+                  { key: "unresolved" as const, label: t.contradiction_status_unresolved },
+                  { key: "resolved" as const, label: t.contradiction_status_resolved },
+                ]
+              ).map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setContradictionStatusFilter(tab.key)}
+                  className={`rounded-lg px-2 py-1 text-xs ${
+                    contradictionStatusFilter === tab.key
+                      ? "bg-recall-accent/15 text-recall-accent"
+                      : "text-recall-textMuted hover:bg-white/5"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="flex-1 space-y-2 overflow-y-auto">
             {isContradictionsLoading ? (
               <p className="text-sm text-recall-textMuted">{t.common_loading}</p>
@@ -782,27 +996,47 @@ export default function MeetingsPanel({
                     </span>
                     {severityBadge(c.severity, t)}
                   </div>
-                  <ContradictionMessage contradiction={c} expanded={isExpanded} t={t} />
-                  <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => dismiss(c.id)}
-                      className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
-                    >
-                      {t.contradiction_dismiss}
-                    </button>
-                    <button
-                      onClick={() => resolve(c.id, "keep_reference")}
-                      className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
-                    >
-                      {t.contradiction_keep}
-                    </button>
-                    <button
-                      onClick={() => resolve(c.id, "change_acknowledged")}
-                      className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
-                    >
-                      {t.contradiction_apply}
-                    </button>
-                  </div>
+                  <ContradictionMessage
+                    contradiction={c}
+                    expanded={isExpanded}
+                    onViewReference={(id, name) => setPreviewDoc({ id, name })}
+                    t={t}
+                  />
+                  {!isViewingLive && (
+                    <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                      {c.status === "unresolved" ? (
+                        <>
+                          <button
+                            onClick={() => dismiss(c.id)}
+                            className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
+                          >
+                            {t.contradiction_dismiss}
+                          </button>
+                          <button
+                            onClick={() => resolve(c.id, "keep_reference")}
+                            className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
+                          >
+                            {t.contradiction_keep}
+                          </button>
+                          <button
+                            onClick={() => resolve(c.id, "change_acknowledged")}
+                            className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                          >
+                            {t.contradiction_apply}
+                          </button>
+                        </>
+                      ) : (
+                        c.resolution_type !== "change_acknowledged" && (
+                          <button
+                            onClick={() => reopen(c.id)}
+                            className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
+                          >
+                            {t.contradiction_reopen}
+                          </button>
+                        )
+                      )}
+                    </div>
+                  )}
                 </div>
                 );
               })
@@ -826,6 +1060,45 @@ export default function MeetingsPanel({
           isLoading={isChangeSummaryLoading}
           onClose={closeChangeSummary}
           t={t}
+        />
+      )}
+
+      {previewDoc && (
+        <DocumentPreviewModal
+          workspaceId={workspaceId}
+          documentId={previewDoc.id}
+          documentName={previewDoc.name}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
+
+      {showAttendeesModal && selectedRealMeeting && (
+        <MeetingAttendeesModal
+          workspaceId={workspaceId}
+          meetingId={selectedRealMeeting.id}
+          meetingTitle={selectedRealMeeting.title}
+          onClose={() => setShowAttendeesModal(false)}
+          onSaved={reloadAttendees}
+        />
+      )}
+
+      {showExportModal && selectedRealMeeting && (
+        <MeetingExportModal
+          workspaceId={workspaceId}
+          meetingId={selectedRealMeeting.id}
+          onClose={() => setShowExportModal(false)}
+        />
+      )}
+
+      {showStartModal && (
+        <MeetingStartModal
+          workspaceId={workspaceId}
+          defaultTitle={defaultMeetingTitle()}
+          onClose={() => setShowStartModal(false)}
+          onStart={(title, attendeeIds) => {
+            setShowStartModal(false);
+            onStartLive(title, undefined, attendeeIds);
+          }}
         />
       )}
     </div>
