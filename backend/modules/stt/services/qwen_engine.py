@@ -28,7 +28,8 @@ import numpy as np
 import torch
 from transformers import AutoProcessor, AutoModelForMultimodalLM
 
-from ..core.config import logger, REALTIME_SAMPLE_RATE
+from ..core.config import logger, REALTIME_SAMPLE_RATE, QWEN_ITN_ENABLED
+from ..utils.korean_itn import to_digits
 from .whisper_engine import (
     Segment, TranscribeInfo,
     load_audio, find_window_cutoff, trim_silence,
@@ -138,8 +139,12 @@ class Qwen3ASREngine:
             output_scores=True,
         )
         generated_ids = outputs.sequences[:, prompt_len:]
-        text = self.processor.decode(generated_ids, return_format="transcription_only")[0]
-        return text.strip(), self._avg_logprob(outputs, generated_ids, beam_size)
+        text = self.processor.decode(generated_ids, return_format="transcription_only")[0].strip()
+        if QWEN_ITN_ENABLED:
+            # 발음형 숫자를 아라비아 숫자로 되돌린다 ("팔천이번" → "8002번").
+            # 확신할 수 없는 부분은 원문 그대로 남기는 보수적 변환.
+            text = to_digits(text)
+        return text, self._avg_logprob(outputs, generated_ids, beam_size)
 
     @staticmethod
     def _build_conversation(audio: np.ndarray, language: str | None, context: str | None) -> list[dict]:

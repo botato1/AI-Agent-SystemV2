@@ -225,6 +225,11 @@ TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt
 # 효과가 없음이 실측으로 확인됐다(CER 9.12% → 9.25%, 노이즈 범위).
 QWEN_CONTEXT_ENABLED = os.getenv("QWEN_CONTEXT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 
+# Qwen은 ITN을 적용하지 않아 숫자를 발음형으로 출력한다("8002번" → "팔천이번").
+# 회의록에서 포트 번호·버전·날짜는 모순 감지가 직접 비교하는 값이라 숫자 형태여야 하므로
+# 후처리로 되돌린다(utils/korean_itn.py). 오변환이 의심되면 0으로 꺼서 원문을 확인할 것.
+QWEN_ITN_ENABLED = os.getenv("QWEN_ITN_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+
 # LoRA 파인튜닝 어댑터 경로 — 설정 시 정밀(Precise) 모델에만 적용됨
 # (어댑터가 large-v3 기준으로 학습됐고, fast 모델은 turbo라 구조가 다름).
 #

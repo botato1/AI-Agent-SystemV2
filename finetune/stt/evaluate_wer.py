@@ -34,7 +34,7 @@ from stt.core.config import (  # noqa: E402
 )
 
 
-def load_model(model_id: str, adapter_path: str | None = None):
+def load_model(model_id: str, adapter_path: str | None = None, itn: bool = True):
     """
     서버와 동일한 기준(아키텍처별 엔진 자동 선택)으로 모델 로딩.
 
@@ -54,7 +54,7 @@ def load_model(model_id: str, adapter_path: str | None = None):
         if adapter_path:
             raise SystemExit("Qwen3-ASR은 LoRA 어댑터 로딩을 지원하지 않음 (평가 전용 어댑터)")
         from qwen_asr_engine import Qwen3ASREngine
-        return Qwen3ASREngine(model_id, device=DEVICE)
+        return Qwen3ASREngine(model_id, device=DEVICE, itn=itn)
     if STT_ENGINE == "transformers":
         from stt.services.whisper_engine import TransformersWhisperEngine
         return TransformersWhisperEngine(model_id, device=DEVICE, adapter_path=adapter_path)
@@ -156,6 +156,9 @@ def main():
     parser.add_argument("--context", default=None, help="컨텍스트 바이어싱 텍스트 파일 경로")
     # 기본값은 raw — 기존 리포트와 그대로 비교할 수 있게 동작을 바꾸지 않는다.
     # AI-Hub 매니페스트를 평가할 때만 aihub를 줘서 태그를 풀고 측정한다.
+    # Qwen 계열은 숫자를 발음형으로 출력하므로 기본적으로 후처리(ITN)를 적용한다.
+    # 후처리 효과를 분리해서 보려면 --no-itn.
+    parser.add_argument("--no-itn", action="store_true", help="한국어 수사→숫자 후처리를 끔 (Qwen 전용)")
     parser.add_argument("--ref-format", choices=["raw", "aihub", "aihub-spoken"], default="raw",
                         help="정답 텍스트 형식. aihub면 태그를 풀고 비교(이중전사=표기형), "
                              "aihub-spoken이면 이중전사를 발음형으로 잡아 ITN 영향을 분리")
@@ -191,7 +194,7 @@ def main():
 
     print(f"엔진={STT_ENGINE}, 모델={model_id}, 어댑터={args.adapter_path or '없음(베이스)'}, "
           f"beam={beam_size}, 컨텍스트={'있음' if context else '없음'}, 평가 대상={len(items)}개")
-    model = load_model(model_id, args.adapter_path)
+    model = load_model(model_id, args.adapter_path, itn=not args.no_itn)
 
     total_word_err = total_words = 0
     total_char_err = total_chars = 0
@@ -251,6 +254,7 @@ def main():
         "beam_size": beam_size,
         "context": args.context,
         "ref_format": args.ref_format,
+        "itn": not args.no_itn,
         "num_items": len(items),
         # 건당 평균 처리 시간 — 속도는 타협 불가 기준이라 리포트에 남긴다
         "sec_per_item": round((time.monotonic() - started) / max(len(items), 1), 3),

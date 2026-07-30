@@ -52,11 +52,14 @@ class Qwen3ASREngine:
     돌려준다. WER/CER 평가는 전체 텍스트만 쓰므로 평가 목적에는 충분하다.
     """
 
-    def __init__(self, model_id: str, device: str = "cuda", max_new_tokens: int = 448):
+    def __init__(self, model_id: str, device: str = "cuda", max_new_tokens: int = 448,
+                 itn: bool = True):
+        """itn: 발음형 숫자를 아라비아 숫자로 되돌리는 후처리 적용 여부 (효과 측정용 스위치)."""
         from transformers import AutoProcessor, AutoModelForMultimodalLM
 
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
+        self.itn = itn
         self.processor = AutoProcessor.from_pretrained(model_id)
         self.model = AutoModelForMultimodalLM.from_pretrained(
             model_id,
@@ -103,10 +106,13 @@ class Qwen3ASREngine:
             )
 
         generated_ids = outputs.sequences[:, prompt_len:]
-        text = self.processor.decode(generated_ids, return_format="transcription_only")[0]
+        text = self.processor.decode(generated_ids, return_format="transcription_only")[0].strip()
+        if self.itn:
+            from stt.utils.korean_itn import to_digits
+            text = to_digits(text)
         avg_logprob = self._avg_logprob(outputs, generated_ids, beam_size)
 
-        return [_Segment(0.0, 0.0, text.strip(), avg_logprob)], _Info(language)
+        return [_Segment(0.0, 0.0, text, avg_logprob)], _Info(language)
 
     @staticmethod
     def _build_conversation(audio, language: str | None, context: str | None) -> list[dict]:
