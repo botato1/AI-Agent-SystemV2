@@ -12,10 +12,10 @@ from backend.schemas.task_schema import (
     TaskCreateRequest,
     TaskStatusUpdateRequest,
     TaskPriorityUpdateRequest,
+    TaskUpdateRequest,
     TaskResponse,
     TaskListResponse,
 )
-
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/tasks", tags=["Tasks"])
 
@@ -120,6 +120,28 @@ def update_task_priority_api(
     _get_task_or_404(db, task_id, workspace_id)
 
     item = meeting_crud.update_task_priority(db, task_id, request.priority)
+    return TaskResponse.model_validate(item)
+
+# 할 일 상세 수정 (제목/설명/담당자/마감일/우선순위/상태를 한 번에)
+@router.patch("/{task_id}", response_model=TaskResponse)
+def update_task_api(
+    workspace_id: UUID,
+    task_id: UUID,
+    request: TaskUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_task_or_404(db, task_id, workspace_id)
+
+    update_fields = request.model_dump(exclude_unset=True)
+    if not update_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+
+    item = meeting_crud.update_task(db, task_id, **update_fields)
     return TaskResponse.model_validate(item)
 
 

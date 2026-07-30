@@ -144,6 +144,12 @@ FileAnalysisStatus = Literal[
     "excluded",
 ]
 
+DocumentFigureType = Literal[
+    "table",
+    "chart",
+    "image",
+    "diagram",
+]
 
 # 코드 및 설정 파일 분석
 CodeFileRole = Literal[
@@ -206,8 +212,10 @@ MeetingInputType = Literal[
 ]
 
 MeetingStatus = Literal[
+    "scheduled",
     "created",
     "recording",
+    "paused",
     "processing",
     "completed",
     "failed",
@@ -250,6 +258,7 @@ ContradictionSourceType = Literal[
 ContradictionReferenceType = Literal[
     "content_chunk",
     "code_fact",
+    "decision",
 ]
 
 ContradictionSeverity = Literal[
@@ -294,4 +303,7 @@ NotificationType = Literal[
     "meeting_summary_ready",
     "file_analysis_completed",
     "file_analysis_failed",
+    "decision_reminder",
+    "repeat_discussion",
+    "document_recommendation",
 ]

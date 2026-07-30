@@ -30,10 +30,11 @@ def _build_plain_text(doc: DocumentResult) -> str:
                 seen.add(key)
                 parts.append(key)
         # 표 — pdfplumber 추출분 (data) + VL 추출분 (markdown)
+        # 셀을 " | "로 구분해서 넣어야 프론트가 파이프 개수로 표를 감지해 렌더링할 수 있다.
         for table in page.content.tables:
             if table.data:
                 for row in table.data:
-                    t = " ".join(str(c) for c in row if c is not None).strip()
+                    t = " | ".join(str(c) for c in row if c is not None).strip()
                     if t and t not in seen:
                         seen.add(t)
                         parts.append(t)
@@ -73,11 +74,13 @@ def _build_tables(doc: DocumentResult) -> list[dict]:
                     "page": page.page,
                     "data": table.data,
                     "markdown": table.markdown.strip(),
+                    "image_path": table.image_path,
                 })
             elif table.markdown.strip():
                 tables.append({
                     "page": page.page,
                     "markdown": table.markdown.strip(),
+                    "image_path": table.image_path,
                 })
     return tables
 
@@ -210,6 +213,7 @@ def _build_charts(doc: DocumentResult) -> list[dict]:
                 "page": page.page,
                 "raw_text": chart.description.strip(),
                 "title": title,
+                "image_path": chart.image_path,
             }
             if chart.extracted_data.get("data"):
                 entry["data"] = _dedupe_rows(chart.extracted_data["data"])
@@ -230,6 +234,7 @@ def _build_diagrams(doc: DocumentResult) -> list[dict]:
             diagrams.append({
                 "page": page.page,
                 "raw_text": raw_text,
+                "image_path": img.image_path,
             })
     return diagrams
 
@@ -308,9 +313,14 @@ def _status(doc: DocumentResult, avg_conf: float) -> str:
 # ── chunks 조립 (청킹 담당자용) ──────────────────────────────────────────────
 
 def _build_chunks(doc: DocumentResult) -> list[dict]:
+    """텍스트 블록뿐 아니라 표/이미지 OCR/차트까지 _build_plain_text와 동일한
+    소스로 채운다. 텍스트 블록만 넣으면 OCR/표/차트로만 존재하는 내용이
+    chunks에서는 통째로 빠지고 content(원문 전체)에만 남는 유실이 발생했다.
+    """
     chunks = []
     for page in doc.pages:
         pg = page.page
+
         for b in page.content.text:
             if b.style == "caption":
                 continue
@@ -321,6 +331,28 @@ def _build_chunks(doc: DocumentResult) -> list[dict]:
                 "size": round(b.size, 2),
                 "page_number": pg,
             })
+
+        for table in page.content.tables:
+            if table.data:
+                for row in table.data:
+                    text = " | ".join(str(c) for c in row if c is not None).strip()
+                    if text:
+                        chunks.append({"text": text, "style": "table", "page_number": pg})
+            elif table.markdown.strip():
+                chunks.append({"text": table.markdown.strip(), "style": "table", "page_number": pg})
+
+        for img in page.content.images:
+            text = img.ocr_text.strip()
+            if text:
+                chunks.append({"text": text, "style": "image", "page_number": pg})
+
+        for chart in page.content.charts:
+            if not _chart_has_content(chart) or not _chart_title(chart):
+                continue
+            text = chart.description.strip()
+            if text:
+                chunks.append({"text": text, "style": "chart", "page_number": pg})
+
     return chunks
 
 

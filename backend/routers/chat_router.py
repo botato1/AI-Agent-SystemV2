@@ -1,5 +1,5 @@
 # backend/routers/chat_router.py
-
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
-from backend.db.session import get_db
-from backend.db.crud import file_crud, room_crud, workspace_crud
+from backend.db.session import get_db, SessionLocal
+from backend.db.crud import file_crud, room_crud, workspace_crud, notification_crud, contradiction_crud
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.schemas.chat_schema import (
     RoomMessageSchema,
@@ -18,10 +18,98 @@ from backend.schemas.chat_schema import (
     RoomFileListResponse,
 )
 from backend.schemas.workspace_schema import RoomResponse, RoomListResponse
+from backend.services import judgment_service
 
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/rooms", tags=["Rooms"])
 
+# 같은 room에서 메시지가 빠르게 여러 개 오면 모순감지+판단파이프라인이 동시에
+# DB 커넥션을 여러 개 물어 풀 고갈이 날 수 있다 (meeting 실시간 경로와 동일 이유).
+# room_id 단위로 직렬화해서 방지한다.
+_ROOM_PROCESSING_LOCKS: dict[UUID, asyncio.Lock] = {}
+
+
+def _get_room_processing_lock(room_id: UUID) -> asyncio.Lock:
+    lock = _ROOM_PROCESSING_LOCKS.get(room_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ROOM_PROCESSING_LOCKS[room_id] = lock
+    return lock
+
+
+def _notify_contradiction_detected(workspace_id: UUID, result: dict, statement_text: str) -> None:
+    """채팅 메시지에서 모순이 감지되면 워크스페이스 멤버들에게 알림을 남긴다."""
+    detected = result.get("detected_contradictions") or []
+    saved_ids = result.get("saved_contradiction_ids") or []
+    pair_count = min(len(detected), len(saved_ids))
+    if pair_count == 0:
+        return
+
+    best_index = max(range(pair_count), key=lambda i: detected[i]["confidence_score"])
+    contradiction = detected[best_index]
+    contradiction_id = saved_ids[best_index]
+
+    db = SessionLocal()
+    try:
+        source_name = None
+        excerpt = ""
+        reference_file_id = contradiction.get("reference_file_id")
+        if reference_file_id:
+            file = file_crud.get_file(db, UUID(reference_file_id))
+            source_name = file.original_filename if file else None
+
+        saved_row = contradiction_crud.get_contradiction(db, UUID(contradiction_id))
+        if saved_row and saved_row.reference_text_snapshot:
+            excerpt = " ".join(saved_row.reference_text_snapshot.split())[:100]
+
+        if source_name and excerpt:
+            display_message = f"'{statement_text}'라고 하셨는데, 기존 자료({source_name})의 '{excerpt}'와 다릅니다."
+        elif excerpt:
+            display_message = f"'{statement_text}'라고 하셨는데, 기존 자료의 '{excerpt}'와 다릅니다."
+        else:
+            display_message = f"'{statement_text}'라고 하셨는데, 기존 자료와 다릅니다."
+
+        for member, _user in workspace_crud.list_members(db, workspace_id):
+            if not notification_crud.is_notification_enabled(
+                db, workspace_id, member.user_id, "contradiction_detected",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=workspace_id,
+                type="contradiction_detected", title="모순 감지",
+                message=display_message,
+                ref_type="contradiction", ref_id=UUID(contradiction_id),
+            )
+    finally:
+        db.close()
+
+
+async def _process_room_message_analysis(
+    room_id: UUID, workspace_id: UUID, category_id: UUID,
+    statement_text: str, message_id: str,
+) -> None:
+    """채팅 메시지 하나의 모순감지+판단파이프라인을 room 단위로 직렬 처리한다."""
+    lock = _get_room_processing_lock(room_id)
+    async with lock:
+        result = await asyncio.to_thread(
+            run_contradiction_detection,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=message_id,
+        )
+        await asyncio.to_thread(_notify_contradiction_detected, workspace_id, result, statement_text)
+
+        await asyncio.to_thread(
+            judgment_service.run_judgment_pipeline,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=message_id,
+            session_room_id=str(room_id),
+        )
 
 class RoomCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -155,12 +243,8 @@ def send_room_message(
     statement_text = (request.content or "").strip()
     if statement_text:
         background_tasks.add_task(
-            run_contradiction_detection,
-            workspace_id=str(workspace_id),
-            category_id=str(room.category_id),
-            source_type="room_message",
-            statement_text=statement_text,
-            room_message_id=str(message.id),
+            _process_room_message_analysis,
+            room_id, workspace_id, room.category_id, statement_text, str(message.id),
         )
 
     return RoomMessageSchema.model_validate(message)

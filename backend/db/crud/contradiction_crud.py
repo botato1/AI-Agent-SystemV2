@@ -11,8 +11,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
-from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution
+from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
 
 
 def make_deduplication_key(
@@ -139,6 +140,29 @@ def create_contradiction(
         db.flush()
     return row
 
+def delete_contradictions_by_reference_file(db: Session, file_id: uuid.UUID) -> int:
+    """해당 파일의 청크를 참조하는 contradictions를 하위 레코드(변경요약 초안,
+    해결 이력)까지 포함해 전부 삭제한다. 문서 삭제 시 FK 위반
+    (contradictions_reference_chunk_id_fkey)을 막기 위해 청크 삭제 전에 호출해야 한다."""
+    contradiction_ids = [
+        c.id for c in
+        db.query(Contradiction).filter(Contradiction.reference_file_id == file_id).all()
+    ]
+    if not contradiction_ids:
+        return 0
+
+    db.query(ChangeSummaryDraft).filter(
+        ChangeSummaryDraft.contradiction_id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.query(ContradictionResolution).filter(
+        ContradictionResolution.contradiction_id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.query(Contradiction).filter(
+        Contradiction.id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+    return len(contradiction_ids)
+
 
 def list_unresolved(db: Session, workspace_id: uuid.UUID) -> list[Contradiction]:
     return (
@@ -184,6 +208,32 @@ def dismiss_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[
         db.commit()
         db.refresh(row)
     return row
+
+def get_resolution(db: Session, contradiction_id: uuid.UUID) -> Optional[ContradictionResolution]:
+    return (
+        db.query(ContradictionResolution)
+        .filter(ContradictionResolution.contradiction_id == contradiction_id)
+        .first()
+    )
+
+
+def reopen_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[Contradiction]:
+    """keep_reference로 해결됐던 모순을 다시 unresolved로 되돌린다.
+    change_acknowledged는 decisions 테이블 전이까지 일으키므로 되돌리기 대상에서
+    제외해야 한다 - 그 검증은 호출부(라우터)에서 미리 하고, 여기선 단순히
+    해결 기록을 지우고 상태만 되돌린다."""
+    contradiction = db.get(Contradiction, contradiction_id)
+    if not contradiction:
+        return None
+
+    resolution = get_resolution(db, contradiction_id)
+    if resolution:
+        db.delete(resolution)
+
+    contradiction.status = "unresolved"
+    db.commit()
+    db.refresh(contradiction)
+    return contradiction
 
 
 def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Optional[ChangeSummaryDraft]:
@@ -283,3 +333,41 @@ def create_change_summary_draft(
     db.commit()
     db.refresh(row)
     return row
+
+
+def update_change_summary_draft(
+    db: Session, contradiction_id: uuid.UUID, **fields
+) -> Optional[ChangeSummaryDraft]:
+    """generation_status/generated_summary/generation_error/model_name 등을 부분 갱신한다."""
+    row = get_change_summary_draft(db, contradiction_id)
+    if row:
+        for k, v in fields.items():
+            setattr(row, k, v)
+        db.commit()
+        db.refresh(row)
+    return row
+
+def count_by_meeting(db: Session, meeting_id: uuid.UUID) -> int:
+    """session_meeting_id(결정 기반)와 meeting_segment_id 역추적(문서 기반) 둘 다 커버한다."""
+    return (
+        db.query(Contradiction)
+        .outerjoin(MeetingSegment, Contradiction.meeting_segment_id == MeetingSegment.id)
+        .filter(
+            or_(
+                Contradiction.session_meeting_id == meeting_id,
+                MeetingSegment.meeting_id == meeting_id,
+            )
+        )
+        .count()
+    )
+
+def count_in_range(db: Session, workspace_id: uuid.UUID, start: datetime, end: datetime) -> int:
+    return (
+        db.query(Contradiction)
+        .filter(
+            Contradiction.workspace_id == workspace_id,
+            Contradiction.detected_at >= start,
+            Contradiction.detected_at < end,
+        )
+        .count()
+    )

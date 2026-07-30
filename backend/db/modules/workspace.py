@@ -1,7 +1,7 @@
 """워크스페이스 / 멤버"""
 
 from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from backend.db.base import Base
 from backend.db.mixins import created_at_col, updated_at_col, uuid_pk
@@ -29,6 +29,7 @@ class WorkspaceMember(Base):
     added_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     joined_at = created_at_col()
     removed_at = Column(DateTime(timezone=True), nullable=True)
+    notification_preferences = Column(JSONB, nullable=False, server_default="{}")
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),

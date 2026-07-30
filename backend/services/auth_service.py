@@ -1,10 +1,13 @@
 # backend/services/auth_service.py
 
+import uuid
+from pathlib import Path
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from jose import JWTError
+from jose import ExpiredSignatureError, JWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,7 +34,7 @@ from backend.schemas.auth_schema import (
     AccountDeleteResponse,
 )
 
-from backend.db.crud import auth_crud
+from backend.db.crud import auth_crud, workspace_crud
 
 from backend.core.security import (
     hash_password,
@@ -45,6 +48,7 @@ from backend.core.security import (
     create_password_reset_token,
     verify_password_reset_token,
     password_fingerprint,
+    verify_workspace_invite_token,
 )
 
 from backend.core.config import settings
@@ -176,11 +180,33 @@ def signup(db: Session, request: SignupRequest) -> SignupResponse:
             detail="이미 사용 중인 아이디 또는 이메일입니다.",
         )
 
+    invite_status = None
+    if request.invite_token:
+        try:
+            payload = verify_workspace_invite_token(request.invite_token)
+            if payload.get("sub") == request.email:
+                workspace_crud.add_member(
+                    db,
+                    workspace_id=uuid.UUID(payload["workspace_id"]),
+                    user_id=user.id,
+                    added_by=uuid.UUID(payload["invited_by"]),
+                    role=payload["role"],
+                )
+                invite_status = "joined"
+            else:
+                invite_status = "invite_invalid"
+        except ExpiredSignatureError:
+            invite_status = "invite_expired"
+        except JWTError:
+            invite_status = "invite_invalid"
+            # 초대 토큰이 잘못됐어도 회원가입 자체는 막지 않음
+
     return SignupResponse(
         status="success",
         user=UserPublicSchema.model_validate(user),
         message="회원가입이 완료되었습니다.",
         error=None,
+        invite_status=invite_status,
     )
 
 
@@ -454,5 +480,66 @@ def delete_account(db: Session, access_token: str, request: AccountDeleteRequest
     return AccountDeleteResponse(
         status="success",
         message="회원 탈퇴가 완료되었습니다.",
+        error=None,
+    )
+
+PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
+ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+MAX_PROFILE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
+
+
+def _delete_old_profile_image(old_image_url: str | None) -> None:
+    """기존 프로필 이미지 파일을 삭제한다. 실패해도 무시(치명적이지 않음)."""
+    if not old_image_url:
+        return
+    try:
+        old_path = PROFILE_IMAGE_STORAGE_DIR / Path(old_image_url).name
+        old_path.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"[auth_service] 기존 프로필 이미지 삭제 실패: {repr(e)}")
+
+def update_profile_image(db: Session, access_token: str, filename: str, file_content: bytes) -> ProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_PROFILE_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="지원하지 않는 이미지 형식입니다 (png/jpg/jpeg만 가능).",
+        )
+
+    if len(file_content) > MAX_PROFILE_IMAGE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이미지 파일은 5MB 이하만 업로드할 수 있습니다.",
+        )
+
+    PROFILE_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{uuid.uuid4()}{extension}"
+    (PROFILE_IMAGE_STORAGE_DIR / stored_filename).write_bytes(file_content)
+
+    old_image_url = user.profile_image_url
+    image_url = f"/static/profile_images/{stored_filename}"
+    auth_crud.update_user_profile(db, user.id, profile_image_url=image_url)
+    user = auth_crud.get_user_by_id(db, user.id)
+    _delete_old_profile_image(old_image_url)
+
+    return ProfileResponse(
+        status="success",
+        user=UserPublicSchema.model_validate(user),
+        message="프로필 이미지가 변경되었습니다.",
         error=None,
     )

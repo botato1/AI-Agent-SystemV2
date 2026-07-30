@@ -3,7 +3,7 @@
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query, BackgroundTasks, status
 from sqlalchemy.orm import Session
 
 from backend.services.document_service import (
@@ -12,7 +12,8 @@ from backend.services.document_service import (
     get_document_detail,
     retry_document_analysis,
 )
-from backend.db.crud import file_crud
+from backend.db.crud import document_crud, file_crud, similarity_crud
+from backend.schemas.document_schema import DocumentFigureListResponse, DocumentGraphResponse
 from backend.db.session import get_db
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 
@@ -31,6 +32,31 @@ def _get_workspace_file_or_404(db: Session, file_id: UUID, workspace_id: UUID):
             detail="문서를 찾을 수 없습니다.",
         )
     return workspace_file
+
+# 문서 유사도 그래프뷰 조회
+@router.get("/graph", response_model=DocumentGraphResponse)
+def get_document_graph_api(
+    workspace_id: UUID,
+    min_score: float = Query(default=0.6, ge=0, le=1),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+
+    nodes = file_crud.list_graph_eligible_files(db, workspace_id)
+    edges = similarity_crud.get_similarities_for_workspace(db, workspace_id, min_score=min_score)
+
+    return DocumentGraphResponse(
+        nodes=[{"file_id": f.id, "filename": f.original_filename} for f in nodes],
+        edges=[
+            {
+                "source_file_id": e.source_file_id,
+                "target_file_id": e.target_file_id,
+                "similarity_score": e.similarity_score,
+            }
+            for e in edges
+        ],
+    )
 
 
 # 워크스페이스 내 문서 목록 조회
@@ -76,6 +102,7 @@ def get_document_list(
 @router.post("/upload")
 async def upload_document(
     workspace_id: UUID,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     room_id: str | None = Form(None),
     document_type: Literal["document", "meeting"] = Form(
@@ -116,6 +143,7 @@ async def upload_document(
             db=db,
             file=file,
             workspace_id=workspace_id,
+            background_tasks=background_tasks,
             room_id=room_id,
             document_type=document_type,
             user_id=current_user_id,
@@ -179,6 +207,7 @@ def get_document_detail_api(
 async def retry_document_api(
     workspace_id: UUID,
     document_id: UUID,
+    background_tasks: BackgroundTasks,
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -186,7 +215,7 @@ async def retry_document_api(
     _get_workspace_file_or_404(db, document_id, workspace_id)
 
     try:
-        return await retry_document_analysis(db=db, file_id=document_id)
+        return await retry_document_analysis(db=db, file_id=document_id, background_tasks=background_tasks)
     except HTTPException:
         raise
     except PermissionError:
@@ -228,3 +257,22 @@ def delete_document_api(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="문서 삭제 중 오류가 발생했습니다.",
         )
+    
+    
+@router.get("/{document_id}/figures", response_model=DocumentFigureListResponse)
+def get_document_figures_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    figures = document_crud.list_figures_by_file(db, document_id)
+    return DocumentFigureListResponse(
+        figures=[
+            {"figure_id": f.id, "page_number": f.page_number, "type": f.figure_type, "image_url": f.image_url}
+            for f in figures
+        ]
+    )

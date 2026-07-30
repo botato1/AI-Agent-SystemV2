@@ -115,6 +115,17 @@ class TaskStatusUpdateRequest(BaseModel):
 class TaskPriorityUpdateRequest(BaseModel):
     priority: TaskPriority
 
+class TaskUpdateRequest(BaseModel):
+    """할 일 상세 수정 요청. 전달된 필드만 갱신한다 (부분 수정)."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    assignee_id: Optional[UUID] = None
+    assignee_label: Optional[str] = Field(default=None, max_length=100)
+    priority: Optional[TaskPriority] = None
+    status: Optional[TaskStatus] = None
+    due_at: Optional[datetime] = None
+
 
 class TaskResponse(ORMBaseSchema):
     id: UUID

@@ -15,12 +15,12 @@ from .auth import RefreshToken, User
 from .workspace import Workspace, WorkspaceMember
 from .room import Category, Room, RoomMessage
 from .file import RoomFileLink, Worktree, WorkspaceFile
-from .document import DocumentAnalysis
+from .document import DocumentAnalysis, DocumentFigure
+from .history import RelatedHistoryMatch
 from .code import CodeAnalysis, CodeFact, CodeSymbol
 from .content_chunk import ContentChunk
 from .similarity import FileSimilarity
-from .meeting import Task, Decision, Meeting, MeetingSegment, MeetingSummary
-from .history import RelatedHistoryMatch
+from .meeting import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary
 from .contradiction import ChangeSummaryDraft, Contradiction, ContradictionResolution
 from .ai_chat import AiChatMessage, AiChatSession, AiMessageSource
 from .notification import Notification
@@ -31,12 +31,12 @@ __all__ = [
     "Workspace", "WorkspaceMember",
     "Category", "Room", "RoomMessage",
     "Worktree", "WorkspaceFile", "RoomFileLink",
-    "DocumentAnalysis",
+    "DocumentAnalysis", "DocumentFigure",
+    "RelatedHistoryMatch",
     "CodeAnalysis", "CodeSymbol", "CodeFact",
     "ContentChunk",
     "FileSimilarity",
-    "Meeting", "MeetingSegment", "MeetingSummary", "Decision", "Task",
-    "RelatedHistoryMatch",
+    "Meeting", "MeetingAttendee", "MeetingSegment", "MeetingSummary", "Decision", "Task",
     "Contradiction", "ContradictionResolution", "ChangeSummaryDraft",
     "AiChatSession", "AiChatMessage", "AiMessageSource",
     "Notification",

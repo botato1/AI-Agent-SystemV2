@@ -28,6 +28,11 @@ from backend.modules.rag import chroma_client
 
 DECISION_MATCH_THRESHOLD = float(os.getenv("DECISION_MATCH_THRESHOLD", "0.75"))  # TBD - 실험 후 조정 (설계 문서 5장 열린 질문과 동일 축)
 
+# LLM이 topic.status를 스펙대로 못 채우는 경우(누락/오타/대소문자 다름 등) 방어용
+# 화이트리스트. 여기 없는 값이면 이 topic 전체를 보수적으로 건너뛴다 - 안 그러면
+# 근거 없는 status로 새 decision이 잘못 생성될 수 있다.
+_VALID_TOPIC_STATUSES = {"confirmed", "reopened_no_conclusion", "reconfirmed"}
+
 
 def _find_existing_decision(
     db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, topic_text: str
@@ -80,6 +85,10 @@ def process_topics(
         status = topic.get("status")
         topic_text = topic.get("decision_text", "") or topic.get("title", "")
         if not topic_text:
+            continue
+
+        if status not in _VALID_TOPIC_STATUSES:
+            print(f"[decision_transition] 알 수 없는 topic status, 보수적으로 스킵: {status!r} (topic={topic_text!r})")
             continue
 
         existing = _find_existing_decision(db, workspace_id, category_id, topic_text)

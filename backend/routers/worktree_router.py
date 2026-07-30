@@ -4,12 +4,13 @@ import hashlib
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import file_crud, room_crud
+from backend.services import document_service
 from backend.schemas.worktree_schema import (
     WorktreeSchema,
     WorktreeListResponse,
@@ -26,7 +27,7 @@ WORKTREE_STORAGE_DIR = Path("data/uploads/worktree_files")
 CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".rb", ".php", ".swift", ".kt"}
 CONFIG_EXTENSIONS = {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".xml"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".doc", ".docx", ".md", ".txt"}
+DOCUMENT_EXTENSIONS = {".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".md", ".txt"}
 
 
 def _infer_file_kind(filename: str) -> str:
@@ -64,6 +65,7 @@ def _get_worktree_or_404(db: Session, worktree_id: uuid.UUID, workspace_id: uuid
 @router.post("", response_model=WorktreeSchema, status_code=status.HTTP_201_CREATED)
 async def upload_worktree(
     workspace_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     root_folder_name: str = Form(..., min_length=1, max_length=255),
     files: list[UploadFile] = File(...),
     current_user_id: str = Depends(get_current_user_id),
@@ -95,13 +97,15 @@ async def upload_worktree(
 
     completed_count = 0
     failed_count = 0
+    analyzable_file_ids: list[uuid.UUID] = []
 
     for f in files:
         try:
             file_content = await f.read()
             storage_path, stored_filename = _save_worktree_file_to_local_storage(file_content, f.filename)
+            file_kind = _infer_file_kind(f.filename)
 
-            file_crud.create_workspace_file(
+            workspace_file = file_crud.create_workspace_file(
                 db,
                 workspace_id=workspace_id,
                 category_id=category.id,
@@ -113,7 +117,7 @@ async def upload_worktree(
                 storage_path=storage_path,
                 mime_type=f.content_type,
                 extension=Path(f.filename).suffix.lstrip("."),
-                file_kind=_infer_file_kind(f.filename),
+                file_kind=file_kind,
                 origin_type="worktree",
                 file_size_bytes=len(file_content),
                 sha256_hash=hashlib.sha256(file_content).hexdigest(),
@@ -121,15 +125,21 @@ async def upload_worktree(
                 analysis_status="pending",
             )
             completed_count += 1
+
+            if file_kind in ("document", "image"):
+                analyzable_file_ids.append(workspace_file.id)
+
         except Exception as e:
             db.rollback()
             failed_count += 1
             print(f"[worktree_router] 파일 저장 실패: {f.filename} / {repr(e)}")
 
-    if failed_count == 0:
+    if completed_count == 0:
+        final_status = "failed"  # 업로드 자체가 전부 실패 - 분석할 파일도 없음
+    elif analyzable_file_ids:
+        final_status = "processing"  # 문서/이미지 분석이 아직 안 끝났으므로 완료 아님
+    elif failed_count == 0:
         final_status = "completed"
-    elif completed_count == 0:
-        final_status = "failed"
     else:
         final_status = "partially_completed"
 
@@ -139,6 +149,11 @@ async def upload_worktree(
         failed_file_count=failed_count,
         status=final_status,
     )
+
+    # 문서/이미지 파일만 백그라운드로 분석 (코드/설정 파일 분석 로직은 아직 없음)
+    for file_id in analyzable_file_ids:
+        background_tasks.add_task(document_service.analyze_worktree_file_background, file_id)
+
     return WorktreeSchema.model_validate(worktree)
 
 
@@ -182,3 +197,41 @@ def get_worktree_files(
     return WorktreeFileListResponse(
         files=[WorktreeFileResponse.model_validate(f) for f in files]
     )
+
+# 워크트리 삭제 (내부 파일 전체 정리 후 워크트리 자체 삭제)
+@router.delete("/{worktree_id}")
+def delete_worktree_api(
+    workspace_id: uuid.UUID,
+    worktree_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_worktree_or_404(db, worktree_id, workspace_id)
+
+    files = file_crud.list_files_by_worktree(db, worktree_id)
+    deleted_count = 0
+    failed_count = 0
+
+    for f in files:
+        try:
+            result = document_service.delete_processed_document(db, f.id)
+            if result.get("status") == "success":
+                deleted_count += 1
+            else:
+                failed_count += 1
+                print(f"[worktree_router] 워크트리 파일 삭제 실패: file_id={f.id} / {result.get('error')}")
+        except Exception as e:
+            db.rollback()
+            failed_count += 1
+            print(f"[worktree_router] 워크트리 파일 삭제 중 예외: file_id={f.id} / {repr(e)}")
+
+    file_crud.delete_worktree(db, worktree_id)
+
+    return {
+        "status": "success",
+        "worktree_id": str(worktree_id),
+        "deleted_file_count": deleted_count,
+        "failed_file_count": failed_count,
+        "message": "워크트리가 삭제되었습니다.",
+    }

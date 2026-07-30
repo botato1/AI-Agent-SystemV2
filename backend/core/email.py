@@ -33,3 +33,14 @@ def send_password_reset_email(to_email: str, reset_token: str) -> None:
         "본인이 요청하지 않았다면 이 메일을 무시하세요."
     )
     send_email(to_email, subject, body)
+
+
+def send_workspace_invite_email(to_email: str, workspace_name: str, invite_token: str) -> None:
+    signup_url = f"{settings.FRONTEND_SIGNUP_URL}?invite_token={invite_token}"
+    subject = f"[Re:Call] '{workspace_name}' 워크스페이스 초대"
+    body = (
+        f"'{workspace_name}' 워크스페이스에 초대되었습니다.\n\n"
+        f"아래 링크에서 회원가입을 완료하면 자동으로 워크스페이스에 참여됩니다.\n\n{signup_url}\n\n"
+        "이 링크는 7일 동안만 유효합니다."
+    )
+    send_email(to_email, subject, body)

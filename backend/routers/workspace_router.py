@@ -10,6 +10,8 @@ from backend.core.dependencies import (
     require_workspace_member,
     require_workspace_owner,
 )
+from backend.core.security import create_workspace_invite_token
+from backend.core.email import send_workspace_invite_email
 from backend.db.session import get_db
 from backend.db.crud import auth_crud, room_crud, workspace_crud
 from backend.schemas.workspace_schema import (
@@ -18,6 +20,7 @@ from backend.schemas.workspace_schema import (
     WorkspaceResponse,
     WorkspaceListResponse,
     WorkspaceMemberAddRequest,
+    WorkspaceMemberInviteRequest,
     WorkspaceMemberRoleUpdateRequest,
     WorkspaceMemberResponse,
     WorkspaceMemberListResponse,
@@ -33,6 +36,7 @@ def _member_response(member, user) -> WorkspaceMemberResponse:
         user_id=member.user_id,
         username=user.username,
         display_name=user.display_name,
+        profile_image_url=user.profile_image_url,
         role=member.role,
         joined_at=member.joined_at,
     )
@@ -138,6 +142,37 @@ def add_workspace_member_api(
         added_by=UUID(current_user_id), role=request.role,
     )
     return _member_response(member, user)
+
+
+# 멤버 초대 (미가입 이메일이면 초대 메일 발송, owner만)
+@router.post("/{workspace_id}/members/invite", status_code=status.HTTP_201_CREATED)
+def invite_workspace_member_api(
+    workspace_id: UUID,
+    request: WorkspaceMemberInviteRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_owner(db, workspace_id, current_user_id)
+    workspace = workspace_crud.get_workspace(db, workspace_id)
+
+    user = auth_crud.get_user_by_email(db, request.email)
+    if user:
+        if workspace_crud.get_membership(db, workspace_id, user.id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="이미 워크스페이스에 속한 사용자입니다.",
+            )
+        member = workspace_crud.add_member(
+            db, workspace_id=workspace_id, user_id=user.id,
+            added_by=UUID(current_user_id), role=request.role,
+        )
+        return {"status": "added", "member": _member_response(member, user)}
+
+    invite_token = create_workspace_invite_token(
+        str(workspace_id), request.email, request.role, current_user_id,
+    )
+    send_workspace_invite_email(request.email, workspace.name, invite_token)
+    return {"status": "invited", "email": request.email}
 
 
 # 멤버 목록 조회

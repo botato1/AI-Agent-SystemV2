@@ -1,15 +1,23 @@
 # backend/services/meeting_service.py
 
 import asyncio
+import hashlib
 import os
 import uuid
+from pathlib import Path
 
 import httpx
+from sqlalchemy.orm import Session
 
-from backend.db.crud import meeting_crud
+from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
+from backend.modules.rag.document_loader import load_document
+from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
+
+# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
+MEETING_SUMMARY_STORAGE_DIR = Path("data/uploads/summaries")
 
 # 완성된 오디오 파일 STT+화자분리 REST 엔드포인트.
 # 실시간 녹음(WS, /api/ws/stt/{session_id})과는 별도 경로 — 파일이 이미 통째로 있으므로
@@ -57,12 +65,15 @@ async def _detect_uploaded_audio_contradictions(
     workspace_id: uuid.UUID,
     category_id: uuid.UUID,
     saved_segments: list[tuple[str, str]],
+    meeting_id: uuid.UUID,
+    started_by: uuid.UUID,
 ) -> None:
     """
-    업로드 음성에서 생성된 각 발화 세그먼트의 모순을 탐지한다.
+    업로드 음성에서 생성된 각 발화 세그먼트의 모순 및 판단 파이프라인(결정 리마인더/
+    문서 추천/반복논의)을 실행한다.
 
     다수의 LLM 요청이 한꺼번에 실행되는 것을 막기 위해 순차 처리한다.
-    개별 모순 감지 실패는 회의 요약 및 후처리 결과에 영향을 주지 않는다.
+    개별 실패는 회의 요약 및 후처리 결과에 영향을 주지 않는다.
     """
     for segment_id, content in saved_segments:
         statement_text = content.strip()
@@ -79,6 +90,19 @@ async def _detect_uploaded_audio_contradictions(
             )
         except Exception as exc:
             print(f"[meeting_service] 모순 감지 실패: segment_id={segment_id}, error={repr(exc)}")
+
+        try:
+            await asyncio.to_thread(
+                judgment_service.run_judgment_pipeline,
+                workspace_id=str(workspace_id),
+                category_id=str(category_id),
+                source_type="meeting_segment",
+                statement_text=statement_text,
+                meeting_segment_id=segment_id,
+                session_meeting_id=str(meeting_id),
+            )
+        except Exception as exc:
+            print(f"[meeting_service] 판단 파이프라인 실패: segment_id={segment_id}, error={repr(exc)}")
 
 
 def _mark_failed(db, meeting_id: uuid.UUID) -> None:
@@ -179,11 +203,126 @@ async def process_uploaded_audio_stt(
             category_id=str(category_id),
         )
 
-        await _detect_uploaded_audio_contradictions(workspace_id, category_id, saved_segments)
-
+        await _detect_uploaded_audio_contradictions(
+            workspace_id, category_id, saved_segments, meeting_id, transitioned.started_by,
+        )
     except Exception as exc:
         _mark_failed(db, meeting_id)
         print(f"[meeting_service] 음성 파일 STT 처리 중 예외 발생: {repr(exc)}")
 
+    finally:
+        db.close()
+
+def save_summary_as_document(
+    db: Session,
+    *,
+    meeting_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    category_id: uuid.UUID,
+    uploaded_by: uuid.UUID,
+    title: str,
+    full_summary: str,
+    short_summary: str,
+    discussion_points: list[str],
+):
+    """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤
+    청킹+임베딩(ChromaDB)까지 마치고 meeting_summaries에 연결한다.
+
+    부가 기능이라 실패해도 예외를 밖으로 던지지 않는다 — 이미 저장된 요약/결정사항/할일까지
+    실패 처리되는 걸 막기 위함. 실패 시 None을 반환하고 로그만 남긴다.
+    """
+    try:
+        content = (
+            f"# {title} 회의 요약\n\n"
+            f"## 전체 요약\n{full_summary}\n\n"
+            f"## 핵심 요약\n{short_summary}\n\n"
+            f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points)
+        )
+        content_bytes = content.encode("utf-8")
+
+        MEETING_SUMMARY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        stored_filename = f"{meeting_id}.md"
+        storage_path = MEETING_SUMMARY_STORAGE_DIR / stored_filename
+        storage_path.write_bytes(content_bytes)
+
+        workspace_file = file_crud.create_workspace_file(
+            db,
+            workspace_id=workspace_id,
+            category_id=category_id,
+            uploaded_by=uploaded_by,
+            original_filename=f"{title}_요약.md",
+            stored_filename=stored_filename,
+            storage_path=str(storage_path),
+            mime_type="text/markdown",
+            extension="md",
+            file_kind="document",
+            origin_type="meeting_summary",
+            file_size_bytes=len(content_bytes),
+            sha256_hash=hashlib.sha256(content_bytes).hexdigest(),
+            version_group_id=uuid.uuid4(),
+            analysis_status="pending",
+        )
+
+        chunks = [
+            {"style": "title", "content": f"{title} 회의 요약", "page_number": 1},
+            {"style": "heading", "content": "전체 요약", "page_number": 1},
+            {"style": "body", "content": full_summary, "page_number": 1},
+            {"style": "heading", "content": "핵심 요약", "page_number": 1},
+            {"style": "body", "content": short_summary, "page_number": 1},
+            {"style": "heading", "content": "논의 사항", "page_number": 1},
+            {"style": "body", "content": "\n".join(f"- {p}" for p in discussion_points), "page_number": 1},
+        ]
+        load_result = load_document(db, workspace_file.id, chunks=chunks)
+        if load_result.get("status") == "success":
+            file_crud.update_analysis_status(db, workspace_file.id, "completed")
+        else:
+            file_crud.update_analysis_status(db, workspace_file.id, "failed", error=str(load_result))
+            print(f"[meeting_service] 요약 문서 임베딩 실패 (meeting_id={meeting_id}): {load_result}")
+
+        meeting_crud.update_summary_file(db, meeting_id, workspace_file.id)
+        return workspace_file
+
+    except Exception as exc:
+        db.rollback()
+        print(f"[meeting_service] 요약 문서 저장 실패 (meeting_id={meeting_id}): {repr(exc)}")
+        return None
+    
+def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, category_id: str) -> None:
+    """run_meeting_postprocess 실행 후 완료되면 요약을 문서로 저장하고 워크스페이스 멤버에게 알림."""
+    result = run_meeting_postprocess(
+        meeting_id=meeting_id, workspace_id=workspace_id, category_id=category_id,
+    )
+    if result.get("summary_generation_status") != "completed":
+        return
+
+    db = SessionLocal()
+    try:
+        meeting = meeting_crud.get_meeting(db, uuid.UUID(meeting_id))
+        title = meeting.title if meeting else "회의"
+
+        if meeting:
+            save_summary_as_document(
+                db,
+                meeting_id=meeting.id,
+                workspace_id=meeting.workspace_id,
+                category_id=meeting.category_id,
+                uploaded_by=meeting.started_by,
+                title=title,
+                full_summary=result.get("full_summary", ""),
+                short_summary=result.get("short_summary", ""),
+                discussion_points=result.get("discussion_points", []),
+            )
+
+        for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
+            if not notification_crud.is_notification_enabled(
+                db, uuid.UUID(workspace_id), member.user_id, "meeting_summary_ready",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=uuid.UUID(workspace_id),
+                type="meeting_summary_ready", title="회의 요약 완료",
+                message=f"'{title}' 회의 요약이 준비됐습니다.",
+                ref_type="meeting", ref_id=uuid.UUID(meeting_id),
+            )
     finally:
         db.close()
