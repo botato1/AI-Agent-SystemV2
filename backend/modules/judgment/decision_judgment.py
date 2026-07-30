@@ -1,9 +1,9 @@
 """실시간 판단 파이프라인 1-1: 결정 비교 판단 (통합)
 
-모순 감지 / 결정 리마인더 / 반복 논의 알림, 이 세 기능은 별개가 아니라 하나의
-판단 파이프라인이 결과에 따라 갈라진 것이다 (설계 문서 1-1 참조).
+결정 리마인더 / 근거 명확한 변경 / 근거 불명확한 변경, 이 세 기능은 별개가 아니라
+하나의 판단 파이프라인이 결과에 따라 갈라진 것이다 (설계 문서 1-1 참조).
 
-핵심 원칙 — "이미 결정된 걸 다르게 말하는 것 = 모순":
+핵심 원칙 — "이미 결정된 걸 다르게 말하는 것 = 변경 후보":
 발화가 새로운 값/입장을 제시하는가(→ 값 비교로), 아니면 주제만 재언급하는가
 (→ 리마인더)를 먼저 가른다. 재확인이 "글자 그대로 같을 때만"으로 좁아지는 걸
 피하기 위함.
@@ -11,16 +11,23 @@
 3단계 판단 (전부 Model1 단일 파인튜닝 모델을 배치별 instruction으로 순차 호출):
   1단계) 새 값 제시 여부   → 아니오: Case 0(리마인더)
   2단계) 값이 기존과 같은가 → 예: Case 1(무시)
-  3단계) 근거가 명확한가   → 예: Case 2(조용히 흘림) / 아니오: Case 3(모순)
+  3단계) 근거가 명확한가   → 예: Case 2(명확한 근거의 변경) / 아니오: Case 3(명확한 근거 없이 변경)
 
 [수정 - 2026.07.27] confidence/Model2 이원화 및 Case 4(보류·반복카운트) 제거.
 Case 4는 세션 카운트 기반으로 재설계해서 별도로 다시 넣을 예정 - 지금은 없음.
 
-[수정] 결정 매칭을 벡터 검색(top-1/top-N) 기반에서 topic_match 파인튜닝 검증
-기반으로 교체. 벡터 유사도로 후보를 먼저 거르면 임베딩이 약한 진짜 매칭이
-후보 밖으로 밀려서 검증 기회 자체가 없어지는 문제가 실측으로 확인됨 - 카테고리당
-active decision 개수가 실무적으로 크지 않다는 전제하에, 후보 선별 없이 해당
-카테고리의 active decision 전체를 topic_match로 직접 판단한다.
+[수정] 카테고리 내 active decision 전체를 topic_match로 판단하던 것(벡터 검색
+완전 제거)을 되돌림 - decision이 쌓일수록 발화 1개당 LLM 호출이 선형으로 늘어나
+느려지는 문제가 있었음. 벡터 검색을 "필터"가 아니라 "후보 축소"로만 앞단에 둔다
+(임계값을 낮게 잡아 진짜 매칭이 후보 밖으로 밀리는 걸 방지, 최종 판단은 여전히
+topic_match가 함).
+
+[수정] Case 2/3는 "모순"이 아니라 "결정 변경"으로 명명한다 - 문서 내용과의
+충돌(document_judgment)과는 성격이 달라, 근거 명확성 기준으로
+reasoned_change/unreasoned_change로 구분한다. 팝업은 세션 내 (decision, case)
+단위로 1회만 뜨지만, contradictions row는 매번 생성되어 post-meeting이 세션 내
+최신 행을 그대로 사용자 확인 대상으로 재사용할 수 있게 한다 (전체 회의를 다시
+읽고 재판단하지 않음 - decision_transition.py 참조).
 """
 
 import json
@@ -33,6 +40,7 @@ from sqlalchemy.orm import Session
 from backend.db.crud import contradiction_crud, history_crud
 from backend.db.modules import Decision, Meeting
 from backend.modules.llm.ollama_client import _call_ollama
+from backend.modules.rag import chroma_client
 
 # [수정 - 2026.07.27] confidence/Model2 이원화 제거. 판단은 배치1~4 통합
 # 파인튜닝 모델(re-call-model1-unified-v2) 하나로, 단계별 개별 호출.
@@ -40,6 +48,11 @@ from backend.modules.llm.ollama_client import _call_ollama
 # 등 다른 기능도 같이 쓰는 공용 상수라, 판단 전용 모델을 거기 넣으면 다른 기능까지
 # 좁은 판단용 모델로 넘어가게 됨 - 판단 파이프라인 전용 상수를 따로 둔다.
 JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v2")
+
+# [수정] 벡터 검색을 후보 축소용으로 재도입. top_k는 넉넉하게, threshold는 낮게
+# 잡아서 "필터"가 아니라 "후보 목록 좁히기"로만 동작하게 한다 (TBD - 실측 후 조정).
+DECISION_CANDIDATE_TOP_K = int(os.getenv("DECISION_CANDIDATE_TOP_K", "15"))
+DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.3"))
 
 # 배치1~3 학습 때 쓴 instruction 그대로 - 문구가 조금이라도 다르면 정확도가 크게 떨어짐
 JUDGMENT_STEP_INSTRUCTIONS = {
@@ -128,25 +141,44 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
         return False
 
 
-def _get_active_decisions_by_category(
-    db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID
+def _get_candidate_decisions(
+    db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, statement: str
 ) -> list[Decision]:
-    """벡터 검색 대신 이 카테고리의 active decision 전체를 Postgres에서 직접 가져온다.
-    [수정] 벡터 유사도로 후보를 먼저 거르면 임베딩이 약한 진짜 매칭이 후보에서
-    빠질 위험이 있어(실측 확인됨), 후보 선별 자체를 없애고 topic_match가
-    전체를 판단하게 한다. Decision엔 category_id가 없어 Meeting을 조인한다."""
-    return (
+    """벡터 검색으로 후보를 먼저 좁힌 뒤, topic_match는 그 후보에 대해서만 돈다.
+    [수정] active decision 전체를 매번 topic_match하면 decision이 쌓일수록
+    발화 1개당 LLM 호출이 선형으로 늘어 느려짐 - 벡터 검색을 "필터"가 아니라
+    "후보 축소"용으로 다시 앞단에 둔다. threshold를 낮게 잡아 임베딩이 약한
+    진짜 매칭도 후보에서 안 빠지게 한다. Decision엔 category_id가 없어
+    Meeting을 조인한다."""
+    results = chroma_client.search_hybrid(
+        query_text=statement,
+        workspace_id=str(workspace_id),
+        category_id=str(category_id),
+        top_k=DECISION_CANDIDATE_TOP_K,
+        collection_name=chroma_client.DECISION_COLLECTION,
+    )
+    candidate_ids = [
+        uuid.UUID(r["document_id"]) for r in results
+        if r.get("document_id") and r["score"] >= DECISION_CANDIDATE_THRESHOLD
+    ]
+    if not candidate_ids:
+        return []
+
+    decisions = (
         db.query(Decision)
         .join(Meeting, Decision.meeting_id == Meeting.id)
         .filter(
+            Decision.id.in_(candidate_ids),
             Meeting.category_id == category_id,
             Decision.workspace_id == workspace_id,
             Decision.status == "active",
             Decision.deleted_at.is_(None),
         )
-        .order_by(Decision.decided_at.desc())
         .all()
     )
+    order = {cid: i for i, cid in enumerate(candidate_ids)}
+    decisions.sort(key=lambda d: order.get(d.id, len(order)))  # 벡터 점수 순서 유지
+    return decisions
 
 
 def judge(
@@ -168,7 +200,7 @@ def judge(
         popup은 팝업을 띄워야 하면 {"type": ..., "message": ...} 형태, 아니면 None.
         "none"은 관련 있는 active decision이 없어 1-2로 넘겨야 함을 의미.
     """
-    candidates = _get_active_decisions_by_category(db, workspace_id, category_id)
+    candidates = _get_candidate_decisions(db, workspace_id, category_id, statement)
 
     decision = None
     for candidate in candidates:
@@ -222,14 +254,23 @@ def judge(
     # 3단계: 근거가 명확한가?
     reason_is_clear = _ask_judgment_step("reason_is_clear", decision_text, decision_reason, statement)
 
+    # Case 2/3: "모순"이 아니라 근거 명확성 기준의 "결정 변경"으로 구분한다.
+    # 실제 decisions 반영은 여전히 post-meeting이 담당 - 여기선 알림 + 기록만 한다.
     if reason_is_clear:
-        # Case 2: 정당한 변경 - 실시간 팝업 없이 흘려보냄 (post-meeting Case A로 자연 처리)
-        return {"case": "2", "popup": None, "decision_id": str(decision.id)}
+        case, judgment_case = "2", "reasoned_change"
+        message = (f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{statement}'"
+                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" 바꾸시겠습니까?")
+    else:
+        case, judgment_case = "3", "unreasoned_change"
+        message = (f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{statement}'"
+                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" 바꾸시겠습니까?")
 
-    # Case 3: 모순 - 근거 불명확 (confidence 제거로 이 분기는 항상 팝업 대상)
-    # 규칙 D(임시): 세션 내 같은 decision에 이미 모순 팝업 떴으면 팝업 생략 (기록은 남김)
+    # 팝업은 세션 내 (decision, judgment_case) 단위로 1회만 - 같은 decision이어도
+    # 근거 명확/불명확 여부가 바뀌면 별개 알림으로 취급해 각각 1회씩 뜬다.
     already_popped = contradiction_crud.already_popped_in_session_for_decision(
-        db, reference_decision_id=decision.id, **session_kwargs
+        db, reference_decision_id=decision.id, judgment_case=judgment_case, **session_kwargs
     )
 
     # make_deduplication_key의 3번째 인자명이 reference_file_id지만, decision 참조도
@@ -237,6 +278,8 @@ def judge(
     dedup_key = contradiction_crud.make_deduplication_key(
         source_type, source_id, decision.id, decision.id
     )
+    # 팝업 노출 여부와 무관하게 매번 기록 - post-meeting이 세션 내 이 decision의
+    # 최신 행을 그대로 사용자 확인 대상(변경 후보)으로 재사용한다.
     contradiction = contradiction_crud.create_contradiction(
         db,
         workspace_id=workspace_id, category_id=category_id,
@@ -246,20 +289,20 @@ def judge(
         reference_text_snapshot=decision.decision_text,
         confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
         deduplication_key=dedup_key,
+        judgment_case=judgment_case,
         **session_kwargs,
         **({"meeting_segment_id": source_id} if source_type == "meeting_segment"
            else {"room_message_id": source_id}),
     )
 
     if already_popped:
-        return {"case": "3", "popup": None, "decision_id": str(decision.id)}
+        return {"case": case, "popup": None, "decision_id": str(decision.id)}
 
     return {
-        "case": "3",
+        "case": case,
         "popup": {
-            "type": "contradiction",
-            "message": f"'{statement}'이(가) {decision.decided_at}에 결정된"
-                       f" '{decision.decision_text}'와 다릅니다. 바꾸시겠습니까?",
+            "type": judgment_case,
+            "message": message,
             "contradiction_id": str(contradiction.id),
             "actions": ["change_acknowledged", "keep_reference"],
         },

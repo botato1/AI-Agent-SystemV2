@@ -32,27 +32,27 @@ def already_popped_in_session_for_decision(
     session_meeting_id: Optional[uuid.UUID] = None,
     session_room_id: Optional[uuid.UUID] = None,
     reference_decision_id: uuid.UUID,
+    judgment_case: Optional[str] = None,
 ) -> bool:
     """
-    [추가 - 2026.07.16] 1-1 Case 3 / 1-5 규칙: 세션 내 같은 decision(슬롯)에 대해서는
-    발화가 여러 개(다른 화자, 다른 값)여도 모순 팝업은 최대 1회만 뜬다.
+    1-1 Case 2/3: 세션 내 같은 (decision, judgment_case) 조합에 대해서는 발화가
+    여러 개(다른 화자, 다른 값)여도 팝업은 최대 1회만 뜬다. judgment_case를 주지
+    않으면 case 구분 없이 decision 단위로만 체크한다.
 
-    기존 deduplication_key/cooldown은 "이 특정 발화 - 이 참조대상" 조합 단위였어서,
-    같은 세션 안에서 화자가 바뀌며 다른 값으로 계속 충돌하면 매번 새 dedup_key가 생겨
-    팝업이 반복되는 문제가 있었음. 이 함수는 그와 별개로 "세션+decision" 단위로 한 번
-    더 체크해서, 이미 이 세션에서 이 decision에 대한 모순이 한 번이라도 떴으면 이후
-    발화들은 팝업을 생략하게 한다 (contradictions row 자체는 감사기록용으로 계속 생성됨).
+    [수정] dedup을 decision 단위가 아니라 (decision, case) 단위로 거는 이유: 근거
+    명확(reasoned_change)/불명확(unreasoned_change) 여부는 발화마다 바뀔 수 있는
+    별개의 알림이라, 한쪽이 이미 떴다고 다른 쪽까지 막으면 안 된다.
 
-    [TODO - 임시 결정, 팀 테스트 후 재검토] 지금은 리마인더(Case 0)와 동일하게
-    "세션당 1회"로 통일했지만, 모순은 "변경 인지함/기존 유지" 액션이 완결돼야 하는
-    성격이라 미해결(unresolved) 상태인 동안 값이 바뀐 확정 발화가 새로 나올 때마다
-    다시 팝업해야 할 수도 있음. 시나리오 4(여러 명 반복언급) 테스트 데이터로 검증 후
-    이 함수의 동작(또는 호출 여부)을 재조정할 예정 (설계 문서 5장 질문 7 참조).
+    이 함수는 팝업 노출 여부만 결정하고, contradictions row 자체는 dedup 여부와
+    무관하게 항상 생성된다 (감사기록 + post-meeting이 세션 내 최신 행을 그대로
+    사용자 확인 대상으로 재사용하는 근거가 됨 - decision_transition.py 참조).
     """
     q = db.query(Contradiction).filter(
         Contradiction.reference_decision_id == reference_decision_id,
         Contradiction.reference_type == "decision",
     )
+    if judgment_case:
+        q = q.filter(Contradiction.judgment_case == judgment_case)
     if session_meeting_id:
         q = q.filter(Contradiction.session_meeting_id == session_meeting_id)
     if session_room_id:
