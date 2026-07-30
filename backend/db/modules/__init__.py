@@ -11,7 +11,7 @@ SQLAlchemy가 문자열 테이블명으로 lazy resolve하기 때문에, 이 파
 
 from backend.db.base import Base  # noqa: F401
 
-from .auth import RefreshToken, User
+from .auth import RefreshToken, User, UserVoiceProfile
 from .workspace import Workspace, WorkspaceMember
 from .room import Category, Room, RoomMessage
 from .file import RoomFileLink, Worktree, WorkspaceFile
@@ -27,7 +27,7 @@ from .notification import Notification
 
 __all__ = [
     "Base",
-    "User", "RefreshToken",
+    "User", "RefreshToken", "UserVoiceProfile",
     "Workspace", "WorkspaceMember",
     "Category", "Room", "RoomMessage",
     "Worktree", "WorkspaceFile", "RoomFileLink",
