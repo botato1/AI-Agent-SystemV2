@@ -20,6 +20,7 @@ from backend.routers.worktree_router import router as worktree_router
 from backend.routers.ai_chat_router import router as ai_chat_router, standalone_router as ai_chat_standalone_router
 from backend.routers.notification_router import router as notification_router
 from backend.routers.notification_router import router as notification_router, preferences_router as notification_preferences_router
+from backend.routers.dashboard_router import router as dashboard_router
 from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -64,6 +65,7 @@ app.include_router(ai_chat_router)
 app.include_router(ai_chat_standalone_router)
 app.include_router(notification_router)
 app.include_router(notification_preferences_router)
+app.include_router(dashboard_router)
 
 @app.get("/")
 def root():
