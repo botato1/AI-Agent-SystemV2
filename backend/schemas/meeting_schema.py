@@ -82,6 +82,7 @@ class MeetingSchema(TimestampSchema, SoftDeleteSchema):
         min_length=1,
         max_length=200,
     )
+    title_is_auto: bool = False
     location: Optional[str] = Field(default=None, max_length=200)
     topic: Optional[str] = Field(default=None, max_length=200)
     input_type: MeetingInputType
@@ -257,7 +258,7 @@ class DecisionSchema(TimestampSchema, SoftDeleteSchema):
 # =============================================================================
 
 class MeetingStartRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
     related_room_id: Optional[UUID] = None
     location: Optional[str] = Field(default=None, max_length=200)
     topic: Optional[str] = Field(default=None, max_length=200)
@@ -272,6 +273,7 @@ class MeetingResponse(TimestampSchema):
     source_file_id: Optional[UUID] = None
 
     title: str
+    title_is_auto: bool = False
     location: Optional[str] = None
     topic: Optional[str] = None
     recording_mode: str = "single_device"
@@ -405,7 +407,7 @@ class MeetingRecentListResponse(BaseModel):
     total_count: int
 
 class MeetingScheduleRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
     topic: Optional[str] = Field(default=None, max_length=200)
     location: Optional[str] = Field(default=None, max_length=200)
     scheduled_at: datetime
