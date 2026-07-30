@@ -8,10 +8,10 @@ pyannote.audio==4.0.5
 soundfile==0.14.0
 huggingface_hub==1.21.0
 
-# aarch64+CUDA 서버(ctranslate2가 GPU wheel 미배포)용 대체 엔진
-# faster-whisper(ctranslate2)가 정상 동작하는 x86_64 서버에서는 안 쓰이지만
-# 설치해둬도 무해하므로 공통 requirements에 포함
-transformers>=4.57.0
+# Whisper 대체 엔진(transformers) + Qwen3-ASR 엔진의 공통 런타임.
+# ⚠️ 5.13 이상 필수 — Qwen3-ASR이 transformers 5.13부터 네이티브 지원된다.
+#    GPU 서버 기본 엔진이 qwen이므로(core/config.py) 이 버전을 못 맞추면 서버가 안 뜬다.
+transformers>=5.13.0
 accelerate>=0.34.0
 torchaudio>=2.2.0
 

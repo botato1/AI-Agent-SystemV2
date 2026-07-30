@@ -48,7 +48,12 @@ ARCH = platform.machine()
 _env_engine = os.getenv("STT_ENGINE", "").strip().lower()
 if _env_engine in ("faster_whisper", "transformers", "qwen"):
     STT_ENGINE = _env_engine
-elif ARCH == "aarch64" and DEVICE == "cuda":
+elif DEVICE == "cuda":
+    # GPU 서버 기본값 = qwen (2026-07-30 실시간 회의 검증 후 전환).
+    # CPU에서는 2B 모델이 실용 속도가 안 나오므로 아래 Whisper 경로를 그대로 둔다
+    # — 맥 로컬 개발 환경이 여기 해당.
+    STT_ENGINE = "qwen"
+elif ARCH == "aarch64":
     STT_ENGINE = "transformers"
 else:
     STT_ENGINE = "faster_whisper"

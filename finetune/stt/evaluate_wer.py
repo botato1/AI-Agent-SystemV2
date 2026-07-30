@@ -55,7 +55,9 @@ def load_model(model_id: str, adapter_path: str | None = None, itn: bool = True)
             raise SystemExit("Qwen3-ASR은 LoRA 어댑터 로딩을 지원하지 않음 (평가 전용 어댑터)")
         from qwen_asr_engine import Qwen3ASREngine
         return Qwen3ASREngine(model_id, device=DEVICE, itn=itn)
-    if STT_ENGINE == "transformers":
+    # STT_ENGINE이 qwen이어도 Whisper 모델을 비교 대상으로 넘길 수 있어야 한다.
+    # 그때 faster-whisper로 빠지면 aarch64에서 GPU를 못 잡고 깨지므로 transformers로 간다.
+    if STT_ENGINE in ("transformers", "qwen"):
         from stt.services.whisper_engine import TransformersWhisperEngine
         return TransformersWhisperEngine(model_id, device=DEVICE, adapter_path=adapter_path)
     if adapter_path:
