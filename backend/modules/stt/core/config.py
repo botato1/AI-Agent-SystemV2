@@ -301,6 +301,21 @@ DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 # 아니라 클러스터링에 준 이 하한값이었다.
 # 트레이드오프: 1인 녹음(개발 중 혼자 하는 테스트 등)에서는 한 목소리가 둘로 쪼개질 수 있다.
 # 제품 상황(회의)이 아니라 테스트 상황에서만 생기는 문제라 감수한다.
+# ──────────────────────────────────────────
+# 정밀 재분석 완료 웹훅
+# ──────────────────────────────────────────
+# 재분석은 회의 종료 후 백그라운드로 돌고, 그때 클라이언트 WebSocket은 이미 닫혀 있어
+# 완료를 알릴 통로가 없었다. 소비자(백엔드 요약/모순감지)가 refined 플래그를 폴링하는
+# 대신 완료 시점에 한 번 POST로 찔러준다. services/refine_webhook.py 참고.
+#
+# 미설정(None)이면 웹훅을 보내지 않는다 — 기존 동작과 동일.
+REFINE_WEBHOOK_URL = os.getenv("REFINE_WEBHOOK_URL") or None
+REFINE_WEBHOOK_TIMEOUT_SEC = float(os.getenv("REFINE_WEBHOOK_TIMEOUT_SEC", "10"))
+# 소비자 서버가 재시작 중일 수 있어 재시도한다. 통지를 놓치면 소비자 쪽 후처리가
+# 아예 시작되지 않으므로 한 번 실패로 포기하지 않는다(지연은 delay × 시도횟수로 증가).
+REFINE_WEBHOOK_RETRIES = int(os.getenv("REFINE_WEBHOOK_RETRIES", "3"))
+REFINE_WEBHOOK_RETRY_DELAY_SEC = float(os.getenv("REFINE_WEBHOOK_RETRY_DELAY_SEC", "2"))
+
 MIN_SPEAKERS = 2
 MAX_SPEAKERS = 6  # 팀 인원(6명)에 맞춤
 

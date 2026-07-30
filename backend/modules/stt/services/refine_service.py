@@ -18,6 +18,7 @@ from ..core.config import (
     build_context_hint,
 )
 from .diarize_service import run_diarization
+from .refine_webhook import notify_refine_done
 from .speaker_id_service import LiveSpeakerIdentifier
 
 # 정밀 재분석은 전체 회의 오디오를 다시 돌리는 무거운 GPU 작업이라 동시에 하나만 수행
@@ -53,13 +54,53 @@ async def refine_meeting(meeting_id: str, app_state) -> dict | None:
     refined=true로 표시 — 모순 감지 배치 재검사(C-4의 Qwen 파트)는 이걸 입력으로 쓰면 됨.
 
     회의 종료 시 백그라운드로 자동 실행되며, 실패해도 실시간 회의록은 그대로 남는다.
+
+    완료(또는 실패) 후 REFINE_WEBHOOK_URL이 설정돼 있으면 소비자에게 통지한다 —
+    이 함수는 백그라운드 태스크로 던져지므로 호출부가 완료를 알 방법이 없기 때문.
     """
     async with _refine_lock:
         try:
-            return await _refine(meeting_id, app_state)
+            meta = await _refine(meeting_id, app_state)
         except Exception:
             logger.exception(f"❌ [{meeting_id}] 정밀 재분석 실패 — 실시간 회의록은 유지됨")
+            # 실패도 통지한다. 성공만 알리면 소비자가 무한정 기다리게 된다.
+            await notify_refine_done(
+                meeting_id, _session_id_of(meeting_id),
+                refined_at=None, segment_count=0, status="failed",
+            )
             return None
+
+        if meta is None:
+            # 회의록 파일이 없는 경우 등 — 재분석할 대상 자체가 없었다.
+            await notify_refine_done(
+                meeting_id, _session_id_of(meeting_id),
+                refined_at=None, segment_count=0, status="failed",
+            )
+            return None
+
+        # 이미 재분석돼 있어 건너뛴 경우(refined_at이 이번 실행에서 갱신되지 않음)에는
+        # 통지하지 않는다 — 새로 생긴 이벤트가 아니라 중복 알림이 된다.
+        if meta.get("_refine_skipped"):
+            meta.pop("_refine_skipped", None)
+            return meta
+
+        await notify_refine_done(
+            meeting_id,
+            meta.get("session_id"),
+            refined_at=meta.get("refined_at"),
+            segment_count=len(meta.get("segments") or []),
+            status="refined",
+        )
+        return meta
+
+
+def _session_id_of(meeting_id: str) -> str | None:
+    """
+    예외 경로에서 meta를 못 읽었을 때만 쓰는 폴백 — meeting_id는
+    "{session_id}_{timestamp}" 형태라 마지막 밑줄 앞이 session_id다.
+    정상 경로에서는 meta["session_id"]를 그대로 쓴다(포맷 파싱에 의존하지 않도록).
+    """
+    return meeting_id.rsplit("_", 1)[0] or None
 
 
 def _merge_adjacent_turns(tracks: list[dict]) -> list[dict]:
@@ -150,6 +191,8 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     if not tracks_meta:
         logger.info(f"↩️ [{meeting_id}] 각자 PC 모드 — 참가자별 트랙이 없어 재전사 생략(옛 회의)")
         meta["refined"] = True
+        # refined=True인데 refined_at이 없으면 완료 웹훅 계약이 어긋난다
+        meta["refined_at"] = datetime.now(timezone.utc).isoformat()
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
         return meta
@@ -174,6 +217,8 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     if not turns:
         logger.info(f"↩️ [{meeting_id}] 각자 PC 모드 — 재전사할 턴이 없음")
         meta["refined"] = True
+        # refined=True인데 refined_at이 없으면 완료 웹훅 계약이 어긋난다
+        meta["refined_at"] = datetime.now(timezone.utc).isoformat()
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
         return meta
@@ -208,6 +253,8 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         meta = json.load(f)
     if meta.get("refined"):
         logger.info(f"↩️ [{meeting_id}] 이미 재분석 완료된 회의 — 건너뜀")
+        # 호출부가 완료 웹훅을 중복 발송하지 않도록 표시 (응답에는 남지 않는 내부 플래그)
+        meta["_refine_skipped"] = True
         return meta
     if meta.get("speaker_mode") == "group":
         # "각자 PC" 모드 — 참가자가 이미 자기 이름으로 접속해 화자가 확정돼 있으므로
