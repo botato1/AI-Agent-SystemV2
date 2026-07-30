@@ -82,9 +82,19 @@ _AIHUB_EVENT = re.compile(r"(?<![가-힣A-Za-z0-9])[bnlou]\s*/")
 _AIHUB_FILLER = re.compile(r"([가-힣]+)\s*/")
 
 
-def strip_aihub_tags(text: str) -> str:
-    """AI-Hub 전사 규약 태그를 실제 발화 텍스트로 되돌린다."""
-    text = _AIHUB_DUAL.sub(r"\1", text)      # 이중 전사 → 표기형
+def strip_aihub_tags(text: str, dual: str = "written") -> str:
+    """
+    AI-Hub 전사 규약 태그를 실제 발화 텍스트로 되돌린다.
+
+    dual: 이중 전사에서 어느 쪽을 정답으로 볼지.
+      "written" — 표기형 "1대16.8". Whisper 계열 출력 형식.
+      "spoken"  — 발음형 "일 대 십육 점 팔". Qwen3-ASR은 ITN을 적용하지 않아
+                  숫자를 발음형으로 출력하므로, 이쪽으로 맞춰 재측정하면
+                  "표기 형식 차이"와 "실제 인식 오류"를 분리할 수 있다.
+
+    두 값의 차이가 곧 후처리(ITN)로 회수 가능한 몫이다.
+    """
+    text = _AIHUB_DUAL.sub(r"\1" if dual == "written" else r"\2", text)
     text = _AIHUB_EVENT.sub(" ", text)       # 음향 이벤트 태그 제거
     text = _AIHUB_FILLER.sub(r"\1 ", text)   # 간투어는 단어만 남김
     return text.replace("+", " ").replace("*", " ")
@@ -146,8 +156,9 @@ def main():
     parser.add_argument("--context", default=None, help="컨텍스트 바이어싱 텍스트 파일 경로")
     # 기본값은 raw — 기존 리포트와 그대로 비교할 수 있게 동작을 바꾸지 않는다.
     # AI-Hub 매니페스트를 평가할 때만 aihub를 줘서 태그를 풀고 측정한다.
-    parser.add_argument("--ref-format", choices=["raw", "aihub"], default="raw",
-                        help="정답 텍스트 형식. aihub면 전사 규약 태그를 풀고 비교")
+    parser.add_argument("--ref-format", choices=["raw", "aihub", "aihub-spoken"], default="raw",
+                        help="정답 텍스트 형식. aihub면 태그를 풀고 비교(이중전사=표기형), "
+                             "aihub-spoken이면 이중전사를 발음형으로 잡아 ITN 영향을 분리")
     args = parser.parse_args()
     beam_size = args.beam_size if args.beam_size is not None else PRECISE_BEAM_SIZE
     model_id = args.model or WHISPER_MODEL_PRECISE
@@ -155,16 +166,17 @@ def main():
     with open(args.manifest, encoding="utf-8") as f:
         items = [json.loads(line) for line in f if line.strip()]
     stripped = 0
-    if args.ref_format == "aihub":
+    if args.ref_format.startswith("aihub"):
+        dual = "spoken" if args.ref_format == "aihub-spoken" else "written"
         for item in items:
-            cleaned = strip_aihub_tags(item["text"])
+            cleaned = strip_aihub_tags(item["text"], dual=dual)
             if cleaned != item["text"]:
                 stripped += 1
             item["text"] = cleaned
         # 태그가 하나도 안 걸리면 형식을 잘못 지정한 것 — 조용히 넘기면
         # 부풀려진 CER을 정상 수치로 착각하게 된다.
         if stripped == 0:
-            raise SystemExit("❌ --ref-format aihub인데 태그가 하나도 안 걸림 — 매니페스트 형식 확인 필요")
+            raise SystemExit(f"❌ --ref-format {args.ref_format}인데 태그가 하나도 안 걸림 — 매니페스트 형식 확인 필요")
         print(f"AI-Hub 태그 정리: {stripped}/{len(items)}건의 정답 텍스트 변경됨")
     terms = []
     if args.terms:
