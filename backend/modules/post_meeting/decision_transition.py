@@ -3,14 +3,17 @@
 LLM 추출 결과(topics[])를 순회하며, 같은 category_id 안 기존 decision과
 비교해 분기한다 (설계 문서 2-3 참조).
 
-Case A: 확정 + 값이 다름         → 즉시 반영 안 함. contradictions에 후보로 등록하고
-                                   사용자가 /contradictions/{id}/resolve에서
-                                   keep_reference(유지)/change_acknowledged(변경,
-                                   new_decision_text 지정 시 직접수정)를 선택해야 반영.
+[수정] "확정 + 값이 다름"(구 Case A) 판단은 여기서 whole-transcript를 다시 읽어
+LLM으로 재비교하지 않는다. 실시간 판단 파이프라인(decision_judgment.py Case 2/3)이
+이미 발화 단위로 이 판단을 하고 contradictions에 기록해두므로, 회의 후 사용자
+확인은 그 기록(세션 내 decision별 최신 행)을 그대로 쓴다 - 중복 판단으로 인한
+실시간/사후 판단 불일치를 없애기 위함. 실시간에서 아예 안 잡힌 변경(벡터 후보에서
+빠졌거나 발화가 짧아 판단을 못 탄 경우)은 이 경로로도 못 잡는다 - 알려진 한계.
+
 Case B: 재논의했지만 결론 없음    → 관련 기존 decision(active/pending) 없으면 새로
                                    status='pending' Decision 생성 (미해결 안건 알림 대상).
                                    있으면 decisions 안 건드리고 기록만.
-Case C: 재확인만 함              → 아무것도 안 함
+그 외(완전히 새로운 decision, 기존 decision과의 재확인/변경)는 아래 process_topics() 참조.
 """
 
 import os
@@ -19,40 +22,19 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from backend.db.crud import contradiction_crud, history_crud
+from backend.db.crud import history_crud
 from backend.db.modules import Decision
-from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
 from backend.modules.rag import chroma_client
 
 DECISION_MATCH_THRESHOLD = float(os.getenv("DECISION_MATCH_THRESHOLD", "0.75"))  # TBD - 실험 후 조정 (설계 문서 5장 열린 질문과 동일 축)
 
-COMPARE_PROMPT_TEMPLATE = """아래는 같은 주제에 대한 기존 결정과 새로 논의된 내용이다.
-두 값이 실질적으로 같은 내용인지, 다른 내용인지만 판단하라.
-다른 설명 없이 "SAME" 또는 "DIFFERENT" 중 하나만 출력하라.
-
-[기존 결정]
-{old_text}
-
-[새로 논의된 내용]
-{new_text}
-"""
-
-
-def _values_are_same(old_text: str, new_text: str) -> bool:
-    """기존 decision과 새 topic의 값이 실질적으로 같은지 LLM으로 판단."""
-    prompt = COMPARE_PROMPT_TEMPLATE.format(old_text=old_text, new_text=new_text)
-    # [수정 - 2026.07.16] post-meeting은 비동기 처리라 레이턴시 제약 없음 -> 처음부터 Model2
-    result = _call_ollama(prompt, timeout=60.0, model=OLLAMA_MODEL_HEAVY).strip().upper()
-    return "SAME" in result and "DIFFERENT" not in result
-
 
 def _find_existing_decision(
     db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, topic_text: str
-) -> tuple[Decision, float] | None:
+) -> Decision | None:
     """DECISION_COLLECTION에서 이 주제와 유사한 기존 decision을 찾는다.
     active/pending 둘 다 대상 - pending 상태에 대해서도 찾아야 같은 미해결 안건이
-    회의마다 중복 생성되는 걸 막을 수 있다. 매칭 점수도 함께 반환해서 Case A의
-    contradiction confidence_score로 재사용한다 (decision_judgment.py와 동일 패턴)."""
+    회의마다 중복 생성되는 걸 막을 수 있다."""
     results = chroma_client.search_hybrid(
         query_text=topic_text,
         workspace_id=str(workspace_id),
@@ -69,7 +51,7 @@ def _find_existing_decision(
 
     decision = db.get(Decision, uuid.UUID(decision_id))
     if decision and decision.status in ("active", "pending"):
-        return decision, results[0]["score"]
+        return decision
     return None
 
 
@@ -83,12 +65,13 @@ def process_topics(
 ) -> list[Decision]:
     """
     llm_extractor.extract()가 뽑은 topics[]를 순회하며 decisions 테이블을 전이시킨다.
+    기존 active/pending decision과 매칭되는 경우("값이 바뀌었는지")는 여기서
+    다루지 않는다 - 실시간 판단 파이프라인(decision_judgment.py)이 이미 처리한다.
 
     [수정 - 리뷰 반영 9번] commit 옵션 추가 (post_meeting 파이프라인 단일 트랜잭션용).
 
     Returns:
-        새로 생성되거나 active 상태가 된 decision 목록 (2-5 인덱싱 대상).
-        Case A는 즉시 반영되지 않으므로(contradictions에만 등록) 여기 포함되지 않는다.
+        새로 생성되거나 새로 pending이 된 decision 목록 (2-5 인덱싱 대상).
     """
     newly_active_decisions: list[Decision] = []
     now = datetime.now(timezone.utc)
@@ -99,8 +82,7 @@ def process_topics(
         if not topic_text:
             continue
 
-        match = _find_existing_decision(db, workspace_id, category_id, topic_text)
-        existing, match_score = match if match else (None, 0.0)
+        existing = _find_existing_decision(db, workspace_id, category_id, topic_text)
 
         if status == "reopened_no_conclusion":
             if existing:
@@ -145,40 +127,9 @@ def process_topics(
             newly_active_decisions.append(new_decision)
             continue
 
-        if existing.status != "active":
-            # 관련된 게 pending(미해결 안건)뿐이고 아직 active 결정이 아님 - 정식 확정
-            # 전이는 스코프 밖(후속 작업), 지금은 그대로 둔다.
-            continue
-
-        if status == "reconfirmed":
-            # Case C: 재확인만 함, 아무것도 안 함
-            continue
-
-        # status == "confirmed": 값이 실제로 다른지 확인
-        if _values_are_same(existing.decision_text, topic_text):
-            # 사실상 재확인과 동일 (Case C)
-            continue
-
-        # Case A: 확정 + 값이 다름 → 즉시 반영하지 않고 모순 후보로 등록.
-        # 사용자가 /contradictions/{id}/resolve에서 keep_reference(유지) /
-        # change_acknowledged(변경, new_decision_text 지정 시 직접수정)를 선택해야
-        # 실제 decisions 테이블에 반영된다 (contradiction_crud.resolve_contradiction 참조).
-        dedup_key = contradiction_crud.make_deduplication_key(
-            "meeting_summary", meeting_id, existing.id, existing.id
-        )
-        contradiction_crud.create_contradiction(
-            db,
-            workspace_id=workspace_id, category_id=category_id,
-            source_type="meeting_summary", reference_type="decision",
-            reference_decision_id=existing.id,
-            statement_text_snapshot=topic_text,
-            reference_text_snapshot=existing.decision_text,
-            confidence_score=match_score,
-            deduplication_key=dedup_key,
-            session_meeting_id=meeting_id,
-            reason=topic.get("reason"),
-            commit=commit,
-        )
+        # 기존 active/pending decision과 매칭된 경우 - "값이 바뀌었는지"는 여기서
+        # 다시 판단하지 않는다 (위 [수정] 참조, 실시간 판단 파이프라인이 이미 처리).
+        # pending 상태의 정식 확정 전이는 스코프 밖(후속 작업).
 
     if commit:
         db.commit()
