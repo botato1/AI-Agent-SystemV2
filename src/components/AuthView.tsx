@@ -11,6 +11,7 @@ import {
   requestPasswordResetApi,
   resolveAvatarUrl,
   signUpApi,
+  LoginResponse,
 } from "../services/auth";
 
 interface RegisteredAccount {
@@ -208,31 +209,63 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
       displayName: name.trim(),
     });
 
-    setIsSubmitting(false);
+    if (signUpResult.status !== "success") {
+      setIsSubmitting(false);
+      setError(signUpResult.message);
+      return;
+    }
 
-    if (signUpResult.status === "success") {
-      saveAvatarColor(username.trim(), avatarColor);
+    saveAvatarColor(username.trim(), avatarColor);
 
-      const newUser: User = {
+    onSignUp({
+      username: username.trim(),
+      email: fullEmail,
+      password,
+      user: {
         id: crypto.randomUUID(),
         name: name.trim(),
         username: username.trim(),
         status: "online",
         avatarColor,
         avatarImageUrl,
-      };
+      },
+    });
 
-      onSignUp({
-        username: username.trim(),
-        email: fullEmail,
-        password,
-        user: newUser,
-      });
+    // 회원가입 후 다시 로그인 화면으로 보내는 대신, 방금 만든 계정으로 바로 로그인시킨다
+    const loginResult = await loginApi(username.trim(), password.trim());
+    setIsSubmitting(false);
 
+    if (!applyLoginSuccess(loginResult)) {
+      // 자동 로그인만 실패한 경우 - 계정은 이미 만들어졌으니 로그인 화면으로 안내
       switchMode("login");
-    } else {
-      setError(signUpResult.message);
+      setError("회원가입은 완료됐지만 자동 로그인에 실패했어요. 다시 로그인해 주세요.");
     }
+  }
+
+  // 로그인 성공 응답을 실제 세션으로 적용 (로그인 폼 제출과 회원가입 직후 자동 로그인이 공유)
+  function applyLoginSuccess(result: LoginResponse): boolean {
+    if (!(result.status === "success" && result.user && result.token)) return false;
+
+    localStorage.setItem("access_token", result.token.access_token);
+    if (result.token.refresh_token) {
+      localStorage.setItem("refresh_token", result.token.refresh_token);
+    }
+
+    const fixedAvatarColor =
+      loadAvatarColor(result.user.username) || hashAvatarColor(result.user.username);
+    saveAvatarColor(result.user.username, fixedAvatarColor);
+
+    const loggedInUser: User = {
+      id: result.user.id,
+      name: result.user.display_name,
+      username: result.user.username,
+      status: "online",
+      avatarColor: fixedAvatarColor,
+      avatarImageUrl: resolveAvatarUrl(result.user.profile_image_url),
+    };
+
+    onLogIn(loggedInUser);
+    return true;
   }
 
   // 백엔드 DB 로그인 호출
@@ -245,32 +278,10 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
     }
 
     setIsSubmitting(true);
-
     const result = await loginApi(username, password);
-
     setIsSubmitting(false);
 
-    if (result.status === "success" && result.user && result.token) {
-      localStorage.setItem("access_token", result.token.access_token);
-      if (result.token.refresh_token) {
-        localStorage.setItem("refresh_token", result.token.refresh_token);
-      }
-
-      const fixedAvatarColor =
-        loadAvatarColor(result.user.username) || hashAvatarColor(result.user.username);
-      saveAvatarColor(result.user.username, fixedAvatarColor);
-
-      const loggedInUser: User = {
-        id: result.user.id,
-        name: result.user.display_name,
-        username: result.user.username,
-        status: "online",
-        avatarColor: fixedAvatarColor,
-        avatarImageUrl: resolveAvatarUrl(result.user.profile_image_url),
-      };
-
-      onLogIn(loggedInUser);
-    } else {
+    if (!applyLoginSuccess(result)) {
       setError(result.message);
     }
   }
@@ -460,8 +471,10 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
             {mode === "signup" && (
-              <p className="mt-1 text-xs text-recall-textMuted">
-                8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합
+              <p className={`mt-1 text-xs ${password && validatePassword(password) ? "text-recall-danger" : "text-recall-textMuted"}`}>
+                {password && validatePassword(password)
+                  ? validatePassword(password)
+                  : "8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합"}
               </p>
             )}
             {mode === "login" && (

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import { getDocumentGraphApi } from "../services/document";
 import DocumentPreviewModal from "./DocumentPreviewModal";
+import { CloseIcon, MenuIcon, PlusIcon, MinusIcon, RepeatIcon } from "./icons";
 
 interface GraphViewProps {
   workspaceId: string;
@@ -56,11 +57,13 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
   const edgesRef = useRef<Edge[]>([]);
 
   const [isLoadingEdges, setIsLoadingEdges] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(
     analyzedDocs.length > 0 ? analyzedDocs[0].id : null
   );
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
+  const [zoomPercent, setZoomPercent] = useState(100);
 
   // 뷰 팬/줌 상태
   const viewRef = useRef({ offsetX: 0, offsetY: 0, scale: 1 });
@@ -319,7 +322,9 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           ctx.strokeStyle = `rgba(165, 180, 252, ${0.55 + edge.strength * 0.4})`;
           ctx.lineWidth = 2 + edge.strength * 2.5;
         } else {
-          const alpha = isRelatedToFocus ? 0.15 + edge.strength * 0.6 : 0.04;
+          // 아무것도 선택 안 했을 때도 선이 기본적으로 보이게 최소 알파를 올려둠
+          // (예전엔 포커스 대상이 아닌 선은 0.04라 사실상 안 보였음)
+          const alpha = isRelatedToFocus ? 0.15 + edge.strength * 0.6 : 0.12 + edge.strength * 0.25;
           ctx.strokeStyle = `rgba(129, 140, 248, ${alpha})`;
           ctx.lineWidth = 1;
         }
@@ -443,22 +448,36 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
     isPanningRef.current = false;
   };
 
+  // 특정 화면 좌표(pivot)를 기준으로 확대/축소 - 지정 안 하면 캔버스 중앙 기준
+  // (휠 줌과 +/- 버튼 줌이 이 함수 하나를 공유한다)
+  const applyZoom = (rawScale: number, pivot?: { x: number; y: number }) => {
+    const canvas = canvasRef.current;
+    const { offsetX, offsetY, scale } = viewRef.current;
+    const newScale = Math.min(Math.max(rawScale, 0.3), 3);
+    const px = pivot?.x ?? (canvas ? canvas.clientWidth / 2 : 0);
+    const py = pivot?.y ?? (canvas ? canvas.clientHeight / 2 : 0);
+
+    viewRef.current.offsetX = px - ((px - offsetX) / scale) * newScale;
+    viewRef.current.offsetY = py - ((py - offsetY) / scale) * newScale;
+    viewRef.current.scale = newScale;
+    setZoomPercent(Math.round(newScale * 100));
+  };
+
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const { offsetX, offsetY, scale } = viewRef.current;
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    const newScale = Math.min(Math.max(scale * zoomFactor, 0.3), 3);
+    applyZoom(viewRef.current.scale * zoomFactor, {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
 
-    // 마우스 포인터 위치를 기준으로 확대/축소
-    viewRef.current.offsetX = mouseX - ((mouseX - offsetX) / scale) * newScale;
-    viewRef.current.offsetY = mouseY - ((mouseY - offsetY) / scale) * newScale;
-    viewRef.current.scale = newScale;
+  const handleResetView = () => {
+    viewRef.current = { offsetX: 0, offsetY: 0, scale: 1 };
+    setZoomPercent(100);
   };
 
   const hoveredNode = nodesRef.current.find((n) => n.id === hoveredNodeId);
@@ -492,118 +511,174 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           <p className="text-base text-recall-textMuted">{t.graph_no_docs || "분석 완료된 문서가 없습니다."}</p>
         </div>
       ) : (
-        <div className="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
-          <div className="col-span-2 relative flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft overflow-hidden">
-            <canvas
-              ref={canvasRef}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onWheel={handleWheel}
-              onMouseLeave={() => {
-                draggingNodeRef.current = null;
-                isPanningRef.current = false;
-                setHoveredNodeId(null);
+        <div className="relative flex-1 overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
+          {/* 그래프는 항상 전체 화면을 쓰고, 문서 목록/줌 컨트롤은 그 위에 떠 있는 패널로 처리 */}
+          <canvas
+            ref={canvasRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onWheel={handleWheel}
+            onMouseLeave={() => {
+              draggingNodeRef.current = null;
+              isPanningRef.current = false;
+              setHoveredNodeId(null);
+            }}
+            className="h-full w-full cursor-grab active:cursor-grabbing"
+          />
+
+          {hoveredNode && (
+            <div
+              style={{
+                position: "absolute",
+                left: `${hoveredNode.x * viewRef.current.scale + viewRef.current.offsetX}px`,
+                top: `${
+                  (hoveredNode.y + hoveredNode.radius + 8) * viewRef.current.scale +
+                  viewRef.current.offsetY
+                }px`,
+                transform: "translateX(-50%)",
               }}
-              className="h-full w-full cursor-grab active:cursor-grabbing"
-            />
+              className="pointer-events-none z-20 flex flex-col items-center"
+            >
+              <div className="h-0 w-0 border-x-4 border-x-transparent border-b-4 border-b-recall-bgMain" />
+              <div className="whitespace-nowrap rounded-md border border-recall-border bg-recall-bgMain px-2.5 py-1 text-center shadow-xl">
+                <p className="text-xs font-semibold text-recall-text">{hoveredNode.name}</p>
+              </div>
+            </div>
+          )}
 
-            {hoveredNode && (
-              <div
-                style={{
-                  position: "absolute",
-                  left: `${hoveredNode.x * viewRef.current.scale + viewRef.current.offsetX}px`,
-                  top: `${
-                    (hoveredNode.y + hoveredNode.radius + 8) * viewRef.current.scale +
-                    viewRef.current.offsetY
-                  }px`,
-                  transform: "translateX(-50%)",
-                }}
-                className="pointer-events-none z-20 flex flex-col items-center"
+          {presentGroups.length > 0 && (
+            <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-wrap gap-2.5 rounded-lg border border-recall-border bg-recall-bgMain/85 px-3 py-2 backdrop-blur-sm">
+              {presentGroups.map((group) => (
+                <div key={group} className="flex items-center gap-1.5">
+                  <span
+                    className="h-2 w-2 flex-shrink-0 rounded-full"
+                    style={{ background: getGroupColor(group) }}
+                  />
+                  <span className="text-xs text-recall-textMuted">{GROUP_LABELS[group] ?? "기타"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 문서 목록 패널 + 토글/줌 툴바 - 오른쪽에 같이 붙여서 한 덩어리로 보이게 */}
+          <div className="absolute right-3 top-3 z-30 flex flex-row-reverse items-start gap-2">
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => setIsPanelOpen((v) => !v)}
+                title={isPanelOpen ? "문서 목록 닫기" : "문서 목록 열기"}
+                className={`flex h-9 w-9 items-center justify-center rounded-xl shadow-lg transition ${
+                  isPanelOpen
+                    ? "bg-recall-accent text-white"
+                    : "border border-recall-border bg-recall-bgMain/95 text-recall-textMuted backdrop-blur-sm hover:text-recall-text"
+                }`}
               >
-                <div className="h-0 w-0 border-x-4 border-x-transparent border-b-4 border-b-recall-bgMain" />
-                <div className="whitespace-nowrap rounded-md border border-recall-border bg-recall-bgMain px-2.5 py-1 text-center shadow-xl">
-                  <p className="text-xs font-semibold text-recall-text">{hoveredNode.name}</p>
-                </div>
-              </div>
-            )}
+                <MenuIcon size={16} />
+              </button>
 
-            {presentGroups.length > 0 && (
-              <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-wrap gap-2.5 rounded-lg border border-recall-border bg-recall-bgMain/85 px-3 py-2 backdrop-blur-sm">
-                {presentGroups.map((group) => (
-                  <div key={group} className="flex items-center gap-1.5">
-                    <span
-                      className="h-2 w-2 flex-shrink-0 rounded-full"
-                      style={{ background: getGroupColor(group) }}
-                    />
-                    <span className="text-xs text-recall-textMuted">{GROUP_LABELS[group] ?? "기타"}</span>
-                  </div>
-                ))}
+              <div className="flex flex-col items-center gap-1 rounded-xl border border-recall-border bg-recall-bgMain/95 p-1 shadow-lg backdrop-blur-sm">
+                <button
+                  onClick={() => applyZoom(viewRef.current.scale * 1.2)}
+                  title="확대"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+                >
+                  <PlusIcon size={14} />
+                </button>
+                <span className="w-full py-0.5 text-center text-[11px] tabular-nums text-recall-textMuted">
+                  {zoomPercent}%
+                </span>
+                <button
+                  onClick={() => applyZoom(viewRef.current.scale / 1.2)}
+                  title="축소"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+                >
+                  <MinusIcon size={14} />
+                </button>
+                <div className="my-0.5 h-px w-5 bg-recall-border" />
+                <button
+                  onClick={handleResetView}
+                  title="보기 초기화"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+                >
+                  <RepeatIcon size={13} />
+                </button>
               </div>
-            )}
-          </div>
+            </div>
 
-          <div className="flex flex-col gap-4 overflow-hidden">
-            <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
-              <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-recall-textMuted">
-                연관 문서 {selectedDoc ? `- ${selectedDoc.name}` : ""}
-              </p>
-              {relatedToSelected.length === 0 ? (
-                <p className="text-sm text-recall-textMuted">연관된 문서가 없습니다.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {relatedToSelected.map(({ doc, strength }) => (
+            {isPanelOpen && (
+              <div className="flex max-h-[calc(100vh-8rem)] w-72 flex-col gap-3 overflow-hidden">
+                <div className="flex flex-col overflow-hidden rounded-xl border border-recall-border bg-recall-bgMain/95 shadow-xl backdrop-blur-sm">
+                  <div className="flex items-center justify-between border-b border-recall-border px-3.5 py-2.5">
+                    <p className="text-sm font-semibold text-recall-text">전체 문서 ({analyzedDocs.length})</p>
                     <button
-                      key={doc!.id}
-                      onClick={() => setSelectedDocId(doc!.id)}
-                      className="flex w-full items-center justify-between rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-left text-sm hover:border-recall-accent/50"
+                      onClick={() => setIsPanelOpen(false)}
+                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
                     >
-                      <span className="truncate text-recall-text">{doc!.name}</span>
-                      <span className="ml-2 flex-shrink-0 text-[11px] text-recall-textMuted">
-                        {Math.round(strength * 100)}%
-                      </span>
+                      <CloseIcon size={14} />
                     </button>
-                  ))}
+                  </div>
+
+                  <div className="max-h-48 space-y-0.5 overflow-y-auto p-1.5">
+                    {analyzedDocs.map((doc) => {
+                      const isSelected = doc.id === selectedDoc?.id;
+                      return (
+                        <button
+                          key={doc.id}
+                          onClick={() => setSelectedDocId(doc.id)}
+                          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+                            isSelected ? "bg-recall-accent/15 text-recall-accent" : "text-recall-text hover:bg-white/5"
+                          }`}
+                        >
+                          <span
+                            className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                            style={{ background: getGroupColor(getExtGroup(doc.name)) }}
+                          />
+                          <span className="truncate">{doc.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              )}
-            </div>
 
-            <div className="flex-1 rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-y-auto">
-              <p className="mb-3 text-sm font-semibold text-recall-textMuted uppercase">
-                전체 문서 목록 ({analyzedDocs.length})
-              </p>
+                {selectedDoc && (
+                  <div className="rounded-xl border border-recall-border bg-recall-bgMain/95 p-3.5 shadow-xl backdrop-blur-sm">
+                    <p className="truncate text-sm font-semibold text-recall-text">{selectedDoc.name}</p>
+                    <p className="mt-1 text-xs text-recall-textMuted">
+                      {new Date(selectedDoc.uploadedAt).toLocaleDateString("ko-KR")}
+                    </p>
 
-              <div className="space-y-2">
-                {analyzedDocs.map((doc) => {
-                  const isSelected = doc.id === selectedDoc?.id;
+                    <p className="mt-2.5 text-xs font-medium text-recall-textMuted">
+                      연관 문서 {relatedToSelected.length}개
+                    </p>
+                    {relatedToSelected.length === 0 ? (
+                      <p className="mt-0.5 text-xs text-recall-textMuted/70">연관된 문서가 없어요</p>
+                    ) : (
+                      <div className="mt-1.5 space-y-1">
+                        {relatedToSelected.map(({ doc, strength }) => (
+                          <button
+                            key={doc!.id}
+                            onClick={() => setSelectedDocId(doc!.id)}
+                            className="flex w-full items-center justify-between rounded-lg border border-recall-border bg-recall-bg px-2 py-1 text-left text-xs hover:border-recall-accent/50"
+                          >
+                            <span className="truncate text-recall-text">{doc!.name}</span>
+                            <span className="ml-2 flex-shrink-0 text-recall-textMuted">
+                              {Math.round(strength * 100)}%
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
-                  return (
-                    <div
-                      key={doc.id}
-                      onClick={() => setSelectedDocId(doc.id)}
-                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-sm transition ${
-                        isSelected
-                          ? "border-recall-accent bg-recall-accent/10 shadow-sm"
-                          : "border-recall-border bg-recall-bgMain hover:border-recall-accent/50"
-                      }`}
+                    <button
+                      onClick={() => setPreviewDoc({ id: selectedDoc.id, name: selectedDoc.name })}
+                      className="mt-3 flex w-full items-center justify-center rounded-lg bg-recall-accent py-2 text-sm font-medium text-white hover:opacity-90"
                     >
-                      <span className="truncate font-semibold text-recall-text pr-2">{doc.name}</span>
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPreviewDoc({ id: doc.id, name: doc.name });
-                        }}
-                        className="shrink-0 rounded-lg bg-recall-accent/15 px-2.5 py-1.5 text-xs font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
-                      >
-                        상세보기 →
-                      </button>
-                    </div>
-                  );
-                })}
+                      문서 내용 보기 →
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}

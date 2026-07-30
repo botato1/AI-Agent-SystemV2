@@ -7,6 +7,7 @@ import {
   getContradictionListApi,
   resolveContradictionApi,
   dismissContradictionApi,
+  reopenContradictionApi,
   getChangeSummaryApi,
 } from "../services/contradiction";
 
@@ -106,6 +107,16 @@ export function useContradictions(workspaceId: string) {
     }
   }
 
+  // "유지"로 처리했던 것을 다시 미해결로 되돌린다 ("반영"은 백엔드가 거부함)
+  async function reopen(id: string) {
+    const res = await reopenContradictionApi(workspaceId, id);
+    if (res.status === "success") {
+      setContradictions((prev) => prev.filter((c) => c.id !== id));
+    } else {
+      alert(res.message);
+    }
+  }
+
   function closeChangeSummary() {
     setPendingSummaryFor(null);
   }
@@ -121,6 +132,7 @@ export function useContradictions(workspaceId: string) {
     closeChangeSummary,
     resolve,
     dismiss,
+    reopen,
     refresh: loadList,
   };
 }

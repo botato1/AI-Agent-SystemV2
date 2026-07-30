@@ -10,7 +10,7 @@ interface VoiceMeetingViewProps {
   partial: { confirmed: string; tentative: string };
   contradictionAlerts: ContradictionAlert[];
   errorMessage: string | null;
-  onStart: (title: string) => void;
+  onStart: (title: string, relatedRoomId?: string, attendeeIds?: string[]) => void;
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
