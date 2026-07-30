@@ -20,10 +20,13 @@ class Meeting(Base):
     source_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     title = Column(String(200), nullable=False)
     location = Column(String(200), nullable=True)
+    topic = Column(String(200), nullable=True)
+    recording_mode = Column(String(20), nullable=False, server_default="single_device")
     input_type = Column(String(30), nullable=False)
     status = Column(String(20), nullable=False, server_default="created")
     started_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     duration_ms = Column(BigInteger, nullable=True)
     paused_at = Column(DateTime(timezone=True), nullable=True)
@@ -39,8 +42,12 @@ class Meeting(Base):
             name="chk_meetings_input_type",
         ),
         CheckConstraint(
-            "status IN ('created','recording','paused','processing','completed','failed','cancelled')",
+            "status IN ('scheduled','created','recording','paused','processing','completed','failed','cancelled')",
             name="chk_meetings_status",
+        ),
+        CheckConstraint(
+            "recording_mode IN ('single_device','individual')",
+            name="chk_meetings_recording_mode",
         ),
         Index(
             "idx_meetings_workspace", "workspace_id", "started_at",
