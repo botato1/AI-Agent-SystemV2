@@ -132,7 +132,9 @@ class Decision(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        CheckConstraint("status IN ('active','superseded','cancelled')", name="chk_decisions_status"),
+        CheckConstraint(
+            "status IN ('active','superseded','cancelled','pending')", name="chk_decisions_status"
+        ),
         Index(
             "idx_decisions_meeting", "meeting_id", "decided_at",
             postgresql_where=text("deleted_at IS NULL"),

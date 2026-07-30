@@ -1,6 +1,10 @@
 """실시간 판단 파이프라인 1-3: 미해결 안건 리마인더
 
-지난 회의에서 못 끝낸 할 일이 있으면 새 세션 시작 시 알려준다.
+decisions 테이블에 status='pending'으로 남아있는 미해결 안건(재논의했지만
+결론이 안 난 것, decision_transition.py Case B 참조)이 있으면 새 세션 시작 시
+알려준다. 할 일(tasks)은 대시보드 탭에서 별도 관리되는 무관한 개념이라 여기서
+다루지 않는다 (설계 변경 - 기존엔 tasks를 조회했으나 분리).
+
 발화마다 도는 게 아니라 세션(방/회의) 시작 시점 1회성 트리거 - 순수 쿼리,
 LLM/벡터검색 불필요.
 """
@@ -9,7 +13,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.db.crud import meeting_crud
+from backend.db.modules import Decision, Meeting
 
 
 def check_on_session_start(db: Session, category_id: uuid.UUID) -> dict:
@@ -18,10 +22,20 @@ def check_on_session_start(db: Session, category_id: uuid.UUID) -> dict:
 
     Returns:
         {"popup": {"type": "agenda_reminder", "message": str, "items": list[dict]}}
-        미해결 항목이 없어도 팝업은 항상 반환한다 ("없습니다" 표시, 설계 문서 1-3 참조).
+        미해결 항목이 없어도 항상 반환한다 ("없습니다" 표시, 설계 문서 1-3 참조).
     """
-    # [수정 - 리뷰 반영 5번] action_items -> tasks 명명 변경, 팀 CRUD에 맞춤
-    items = meeting_crud.list_open_tasks_by_category(db, category_id)
+    # Decision에 category_id가 없어서 Meeting을 조인해서 필터링한다.
+    items = (
+        db.query(Decision)
+        .join(Meeting, Decision.meeting_id == Meeting.id)
+        .filter(
+            Meeting.category_id == category_id,
+            Decision.status == "pending",
+            Decision.deleted_at.is_(None),
+        )
+        .order_by(Decision.decided_at.desc())
+        .all()
+    )
 
     if not items:
         return {
@@ -36,20 +50,18 @@ def check_on_session_start(db: Session, category_id: uuid.UUID) -> dict:
         {
             "id": str(item.id),
             "title": item.title,
-            "assignee": item.assignee_label,
-            "due_at": item.due_at.isoformat() if item.due_at else None,
+            "decision_text": item.decision_text,
+            "reason": item.reason,
         }
         for item in items
     ]
 
-    assignee_list = ", ".join(
-        f"{item.title}({item.assignee_label or '담당자 미정'})" for item in items
-    )
+    title_list = ", ".join(item.title for item in items)
 
     return {
         "popup": {
             "type": "agenda_reminder",
-            "message": f"미해결 할 일이 {len(items)}건 있습니다: {assignee_list}",
+            "message": f"미해결 안건이 {len(items)}건 있습니다: {title_list}",
             "items": item_summaries,
         }
     }
