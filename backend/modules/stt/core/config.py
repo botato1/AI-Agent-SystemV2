@@ -40,9 +40,13 @@ else:
 # 순수 PyTorch 기반인 transformers 엔진으로 자동 전환.
 # 환경변수 STT_ENGINE=faster_whisper|transformers 로 수동 지정도 가능.
 # ──────────────────────────────────────────
+#
+# STT_ENGINE=qwen 은 Whisper 계열이 아닌 Qwen3-ASR을 쓴다. 팀 용어 인식과 속도에서
+# 실측 우위가 확인됐지만(qwen_engine.py 상단 참고) 숫자를 발음형으로 출력하는
+# 미해결 결함이 있어 기본값으로 두지 않고 환경변수로만 켠다.
 ARCH = platform.machine()
 _env_engine = os.getenv("STT_ENGINE", "").strip().lower()
-if _env_engine in ("faster_whisper", "transformers"):
+if _env_engine in ("faster_whisper", "transformers", "qwen"):
     STT_ENGINE = _env_engine
 elif ARCH == "aarch64" and DEVICE == "cuda":
     STT_ENGINE = "transformers"
@@ -60,7 +64,13 @@ WHISPER_LANGUAGE = "ko"
 # 표본오차 범위). 즉 기존 beam=10이 쓰던 계산량은 사실상 낭비였고, greedy가 1.57배 빠르다.
 WHISPER_BEAM_SIZE = 1
 
-if STT_ENGINE == "transformers":
+if STT_ENGINE == "qwen":
+    # 잠정/확정 전사에 같은 모델을 쓴다 — Whisper large-v3보다 빨라서(실측 2~4배)
+    # 잠정용 경량 모델을 따로 둘 이유가 없다.
+    WHISPER_MODEL_SIZE = os.getenv("QWEN_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B-hf")
+    WHISPER_MODEL_FAST = WHISPER_MODEL_SIZE
+    WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE
+elif STT_ENGINE == "transformers":
     WHISPER_MODEL_SIZE = "openai/whisper-large-v3"
     WHISPER_MODEL_FAST = "openai/whisper-large-v3-turbo"
     WHISPER_MODEL_PRECISE = WHISPER_MODEL_SIZE if DEVICE == "cuda" else WHISPER_MODEL_FAST
@@ -177,8 +187,24 @@ REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정
 #   3) 반드시 **실시간 경로**에서 검증 — 파일 단위 평가만으로는 이 문제를 못 잡는다
 #
 # INITIAL_PROMPT_ENABLED=1로 실험은 가능하되, 기본값은 끔.
+#
+# ⚠️ 위 내용은 Whisper 계열에만 해당한다. Qwen3-ASR은 컨텍스트 바이어싱을 학습에
+# 포함한 모델이라 같은 방식으로 무너지지 않는다 — 오히려 용어 재현율이 80.7%에서
+# 92.8%로 올랐고 속도 비용은 0이었다. 그래서 qwen 엔진은 아래 별도 설정을 쓴다.
 INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "0").strip().lower() not in ("0", "false", "no")
 TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
+
+# ──────────────────────────────────────────
+# Qwen3-ASR 컨텍스트 바이어싱
+# ──────────────────────────────────────────
+# Whisper의 initial_prompt와 통로는 같아 보이지만 성질이 다르다. Whisper는 프롬프트를
+# "앞서 나온 문맥"으로 해석해 짧은 청크에서 그대로 받아적는 사고를 냈지만, Qwen은
+# 컨텍스트 주입을 학습으로 배운 기능이라 용어 목록을 그대로 넣어도 안전하다.
+# 실측(우리 팀 녹음 40건): 용어 재현율 85.5% → 92.8%, CER 7.46% → 5.62%, 속도 변화 없음.
+#
+# 단, 어휘에만 작동한다. "숫자는 아라비아 숫자로 표기" 같은 출력 형식 지시문은
+# 효과가 없음이 실측으로 확인됐다(CER 9.12% → 9.25%, 노이즈 범위).
+QWEN_CONTEXT_ENABLED = os.getenv("QWEN_CONTEXT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 
 # LoRA 파인튜닝 어댑터 경로 — 설정 시 정밀(Precise) 모델에만 적용됨
 # (어댑터가 large-v3 기준으로 학습됐고, fast 모델은 turbo라 구조가 다름).
@@ -245,6 +271,32 @@ def _load_prompt_terms() -> list[str]:
 
 PROMPT_TERMS = _load_prompt_terms() if INITIAL_PROMPT_ENABLED else []
 
+# Qwen 컨텍스트는 용어 목록을 그대로 쓴다 — INITIAL_PROMPT_ENABLED와 별개로 켜진다.
+QWEN_CONTEXT_TERMS = _load_prompt_terms() if (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED) else []
+
+
+def build_qwen_context(speaker_names=None) -> str | None:
+    """
+    Qwen3-ASR 시스템 메시지에 넣을 컨텍스트 조립.
+
+    build_initial_prompt()와 목적은 같지만 형태가 다르다. Whisper 쪽은 프롬프트가
+    "앞 문맥"으로 해석돼 이어쓰기 사고가 나므로 문장형을 피할 수 없었지만, Qwen은
+    컨텍스트를 별도 채널로 받으므로 목록을 그대로 나열하는 게 가장 잘 먹힌다.
+    """
+    if not (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED):
+        return None
+
+    names = sorted({n.strip() for n in (speaker_names or []) if n and n.strip()})
+    if not names and not QWEN_CONTEXT_TERMS:
+        return None
+
+    parts = []
+    if names:
+        parts.append("참석자: " + ", ".join(names))
+    if QWEN_CONTEXT_TERMS:
+        parts.append("용어: " + ", ".join(QWEN_CONTEXT_TERMS))
+    return " / ".join(parts)
+
 
 def build_initial_prompt(speaker_names=None) -> str | None:
     """
@@ -269,3 +321,14 @@ def build_initial_prompt(speaker_names=None) -> str | None:
     if PROMPT_TERMS:
         parts.append("용어: " + ", ".join(PROMPT_TERMS) + ".")
     return " ".join(parts)
+
+
+def build_context_hint(speaker_names=None) -> str | None:
+    """
+    엔진에 맞는 용어/이름 힌트를 만든다. 호출부(realtime, refine)는 어느 엔진이
+    돌고 있는지 몰라도 된다 — Whisper 계열은 프롬프트가 위험해서 기본 비활성이고
+    Qwen은 컨텍스트가 안전해서 기본 활성인데, 그 판단을 여기 한 곳에 모아둔다.
+    """
+    if STT_ENGINE == "qwen":
+        return build_qwen_context(speaker_names)
+    return build_initial_prompt(speaker_names)

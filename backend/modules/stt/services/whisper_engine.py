@@ -22,6 +22,62 @@ _FORCE_CUT_MIN_SILENCE_MS = 100
 _GENERATION_CONFIG_FALLBACK = "openai/whisper-large-v3"
 
 
+def load_audio(audio_or_path) -> np.ndarray:
+    """numpy 배열(실시간 청크)과 파일 경로(배치 업로드) 둘 다 받을 수 있게 함."""
+    if isinstance(audio_or_path, np.ndarray):
+        return audio_or_path
+    data, sample_rate = sf.read(audio_or_path, dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)  # 스테레오 → 모노
+    if sample_rate != REALTIME_SAMPLE_RATE:
+        logger.warning(
+            f"⚠️ 오디오 샘플레이트({sample_rate}Hz)가 기대값({REALTIME_SAMPLE_RATE}Hz)과 다름. "
+            "file_handler.py의 FFmpeg 전처리가 정상 동작했는지 확인 필요."
+        )
+    return data
+
+
+def find_window_cutoff(window: np.ndarray) -> int:
+    """
+    30초 꽉 찬 창에서만 의미 있음 — 창이 30초 미만이면 뒤에 이어지는 오디오가 없다는
+    뜻이므로 그대로 전부 씀. 30초 꽉 찬 경우, 마지막 몇 초 안에서 짧은 틈(≥100ms)을
+    찾아 그 지점까지만 쓰고 나머지는 다음 창으로 넘김. 못 찾으면 기존처럼 30초 꽉 채워 자름.
+    """
+    if len(window) < _WINDOW_SAMPLES:
+        return len(window)
+
+    lookback_samples = int(_FORCE_CUT_LOOKBACK_SEC * REALTIME_SAMPLE_RATE)
+    tail_start = max(0, len(window) - lookback_samples)
+    tail = window[tail_start:]
+    speech_spans = get_speech_timestamps(
+        tail, VadOptions(min_silence_duration_ms=_FORCE_CUT_MIN_SILENCE_MS),
+        sampling_rate=REALTIME_SAMPLE_RATE,
+    )
+    if len(speech_spans) >= 2:
+        return tail_start + speech_spans[-2]["end"]
+    return len(window)
+
+
+def trim_silence(audio: np.ndarray) -> tuple[np.ndarray, bool, float]:
+    """
+    무음/노이즈 구간을 모델에 그대로 넣으면 그럴듯한 문장을 지어내는 환각(hallucination)
+    현상이 잦아짐. faster-whisper는 vad_filter=True로 이걸 자동 처리해주지만,
+    transformers/Qwen 엔진은 직접 안 해주므로 여기서 수동으로 구현.
+    (트리밍된 오디오, 발화 감지 여부, 잘린 앞부분의 초 단위 길이)를 반환.
+    - 발화가 아예 없으면 호출부가 모델 자체를 안 돌리게 함 (침묵 환각 원천 차단)
+    - 잘린 앞부분 길이는 세그먼트 타임스탬프를 원본 오디오 기준으로 보정하는 데 필요
+      (화자분리 결과와 시간축을 맞춰 병합하려면 원본 기준 타임스탬프여야 함)
+    """
+    timestamps = get_speech_timestamps(
+        audio, VadOptions(min_silence_duration_ms=300), sampling_rate=REALTIME_SAMPLE_RATE
+    )
+    if not timestamps:
+        return audio, False, 0.0
+    start = timestamps[0]["start"]
+    end = timestamps[-1]["end"]
+    return audio[start:end], True, start / REALTIME_SAMPLE_RATE
+
+
 class Segment:
     """faster_whisper의 Segment와 동일한 속성명을 가진 경량 대체 객체.
     호출부(stt_service.py, realtime_service.py)가 seg.start/end/text/... 로
@@ -105,58 +161,16 @@ class TransformersWhisperEngine:
         self.model.eval()
         logger.info(f"✅ transformers Whisper 로딩 완료 ({model_id})")
 
+    # 아래 세 개는 Qwen 엔진(qwen_engine.py)과 공유하는 모듈 함수의 얇은 위임.
+    # 오디오 로딩·VAD 트리밍·창 분할 규칙은 엔진이 달라도 같아야 하므로 한 곳에만 둔다.
     def _load_audio(self, audio_or_path) -> np.ndarray:
-        """numpy 배열(실시간 청크)과 파일 경로(배치 업로드) 둘 다 받을 수 있게 함."""
-        if isinstance(audio_or_path, np.ndarray):
-            return audio_or_path
-        data, sample_rate = sf.read(audio_or_path, dtype="float32")
-        if data.ndim > 1:
-            data = data.mean(axis=1)  # 스테레오 → 모노
-        if sample_rate != REALTIME_SAMPLE_RATE:
-            logger.warning(
-                f"⚠️ 오디오 샘플레이트({sample_rate}Hz)가 기대값({REALTIME_SAMPLE_RATE}Hz)과 다름. "
-                "file_handler.py의 FFmpeg 전처리가 정상 동작했는지 확인 필요."
-            )
-        return data
+        return load_audio(audio_or_path)
 
     def _find_window_cutoff(self, window: np.ndarray) -> int:
-        """
-        30초 꽉 찬 창에서만 의미 있음 — 창이 30초 미만이면 뒤에 이어지는 오디오가 없다는
-        뜻이므로 그대로 전부 씀. 30초 꽉 찬 경우, 마지막 몇 초 안에서 짧은 틈(≥100ms)을
-        찾아 그 지점까지만 쓰고 나머지는 다음 창으로 넘김. 못 찾으면 기존처럼 30초 꽉 채워 자름.
-        """
-        if len(window) < _WINDOW_SAMPLES:
-            return len(window)
-
-        lookback_samples = int(_FORCE_CUT_LOOKBACK_SEC * REALTIME_SAMPLE_RATE)
-        tail_start = max(0, len(window) - lookback_samples)
-        tail = window[tail_start:]
-        speech_spans = get_speech_timestamps(
-            tail, VadOptions(min_silence_duration_ms=_FORCE_CUT_MIN_SILENCE_MS),
-            sampling_rate=REALTIME_SAMPLE_RATE,
-        )
-        if len(speech_spans) >= 2:
-            return tail_start + speech_spans[-2]["end"]
-        return len(window)
+        return find_window_cutoff(window)
 
     def _trim_silence(self, audio: np.ndarray) -> tuple[np.ndarray, bool, float]:
-        """
-        무음/노이즈 구간을 모델에 그대로 넣으면 Whisper가 그럴듯한 문장을 지어내는
-        환각(hallucination) 현상이 잦아짐. faster-whisper는 vad_filter=True로 이걸
-        자동 처리해주지만, transformers 엔진은 직접 안 해주므로 여기서 수동으로 구현.
-        (트리밍된 오디오, 발화 감지 여부, 잘린 앞부분의 초 단위 길이)를 반환.
-        - 발화가 아예 없으면 호출부가 모델 자체를 안 돌리게 함 (침묵 환각 원천 차단)
-        - 잘린 앞부분 길이는 세그먼트 타임스탬프를 원본 오디오 기준으로 보정하는 데 필요
-          (화자분리 결과와 시간축을 맞춰 병합하려면 원본 기준 타임스탬프여야 함)
-        """
-        timestamps = get_speech_timestamps(
-            audio, VadOptions(min_silence_duration_ms=300), sampling_rate=REALTIME_SAMPLE_RATE
-        )
-        if not timestamps:
-            return audio, False, 0.0
-        start = timestamps[0]["start"]
-        end = timestamps[-1]["end"]
-        return audio[start:end], True, start / REALTIME_SAMPLE_RATE
+        return trim_silence(audio)
 
     @torch.inference_mode()
     def transcribe(

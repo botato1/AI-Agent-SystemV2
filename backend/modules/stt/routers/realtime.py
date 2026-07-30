@@ -4,7 +4,7 @@ import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..core.config import logger, build_initial_prompt
+from ..core.config import logger, build_context_hint
 from ..services.realtime_service import RealtimeSTTSession
 from ..services.speaker_id_service import LiveSpeakerIdentifier
 from ..services.meeting_store import MeetingRecord
@@ -340,7 +340,7 @@ async def realtime_stt_ws(
             session_id, fast_model, precise_model,
             fixed_speaker=participant_name, recorder=recorder, base_offset_sec=join_offset_sec,
             # 각자 PC 모드는 이 연결로 들어오는 목소리가 본인 하나뿐이므로 본인 이름만 힌트로
-            initial_prompt=build_initial_prompt([participant_name]),
+            initial_prompt=build_context_hint([participant_name]),
         )
         prefix = "재연결 — " if is_reconnect else ""
         mode = f"{prefix}각자 PC 모드 (참가자: {participant_name}, +{join_offset_sec:.1f}s)"
@@ -386,7 +386,7 @@ async def realtime_stt_ws(
             session_id, fast_model, precise_model, speaker_identifier, recorder,
             base_offset_sec=base_offset_sec,
             # 등록된 참석자 이름을 힌트로 (자동감지 모드면 이름이 없어 용어만 들어감)
-            initial_prompt=build_initial_prompt(list(merged_profiles.keys())),
+            initial_prompt=build_context_hint(list(merged_profiles.keys())),
         )
         mode_desc = (
             f"닫힌 집합 {len(initial_profiles)}명 (전역 {global_count} + 세션 {session_count})"

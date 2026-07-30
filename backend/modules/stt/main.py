@@ -9,7 +9,8 @@ from pyannote.audio import Pipeline
 
 from .core.config import (
     logger, UPLOAD_DIR, MEETINGS_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE, WHISPER_MODEL_SIZE,
-    WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN, LORA_ADAPTER_PATH
+    WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN, LORA_ADAPTER_PATH,
+    build_qwen_context
 )
 from .routers import stt, realtime, enroll, meetings, profiles
 from .services.speaker_id_service import load_speaker_embedding_inference
@@ -21,9 +22,16 @@ def _load_whisper_model(model_id: str, adapter_path: str | None = None):
     STT_ENGINE에 따라 엔진을 분기 로딩.
     - faster_whisper(ctranslate2): x86_64 GPU 서버 (기존 방식, 제일 빠름)
     - transformers: aarch64+CUDA 서버 (ctranslate2가 GPU CUDA wheel을 안 만들어서 대체)
-    두 엔진 모두 동일한 .transcribe() 인터페이스를 제공하므로 호출부 코드는 그대로 재사용됨.
+    - qwen: Qwen3-ASR (Whisper 비계열). 팀 용어·속도 우위, 숫자 표기는 미해결.
+    세 엔진 모두 동일한 .transcribe() 인터페이스를 제공하므로 호출부 코드는 그대로 재사용됨.
     adapter_path는 transformers 엔진에서만 의미 있음 (LoRA 검증용, 평소엔 None).
     """
+    if STT_ENGINE == "qwen":
+        from .services.qwen_engine import Qwen3ASREngine
+        # 컨텍스트는 회의별 참석자 이름이 붙어야 완성되므로 여기서는 용어만 심고,
+        # 이름은 전사 호출 시 initial_prompt로 덮어쓴다(build_qwen_context).
+        return Qwen3ASREngine(model_id, device=DEVICE, context=build_qwen_context())
+
     if STT_ENGINE == "transformers":
         from .services.whisper_engine import TransformersWhisperEngine
         return TransformersWhisperEngine(model_id, device=DEVICE, adapter_path=adapter_path)
@@ -43,9 +51,15 @@ async def lifespan(app: FastAPI):
     logger.info("✅ STT (정밀/확정용) 모델 로딩 완료")
 
     # 실시간 회의 STT용 Fast Pass 모델 (2-pass 구조, 저지연 초안 전사 담당)
-    logger.info(f"🧠 STT 모델 로딩 중... 엔진={STT_ENGINE} / 모델={WHISPER_MODEL_FAST} / {DEVICE}")
-    app.state.stt_model_fast = _load_whisper_model(WHISPER_MODEL_FAST)
-    logger.info("✅ STT (실시간/초안용) 모델 로딩 완료")
+    if WHISPER_MODEL_FAST == WHISPER_MODEL_PRECISE:
+        # qwen 엔진처럼 잠정/확정에 같은 모델을 쓰는 경우 — 같은 가중치를 두 번
+        # 올리면 GPU 메모리만 두 배로 먹는다. 인스턴스를 공유한다.
+        app.state.stt_model_fast = app.state.stt_model
+        logger.info("♻️  잠정 전사에 확정 모델 인스턴스 재사용 (동일 모델)")
+    else:
+        logger.info(f"🧠 STT 모델 로딩 중... 엔진={STT_ENGINE} / 모델={WHISPER_MODEL_FAST} / {DEVICE}")
+        app.state.stt_model_fast = _load_whisper_model(WHISPER_MODEL_FAST)
+        logger.info("✅ STT (실시간/초안용) 모델 로딩 완료")
 
     logger.info("🧠 pyannote 화자 분리 파이프라인 로딩 중...")
     app.state.diarize_pipeline = Pipeline.from_pretrained(
