@@ -107,11 +107,18 @@ def start_meeting_api(
             detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
         )
 
+    started_at = datetime.now(timezone.utc)
+    title = (request.title or "").strip()
+    title_is_auto = not title
+    if title_is_auto:
+        title = f"{started_at.month}월 {started_at.day}일 회의"
+
     meeting = meeting_crud.create_meeting(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
-        title=request.title,
+        title=title,
+        title_is_auto=title_is_auto,
         location=request.location,
         topic=request.topic,
         recording_mode=request.recording_mode,
@@ -119,7 +126,7 @@ def start_meeting_api(
         started_by=uuid.UUID(current_user_id),
         related_room_id=request.related_room_id,
         status="recording",
-        started_at=datetime.now(timezone.utc),
+        started_at=started_at,
     )
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
@@ -135,7 +142,7 @@ def start_meeting_api(
 async def upload_meeting_api(
     workspace_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    title: str = Form(..., min_length=1, max_length=200),
+    title: str | None = Form(default=None, max_length=200),
     file: UploadFile = File(...),
     related_room_id: uuid.UUID | None = Form(None),
     location: str | None = Form(None),
@@ -179,12 +186,18 @@ async def upload_meeting_api(
         version_group_id=uuid.uuid4(),
         analysis_status="pending",
     )
+    resolved_title = (title or "").strip()
+    title_is_auto = not resolved_title
+    if title_is_auto:
+        now = datetime.now(timezone.utc)
+        resolved_title = f"{now.month}월 {now.day}일 회의"
 
     meeting = meeting_crud.create_meeting(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
         title=title,
+        title_is_auto=title_is_auto,
         location=location,
         topic=topic,
         input_type="audio_upload",
@@ -382,13 +395,19 @@ def schedule_meeting_api(
                 detail=f"워크스페이스 멤버가 아닌 사용자입니다: {user_id}",
             )
 
+    scheduled_title = (request.title or "").strip()
+    title_is_auto = not scheduled_title
+    if title_is_auto:
+        scheduled_title = f"{request.scheduled_at.month}월 {request.scheduled_at.day}일 회의"
+
     meeting = meeting_crud.create_meeting(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
-        title=request.title,
-        topic=request.topic,
+        title=scheduled_title,
+        title_is_auto=title_is_auto,
         location=request.location,
+        topic=request.topic,
         input_type="live_recording",
         started_by=uuid.UUID(current_user_id),
         status="scheduled",
@@ -483,8 +502,12 @@ def update_meeting_title_api(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     _get_meeting_or_404(db, meeting_id, workspace_id)
-
-    updated = meeting_crud.update_meeting_info(db, meeting_id, title=request.title, location=request.location, topic=request.topic)
+    
+    updated = meeting_crud.update_meeting_info(
+        db, meeting_id,
+        title=request.title, location=request.location, topic=request.topic,
+        title_is_auto=False,
+    )
     return MeetingResponse.model_validate(updated)
 
 
