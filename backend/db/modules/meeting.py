@@ -19,6 +19,7 @@ class Meeting(Base):
     related_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     source_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     title = Column(String(200), nullable=False)
+    location = Column(String(200), nullable=True)
     input_type = Column(String(30), nullable=False)
     status = Column(String(20), nullable=False, server_default="created")
     started_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
@@ -86,6 +87,7 @@ class MeetingSummary(Base):
     short_summary = Column(Text, nullable=True)
     discussion_points = Column(JSONB, nullable=True)
     full_transcript = Column(Text, nullable=True)
+    filtered_transcript = Column(Text, nullable=True)  # 잡담 제외한 전체 내용 (가동현 프롬프트 작업 전까지 NULL)
     generation_status = Column(String(20), nullable=False, server_default="pending")
     generation_error = Column(Text, nullable=True)
     model_name = Column(String(100), nullable=True)
@@ -169,4 +171,17 @@ class Task(Base):
             "idx_tasks_category", "category_id", "status", "due_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+    )
+
+class MeetingAttendee(Base):
+    __tablename__ = "meeting_attendees"
+
+    id = uuid_pk()
+    meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    added_at = created_at_col()
+
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "user_id", name="uq_meeting_attendees"),
+        Index("idx_meeting_attendees_meeting", "meeting_id"),
     )

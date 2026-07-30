@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
 
-from backend.db.crud import content_chunk_crud, contradiction_crud, document_crud, file_crud, room_crud, similarity_crud
+from backend.db.crud import ai_chat_crud, content_chunk_crud, contradiction_crud, document_crud, file_crud, room_crud, similarity_crud
 from backend.modules.rag.document_loader import load_document
 from backend.modules.rag.chroma_client import delete_document as chroma_delete_document
 from backend.services import similarity_service
@@ -543,6 +543,8 @@ async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: 
         if figures:
             document_crud.create_document_figures(db, file_id, figures)
 
+        ai_chat_crud.delete_sources_by_file(db, file_id)
+        contradiction_crud.delete_contradictions_by_reference_file(db, file_id)
         content_chunk_crud.delete_chunks_by_file(db, file_id)
         try:
             load_document(db, file_id, chunks=chunks)
@@ -568,12 +570,15 @@ async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: 
     except PermissionError:
         raise
     except httpx.HTTPStatusError as e:
+        db.rollback()
         file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
         return _build_error_response(None, filename, workspace_file.origin_type, "외부 처리 서버 응답 오류가 발생했습니다.", repr(e))
     except httpx.RequestError as e:
+        db.rollback()
         file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
         return _build_error_response(None, filename, workspace_file.origin_type, "외부 처리 서버에 연결할 수 없습니다.", repr(e))
     except Exception as e:
+        db.rollback()
         file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
         return _build_error_response(None, filename, workspace_file.origin_type, "문서 재분석 중 오류가 발생했습니다.", repr(e))
     
@@ -671,6 +676,7 @@ def delete_processed_document(db: Session, file_id: UUID) -> dict:
             raise PermissionError("삭제할 문서를 찾을 수 없습니다.")
 
         contradiction_crud.delete_contradictions_by_reference_file(db, file_id)
+        ai_chat_crud.delete_sources_by_file(db, file_id)
         deleted_chunks_count = content_chunk_crud.delete_chunks_by_file(db, file_id)
         deleted_local_source_file = _safe_delete_local_file(workspace_file.storage_path)
 

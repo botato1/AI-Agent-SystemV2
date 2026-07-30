@@ -82,6 +82,7 @@ class MeetingSchema(TimestampSchema, SoftDeleteSchema):
         min_length=1,
         max_length=200,
     )
+    location: Optional[str] = Field(default=None, max_length=200)
     input_type: MeetingInputType
     status: MeetingStatus
 
@@ -190,6 +191,7 @@ class MeetingSummarySchema(TimestampSchema):
 
     full_summary: Optional[str] = None
     short_summary: Optional[str] = None
+    filtered_transcript: Optional[str] = None
     discussion_points: Optional[Any] = None
     full_transcript: Optional[str] = None
 
@@ -256,6 +258,7 @@ class DecisionSchema(TimestampSchema, SoftDeleteSchema):
 class MeetingStartRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     related_room_id: Optional[UUID] = None
+    location: Optional[str] = Field(default=None, max_length=200)
 
 
 class MeetingResponse(TimestampSchema):
@@ -266,6 +269,7 @@ class MeetingResponse(TimestampSchema):
     source_file_id: Optional[UUID] = None
 
     title: str
+    location: Optional[str] = None
     input_type: MeetingInputType
     status: MeetingStatus
 
@@ -305,10 +309,10 @@ class MeetingSummaryResponse(TimestampSchema):
     meeting_id: UUID
     full_summary: Optional[str] = None
     short_summary: Optional[str] = None
+    filtered_transcript: Optional[str] = None
     discussion_points: Optional[Any] = None
     generation_status: GenerationStatus
     generated_at: Optional[datetime] = None
-
 
 class DecisionResponse(TimestampSchema):
     id: UUID
@@ -324,6 +328,28 @@ class DecisionResponse(TimestampSchema):
 class DecisionListResponse(BaseModel):
     decisions: list[DecisionResponse] = Field(default_factory=list)
 
+class DecisionHistoryEntry(BaseModel):
+    value: str
+    reason: Optional[str] = None
+    decided_at: datetime
+    status: DecisionStatus
+
+
+class DecisionWithHistoryResponse(TimestampSchema):
+    id: UUID
+    workspace_id: UUID
+    meeting_id: UUID
+    title: str
+    decision_text: str
+    reason: Optional[str] = None
+    status: DecisionStatus
+    decided_at: datetime
+    history: list[DecisionHistoryEntry] = Field(default_factory=list)
+
+
+class DecisionWithHistoryListResponse(BaseModel):
+    decisions: list[DecisionWithHistoryResponse] = Field(default_factory=list)
+
 class SpeakerLabelMappingRequest(BaseModel):
     mapping: dict[str, str] = Field(
         ...,
@@ -332,3 +358,26 @@ class SpeakerLabelMappingRequest(BaseModel):
 
 class MeetingTitleUpdateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
+    location: Optional[str] = Field(default=None, max_length=200)
+
+class MeetingAttendeeResponse(BaseModel):
+    user_id: UUID
+    display_name: Optional[str] = None
+
+
+class MeetingAttendeeListResponse(BaseModel):
+    attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+
+
+class AttendeeMappingRequest(BaseModel):
+    user_ids: list[UUID] = Field(default_factory=list)
+
+class MeetingExportResponse(BaseModel):
+    meeting_id: UUID
+    title: str
+    location: Optional[str] = None
+    started_at: Optional[datetime] = None
+    attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+    short_summary: Optional[str] = None
+    filtered_transcript: Optional[str] = None
+    segments: list[MeetingSegmentResponse] = Field(default_factory=list)

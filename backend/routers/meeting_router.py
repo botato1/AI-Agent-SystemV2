@@ -5,13 +5,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from backend.core.security import create_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import meeting_crud, room_crud, file_crud
+from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud
 from backend.services import meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.routers import meeting_ws_router
@@ -27,10 +27,18 @@ from backend.schemas.meeting_schema import (
     MeetingStartResponse,
     SpeakerLabelMappingRequest,
     MeetingTitleUpdateRequest,
+    DecisionWithHistoryListResponse,
+    DecisionWithHistoryResponse,
+    DecisionHistoryEntry,
+    MeetingAttendeeResponse,
+    MeetingAttendeeListResponse,
+    AttendeeMappingRequest,
+    MeetingExportResponse,
 )
 
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/meetings", tags=["Meetings"])
+decisions_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Decisions"])
 
 # TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (document_service.py와 동일한 임시 조치)
 MEETING_AUDIO_STORAGE_DIR = Path("data/uploads/audio")
@@ -97,6 +105,7 @@ def start_meeting_api(
         workspace_id=workspace_id,
         category_id=category.id,
         title=request.title,
+        location=request.location,
         input_type="live_recording",
         started_by=uuid.UUID(current_user_id),
         related_room_id=request.related_room_id,
@@ -120,6 +129,7 @@ async def upload_meeting_api(
     title: str = Form(..., min_length=1, max_length=200),
     file: UploadFile = File(...),
     related_room_id: uuid.UUID | None = Form(None),
+    location: str | None = Form(None),   # 추가
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -165,6 +175,7 @@ async def upload_meeting_api(
         workspace_id=workspace_id,
         category_id=category.id,
         title=title,
+        location=location,
         input_type="audio_upload",
         started_by=uuid.UUID(current_user_id),
         related_room_id=related_room_id,
@@ -269,7 +280,7 @@ def update_meeting_title_api(
     require_workspace_member(db, workspace_id, current_user_id)
     _get_meeting_or_404(db, meeting_id, workspace_id)
 
-    updated = meeting_crud.update_meeting_title(db, meeting_id, request.title)
+    updated = meeting_crud.update_meeting_info(db, meeting_id, title=request.title, location=request.location)
     return MeetingResponse.model_validate(updated)
 
 
@@ -321,6 +332,35 @@ def get_meeting_summary_api(
             detail="회의 요약을 찾을 수 없습니다.",
         )
     return MeetingSummaryResponse.model_validate(summary)
+
+# 회의록 내보내기용 데이터 일괄 조회 — 문서 조립은 프론트에서 처리
+@router.get("/{meeting_id}/export", response_model=MeetingExportResponse)
+def get_meeting_export_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    summary = meeting_crud.get_meeting_summary(db, meeting_id)
+    attendee_rows = meeting_crud.get_attendees(db, meeting_id)
+    segments = meeting_crud.get_segments(db, meeting_id)
+
+    return MeetingExportResponse(
+        meeting_id=meeting.id,
+        title=meeting.title,
+        location=meeting.location,
+        started_at=meeting.started_at,
+        attendees=[
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            for attendee, user in attendee_rows
+        ],
+        short_summary=summary.short_summary if summary else None,
+        filtered_transcript=summary.filtered_transcript if summary else None,
+        segments=[MeetingSegmentResponse.model_validate(s) for s in segments],
+    )
 
 
 # 회의 결정사항 목록 조회
@@ -429,3 +469,74 @@ def update_meeting_speakers_api(
         "speaker_labels": updated.speaker_labels,
         "message": "화자 이름이 매핑되었습니다.",
     }
+
+# 참석 인원 조회
+@router.get("/{meeting_id}/attendees", response_model=MeetingAttendeeListResponse)
+def get_meeting_attendees_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    rows = meeting_crud.get_attendees(db, meeting_id)
+    return MeetingAttendeeListResponse(
+        attendees=[
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            for attendee, user in rows
+        ]
+    )
+
+
+# 참석 인원 지정/수정 — 워크스페이스 멤버 중에서만 선택 가능
+@router.patch("/{meeting_id}/attendees", response_model=MeetingAttendeeListResponse)
+def update_meeting_attendees_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: AttendeeMappingRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    for user_id in request.user_ids:
+        if not workspace_crud.get_membership(db, workspace_id, user_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"워크스페이스 멤버가 아닌 사용자입니다: {user_id}",
+            )
+
+    rows = meeting_crud.set_attendees(db, meeting_id, request.user_ids)
+    return MeetingAttendeeListResponse(
+        attendees=[
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            for attendee, user in rows
+        ]
+    )
+
+# 워크스페이스 전체 결정사항 조회 (기본: status=active, 변경 이력 포함)
+@decisions_router.get("/decisions", response_model=DecisionWithHistoryListResponse)
+def get_workspace_decisions_api(
+    workspace_id: uuid.UUID,
+    status_filter: str | None = Query(default=None, alias="status"),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    decisions = meeting_crud.list_decisions_by_workspace(db, workspace_id, status=status_filter)
+
+    results = []
+    for d in decisions:
+        chain = meeting_crud.get_decision_history_chain(db, d.id)
+        history = [
+            DecisionHistoryEntry(value=c.decision_text, reason=c.reason, decided_at=c.decided_at, status=c.status)
+            for c in chain
+        ]
+        item = DecisionWithHistoryResponse.model_validate(d)
+        item.history = history
+        results.append(item)
+
+    return DecisionWithHistoryListResponse(decisions=results)

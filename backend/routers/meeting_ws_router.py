@@ -142,16 +142,13 @@ async def _process_segment_analysis(
     statement_text: str, meeting_segment_id: str,
     meeting_id: uuid.UUID, meeting_started_by: uuid.UUID,
 ) -> None:
-    """모순 감지 + 판단 파이프라인을 세그먼트 단위로 직렬 처리한다.
-    둘 다 LLM 호출 동안 DB 커넥션을 물고 있어서, 여러 세그먼트가 동시에
-    실행되면 커넥션 풀이 고갈된다 (업로드 음성 경로가 순차 처리하는 것과 같은 이유)."""
     async with processing_lock:
         await _detect_and_push_contradiction(
             websocket, send_lock,
             workspace_id, category_id,
             statement_text, meeting_segment_id,
         )
-        await asyncio.to_thread(
+        judgment_result = await asyncio.to_thread(
             judgment_service.run_judgment_pipeline,
             workspace_id=str(workspace_id),
             category_id=str(category_id),
@@ -160,6 +157,18 @@ async def _process_segment_analysis(
             meeting_segment_id=meeting_segment_id,
             session_meeting_id=str(meeting_id),
         )
+        if judgment_result:
+            try:
+                async with send_lock:
+                    await websocket.send_json({
+                        "type": "contradiction_alert",
+                        "contradiction_id": judgment_result["contradiction_id"],
+                        "statement_text": statement_text,
+                        "display_message": judgment_result["message"],
+                        "source": "decision",
+                    })
+            except Exception as e:
+                print(f"[meeting_ws_router] decision 모순 알림 전송 실패: {repr(e)}")
 
 
 def _open_recording_file(meeting_id: uuid.UUID):

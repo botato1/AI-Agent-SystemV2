@@ -32,8 +32,12 @@ def run_judgment_pipeline(
     room_message_id: str | None = None,
     session_meeting_id: str | None = None,
     session_room_id: str | None = None,
-) -> None:
-    """발화/메시지 하나마다 백그라운드로 호출한다. 자체 DB 세션을 새로 연다."""
+) -> dict | None:
+    """발화/메시지 하나마다 백그라운드로 호출한다. 자체 DB 세션을 새로 연다.
+
+    decision 기반 모순(Case 3)이 발생하면 {"contradiction_id":..., "message":...}를
+    반환한다 — 호출부가 실시간 WS push에 쓸 수 있게 하기 위함.
+    """
     db = SessionLocal()
     try:
         source_id = uuid.UUID(meeting_segment_id) if meeting_segment_id else uuid.UUID(room_message_id)
@@ -65,8 +69,20 @@ def run_judgment_pipeline(
             )
 
         popup = priority.select_popup(decision_result, document_result)
-        if not popup or popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
-            return
+        if not popup:
+            return None
+
+        if popup["type"] == "contradiction":
+            # decision 기반이든 document 기반이든, priority.select_popup()이 이미
+            # 최종 선택한 popup을 그대로 쓴다 (decision_result["popup"]는 document_judgment가
+            # 대신 판단한 경우 None이라 인덱싱하면 TypeError).
+            return {
+                "contradiction_id": popup["contradiction_id"],
+                "message": popup["message"],
+            }
+
+        if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
+            return None
 
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
             if not notification_crud.is_notification_enabled(db, uuid.UUID(workspace_id), member.user_id, popup["type"]):
@@ -81,8 +97,10 @@ def run_judgment_pipeline(
                 ref_type=source_type,
                 ref_id=source_id,
             )
+        return None
 
     except Exception as e:
         print(f"[judgment_service] 판단 파이프라인 실패: {repr(e)}")
+        return None
     finally:
         db.close()
