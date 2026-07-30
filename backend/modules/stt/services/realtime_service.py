@@ -17,12 +17,18 @@ from ..core.config import (
     REALTIME_FORCE_CUT_MIN_SILENCE_MS,
     REALTIME_PARTIAL_INTERVAL_SEC,
     REALTIME_PARTIAL_MIN_SEC,
+    REALTIME_PARTIAL_SPEAKER_TAIL_SEC,
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
     REALTIME_FINAL_USES_FAST_MODEL,
     CONF_AVG_LOGPROB_THRESHOLD,
     CONF_NO_SPEECH_THRESHOLD,
 )
+
+
+# 임베딩이 불안정해지는 하한 — speaker_id_service._MIN_EMBED_SEC(1.0초)와 맞춘 값.
+# 이보다 짧으면 목소리 특성보다 발음 내용에 휘둘려 엉뚱한 화자로 튄다.
+_MIN_PARTIAL_SPEAKER_SAMPLES = REALTIME_SAMPLE_RATE
 
 
 def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
@@ -325,8 +331,11 @@ class RealtimeSTTSession:
 
         buffer = self._materialize_buffer()
         loop = asyncio.get_event_loop()
-        segments = await loop.run_in_executor(
-            None, self._transcribe, self.fast_model, buffer, FAST_BEAM_SIZE
+        # 전사와 화자 판정을 병렬로 — 순차로 돌리면 임베딩 시간만큼 자막이 늦어진다
+        # (process_chunk의 확정 경로와 같은 구조).
+        segments, speaker = await asyncio.gather(
+            loop.run_in_executor(None, self._transcribe, self.fast_model, buffer, FAST_BEAM_SIZE),
+            self._partial_speaker(buffer),
         )
         # 주기는 전사가 '끝난' 시점부터 잰다. 시작 시점에 찍으면 전사가 주기보다
         # 오래 걸릴 때 끝나자마자 다음 잠정이 곧바로 돌아 확정 전사가 굶는다
@@ -344,4 +353,32 @@ class RealtimeSTTSession:
             "type": "partial",
             "confirmed_text": " ".join(confirmed_words),
             "tentative_text": " ".join(tentative_words),
+            # 잠정 화자 — 확정본이 도착하면 덮어써진다. 프론트는 이 값을 '추정'으로
+            # 다뤄야 한다(확정 세그먼트의 speaker와 달리 바뀔 수 있음).
+            "speaker": speaker,
         }
+
+    async def _partial_speaker(self, buffer: np.ndarray) -> str | None:
+        """
+        지금 말하고 있는 사람을 버퍼 끝부분 목소리로 판정.
+
+        확정 청크를 기다리지 않는 이유: 화자 식별에 침묵이 필요한 게 아니라
+        우리가 청크를 침묵으로 끊고 있을 뿐이다. 임베딩 비교는 1초 이상 오디오면
+        언제든 가능하므로, 잠정 자막에도 화자를 실시간으로 붙일 수 있다.
+        프로필은 갱신하지 않는다(update_profile=False) — 1초마다 이동 평균을 돌리면
+        잘못 배정된 구간이 목소리 지문을 빠르게 오염시킨다.
+        """
+        if self.fixed_speaker is not None:
+            return self.fixed_speaker            # 각자 PC 모드 — 판정 자체가 불필요
+        if self.speaker_identifier is None:
+            return None
+
+        tail_samples = int(REALTIME_PARTIAL_SPEAKER_TAIL_SEC * REALTIME_SAMPLE_RATE)
+        tail = buffer[-tail_samples:] if len(buffer) > tail_samples else buffer
+        if len(tail) < _MIN_PARTIAL_SPEAKER_SAMPLES:
+            return None
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.speaker_identifier.identify(tail, update_profile=False)
+        )

@@ -135,10 +135,15 @@ class LiveSpeakerIdentifier:
                 best_label = label
         return best_label, best_score
 
-    def identify(self, audio: np.ndarray) -> str:
+    def identify(self, audio: np.ndarray, update_profile: bool = True) -> str | None:
         """
         청크 오디오를 받아 화자 라벨(사전 등록 이름 또는 "SPEAKER_N")을 즉시 반환.
         내부적으로 프로필을 계속 갱신(이동 평균)해서 화자 목소리 변화에도 서서히 적응.
+
+        update_profile=False면 판정만 하고 프로필/화자 목록을 전혀 건드리지 않는다.
+        잠정(partial) 자막처럼 1초마다 호출되는 경로용 — 확정 경로보다 10배 이상 자주
+        불리는데 매번 이동 평균을 돌리면 잘못 배정된 구간이 목소리 지문을 빠르게
+        오염시킨다. 지문 갱신은 VAD로 끊긴 확정 청크에서만 한다.
         """
         # 청크 전체가 아니라 가장 긴 발화 구간으로 판정 — 화자 전환이 섞인 청크에서
         # 유령 화자가 만들어지는 걸 막기 위함 (_dominant_speech_region 참고).
@@ -148,6 +153,10 @@ class LiveSpeakerIdentifier:
         embedding = self.extract_embedding(self._dominant_speech_region(audio))
 
         if not self._profiles:
+            if not update_profile:
+                # 아직 아는 화자가 없는데 등록도 못 하는 상황 — 판정 불가.
+                # 호출부가 "화자 미정"으로 처리하도록 빈 문자열 대신 None을 준다.
+                return None
             # 사전 등록도 없고 첫 화자도 없음 → 무조건 첫 화자로 등록
             new_label = f"SPEAKER_{self._next_speaker_num}"
             self._next_speaker_num += 1
@@ -156,6 +165,13 @@ class LiveSpeakerIdentifier:
             return new_label
 
         best_label, best_score = self._find_best_match(embedding)
+
+        if not update_profile:
+            # 읽기 전용 — 닫힌 집합이면 최근접 등록자, 열린 집합이면 임계값을 넘을 때만.
+            # 새 화자를 만들지 않으므로 잠정 자막에 유령 화자가 등장하지 않는다.
+            if self._closed_set or best_score >= self.similarity_threshold:
+                return best_label
+            return None
 
         if self._closed_set:
             # 인원수를 미리 알고 있으므로 새 화자를 만들지 않고 무조건 가장 가까운 등록자에게 배정.
