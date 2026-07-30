@@ -162,7 +162,8 @@ wss://<서버주소>/api/ws/stt/{session_id}?participant_name=이준오&voice=1
 
 ```json
 // 1) partial — 잠정 자막. 이전 partial을 대체하며 계속 갱신 (회색/이탤릭 표시 권장)
-{"session_id": "...", "type": "partial", "confirmed_text": "오늘 회의는", "tentative_text": "여기까지 하고..."}
+{"session_id": "...", "type": "partial", "confirmed_text": "오늘 회의는", "tentative_text": "여기까지 하고...",
+ "speaker": "이준오"}
 
 // 2) final — 확정 자막. 화면에 고정 append하고 잠정 표시는 제거
 {"session_id": "...", "type": "final", "chunk_offset_sec": 12.5, "speaker": "이준오",
@@ -175,6 +176,19 @@ wss://<서버주소>/api/ws/stt/{session_id}?participant_name=이준오&voice=1
 {"session_id": "...", "type": "voice_ready", "slot": 0, "participants": 2}
 ```
 `meeting_id`를 저장해두면 종료 직후 회의록 상세 화면으로 바로 이동 가능.
+
+**⚠️ `partial`의 `speaker`는 추정값이다 (2026-07-30 추가)**
+
+지금 말하고 있는 사람을 오디오 끝 2초의 목소리로 1초마다 판정한 값이다. 대부분 맞지만
+**화자가 바뀌는 순간 1~2초 정도 이전 사람으로 표시될 수 있다.** 확정(`final`)의 `speaker`가
+최종값이며, 잠정 표시를 덮어쓴다.
+
+그래서 **확정 텍스트와 진행 중 텍스트를 시각적으로 구분**하는 게 중요하다. 진행 중인 텍스트를
+별도 영역(또는 회색/이탤릭)으로 두면 이름이 잠깐 바뀌어도 사용자가 "아직 확정 전"으로
+자연스럽게 받아들인다. 두 텍스트를 같은 목록에 섞으면 이름이 번쩍이는 것처럼 보인다.
+
+`speaker`는 `null`일 수 있다 — 화자 등록 없이 시작했거나(자동감지 모드에서 아직 아는 화자가
+없을 때), 오디오가 1초 미만이면 판정을 포기한다. 이 경우 이름 없이 텍스트만 표시할 것.
 
 **⚠️ 각자 PC 모드의 `final`에는 `remote` 필드가 붙을 수 있음 (2026-07-29 추가)**
 

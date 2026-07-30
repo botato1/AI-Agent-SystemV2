@@ -632,7 +632,10 @@ function renderPartial(data) {
     tentativeSpan.className = "tentative";
     transcriptEl.appendChild(tentativeSpan);
   }
-  tentativeSpan.textContent = " " + data.confirmed_text + " " + data.tentative_text + "...";
+  // partial의 speaker는 '지금 말하는 사람'의 추정값 — 확정본이 오면 덮어써진다.
+  // 물음표를 붙여 확정 화자 태그(speaker-tag)와 눈으로 구분되게 한다.
+  const who = data.speaker ? `[${data.speaker}?] ` : "";
+  tentativeSpan.textContent = " " + who + data.confirmed_text + " " + data.tentative_text + "...";
 }
 
 function renderFinal(data) {
