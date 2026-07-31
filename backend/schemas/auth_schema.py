@@ -276,3 +276,10 @@ class UserPublicSchema(ORMBaseSchema):
     account_status: AccountStatus
     last_login_at: Optional[datetime] = None
     created_at: datetime
+
+class VoiceProfileResponse(BaseModel):
+    registered: bool
+    registered_at: Optional[datetime] = None
+    speaker_name: Optional[str] = None
+    name_extraction_failed: bool = False
+    detected_text: Optional[str] = None
