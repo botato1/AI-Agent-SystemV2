@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import meeting_crud
 from backend.db.session import get_db
+from backend.services import meeting_service
 
 router = APIRouter(prefix="/internal", tags=["Internal Webhook"])
 
@@ -60,8 +61,13 @@ def stt_refine_webhook(
             f"[webhook] 정밀 재분석 완료: meeting_id={meeting_id}, "
             f"refined_at={payload.refined_at}, segment_count={payload.segment_count}"
         )
-        # TODO: 8002 GET /api/meetings/{id}로 재분석 결과 가져와서
-        # 시간 기준 세그먼트 매칭 후 후처리 트리거 (가동현 확인 후 반영)
+        try:
+            refined_data = meeting_service.fetch_refined_transcript(payload.meeting_id)
+            print(f"[webhook] 재분석 세그먼트 {len(refined_data.get('segments', []))}개 조회 완료")
+        except Exception as e:
+            print(f"[webhook] 재분석 결과 조회 실패: {repr(e)}")
+        # TODO: 시간(start/end) 기준으로 meeting_segments 매칭/교체,
+        # 후처리 트리거는 가동현 확인 후 반영
     else:
         print(f"[webhook] 정밀 재분석 실패: meeting_id={meeting_id} - 실시간 결과로 진행")
         # TODO: 실시간 세그먼트로 후처리 트리거 (아직 트리거 시점 결정 전)
