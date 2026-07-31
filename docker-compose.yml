@@ -15,11 +15,24 @@ services:
       - /mnt/nas_2026_spring/dobby/shared/data/uploads:/app/storage/uploads
     depends_on:
       - chromadb
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: always
+
+  # PostgreSQL
+  postgres:
+    image: postgres:16
+    container_name: ai-agent-postgres
+    environment:
+      POSTGRES_USER: recall
+      POSTGRES_PASSWORD: recall
+      POSTGRES_DB: recall
+    volumes:
+      - /mnt/nas_2026_spring/dobby/shared/data/postgres:/var/lib/postgresql/data
     restart: always
 
   # ChromaDB 벡터DB
