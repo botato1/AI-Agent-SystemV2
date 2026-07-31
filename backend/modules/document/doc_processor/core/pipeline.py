@@ -241,7 +241,7 @@ class DocumentPipeline:
         #    단, VL 큐에 이 페이지의 표/차트 처리가 대기 중이면 스킵한다
         #    (아직 처리 안 된 것을 "내용 없음"으로 착각해 전체 페이지를
         #    중복으로 재-OCR하는 버그 수정 — 2026-07-16)
-        has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 2
+        has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 0
         has_ocr_text  = bool(content.images)
         has_tables    = bool(content.tables)
         has_pending_vl = any(task["page_no"] == page_no for task in self._vl_queue)
