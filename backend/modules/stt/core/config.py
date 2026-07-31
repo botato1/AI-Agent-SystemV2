@@ -375,26 +375,31 @@ PROMPT_TERMS = _load_prompt_terms() if INITIAL_PROMPT_ENABLED else []
 QWEN_CONTEXT_TERMS = _load_prompt_terms(QWEN_TERMS_PATH) if (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED) else []
 
 
-def build_qwen_context(speaker_names=None) -> str | None:
+def build_qwen_context(speaker_names=None, extra_terms=None) -> str | None:
     """
     Qwen3-ASR 시스템 메시지에 넣을 컨텍스트 조립.
 
     build_initial_prompt()와 목적은 같지만 형태가 다르다. Whisper 쪽은 프롬프트가
     "앞 문맥"으로 해석돼 이어쓰기 사고가 나므로 문장형을 피할 수 없었지만, Qwen은
     컨텍스트를 별도 채널로 받으므로 목록을 그대로 나열하는 게 가장 잘 먹힌다.
+
+    extra_terms: 이 회의에만 해당하는 용어(지난 회의록에서 수집한 것 등).
+                 정적 목록 뒤에 붙는다. ⚠️ 목록 길이가 곧 지연이므로
+                 (실측 204개 0.85초 / 3000개 2.15초) 호출부가 개수를 통제해야 한다.
     """
     if not (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED):
         return None
 
     names = sorted({n.strip() for n in (speaker_names or []) if n and n.strip()})
-    if not names and not QWEN_CONTEXT_TERMS:
+    terms = list(QWEN_CONTEXT_TERMS) + [t for t in (extra_terms or []) if t not in QWEN_CONTEXT_TERMS]
+    if not names and not terms:
         return None
 
     parts = []
     if names:
         parts.append("참석자: " + ", ".join(names))
-    if QWEN_CONTEXT_TERMS:
-        parts.append("용어: " + ", ".join(QWEN_CONTEXT_TERMS))
+    if terms:
+        parts.append("용어: " + ", ".join(terms))
     return " / ".join(parts)
 
 
@@ -423,12 +428,32 @@ def build_initial_prompt(speaker_names=None) -> str | None:
     return " ".join(parts)
 
 
-def build_context_hint(speaker_names=None) -> str | None:
+# 지난 회의록에서 가져올 용어 수 상한. 목록 길이가 곧 지연이라 예산을 정해둔다
+# (정적 204개 + 동적 50개 ≈ 250개, 실측상 1초 이내 유지되는 범위).
+SESSION_TERMS_LIMIT = int(os.getenv("SESSION_TERMS_LIMIT", "50"))
+
+
+def build_context_hint(speaker_names=None, session_id: str | None = None) -> str | None:
     """
     엔진에 맞는 용어/이름 힌트를 만든다. 호출부(realtime, refine)는 어느 엔진이
     돌고 있는지 몰라도 된다 — Whisper 계열은 프롬프트가 위험해서 기본 비활성이고
     Qwen은 컨텍스트가 안전해서 기본 활성인데, 그 판단을 여기 한 곳에 모아둔다.
+
+    session_id를 주면 같은 회의 시리즈의 지난 회의록에서 용어를 추가로 수집한다
+    (services/meeting_terms.py). 그 팀이 실제로 쓰는 말이 정적 목록보다 정확하다.
     """
-    if STT_ENGINE == "qwen":
-        return build_qwen_context(speaker_names)
-    return build_initial_prompt(speaker_names)
+    if STT_ENGINE != "qwen":
+        return build_initial_prompt(speaker_names)
+
+    extra = []
+    if session_id and QWEN_CONTEXT_ENABLED:
+        # 지연 임포트 — config는 services보다 먼저 로드되므로 상단 임포트는 순환이 된다
+        from ..services.meeting_terms import collect_session_terms
+        try:
+            extra = collect_session_terms(
+                session_id, set(QWEN_CONTEXT_TERMS), limit=SESSION_TERMS_LIMIT
+            )
+        except Exception:
+            # 용어 수집 실패가 회의를 막으면 안 된다 — 정적 목록만으로 진행
+            logger.exception(f"⚠️ [{session_id}] 지난 회의 용어 수집 실패 — 정적 목록만 사용")
+    return build_qwen_context(speaker_names, extra_terms=extra)

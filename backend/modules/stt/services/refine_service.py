@@ -227,7 +227,7 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     refined_segments = await _transcribe_turns(
         app_state, meeting_id, turns,
         audio_of=lambda t: tracks.get(t["speaker"], (None, REALTIME_SAMPLE_RATE)),
-        initial_prompt=build_context_hint(list(tracks.keys())),
+        initial_prompt=build_context_hint(list(tracks.keys()), session_id=meta.get("session_id")),
     )
     refined_segments.sort(key=lambda s: s["start"])
 
@@ -299,7 +299,7 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     refined_segments = await _transcribe_turns(
         app_state, meeting_id, turns,
         audio_of=lambda _turn: (audio, sample_rate),  # 공용 마이크는 회의 오디오 하나뿐
-        initial_prompt=build_context_hint(enrolled_names),
+        initial_prompt=build_context_hint(enrolled_names, session_id=meta.get("session_id")),
     )
 
     # 3. 사전 등록 프로필이 있으면 익명 라벨(SPEAKER_00 등) → 실제 이름으로 매핑
