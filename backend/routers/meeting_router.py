@@ -15,6 +15,7 @@ from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, 
 from backend.services import meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
+from backend.modules.judgment import agenda_reminder
 from backend.routers import meeting_ws_router
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
@@ -130,10 +131,12 @@ def start_meeting_api(
     )
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
+    reminder_result = agenda_reminder.check_on_session_start(db, category.id)
 
     return MeetingStartResponse(
         **MeetingResponse.model_validate(meeting).model_dump(),
         ws_ticket=ws_ticket,
+        agenda_reminder=reminder_result["popup"],
     )
 
 
@@ -474,9 +477,12 @@ def begin_scheduled_meeting_api(
         )
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
+    reminder_result = agenda_reminder.check_on_session_start(db, transitioned.category_id)
+
     return MeetingStartResponse(
         **MeetingResponse.model_validate(transitioned).model_dump(),
         ws_ticket=ws_ticket,
+        agenda_reminder=reminder_result["popup"],
     )
 
 # 회의 단건 조회
