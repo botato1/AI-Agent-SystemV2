@@ -31,7 +31,6 @@ export interface Meeting {
   ended_at?: string | null;
   duration_ms?: number | null;
   location?: string | null;
-  // 백엔드 미구현 필드 - 값이 오면 그대로 쓰고, 없으면 프론트에서 "미정"으로 표시
   is_online?: boolean | null;
   created_at: string;
   updated_at: string;
@@ -131,7 +130,6 @@ export interface GetMeetingDecisionsResponse {
 export interface MeetingAttendee {
   user_id: string;
   display_name: string;
-  // 백엔드 미구현 필드 - 없으면 "시작 시 참석자"로 간주
   is_initial?: boolean;
 }
 
@@ -142,7 +140,6 @@ export interface GetMeetingAttendeesResponse {
   error: string | null;
 }
 
-// 예약(예정)된 회의 - 실제 녹음 전 단계
 export interface UpcomingMeeting {
   id: string;
   title: string;
@@ -174,7 +171,6 @@ export interface GetUpcomingMeetingsResponse {
   error: string | null;
 }
 
-// 회의록 조립용 원본 데이터 (문서 조립/PDF 생성 자체는 프론트가 담당)
 export interface MeetingExportData {
   meeting_id: string;
   title: string;
@@ -183,7 +179,6 @@ export interface MeetingExportData {
   started_at: string | null;
   attendees: MeetingAttendee[];
   short_summary: string | null;
-  // 잡담 제외 필터링 버전 - 백엔드 프롬프트 작업 전이라 항상 null
   filtered_transcript: string | null;
   segments: MeetingSegment[];
 }
@@ -220,6 +215,21 @@ export interface GetRecentMeetingsResponse {
   message: string;
   error: string | null;
 }
+
+export interface SearchMeetingsParams {
+  q?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface SearchMeetingsResponse {
+  status: "success" | "error";
+  meetings: RecentMeetingItem[];
+  total_count: number;
+  message: string;
+  error: string | null;
+}
+
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -249,13 +259,9 @@ export async function getMeetingListApi(workspaceId: string): Promise<GetMeeting
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 목록을 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스입니다.";
 
       return {
         status: "error",
@@ -308,13 +314,9 @@ export async function getMeetingApi(workspaceId: string, meetingId: string): Pro
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 정보를 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -378,13 +380,9 @@ export async function deleteMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 삭제에 실패했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 삭제할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 삭제할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -437,13 +435,9 @@ export async function getMeetingSegmentsApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "발화 세그먼트를 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -499,13 +493,9 @@ export async function getMeetingSummaryApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 요약을 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "아직 요약이 생성되지 않았거나, 존재하지 않는 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "아직 요약이 생성되지 않았거나, 존재하지 않는 회의입니다.";
 
       return {
         status: "error",
@@ -561,13 +551,9 @@ export async function getMeetingDecisionsApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "결정사항을 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -623,8 +609,6 @@ export async function uploadMeetingAudioApi(
       formData.append("related_room_id", relatedRoomId);
     }
 
-    // multipart/form-data는 브라우저가 boundary를 포함해 Content-Type을 자동 설정해야 하므로
-    // 여기서 직접 헤더를 지정하지 않는다.
     const response = await authFetch(
       `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/upload`,
       {
@@ -676,7 +660,6 @@ export async function uploadMeetingAudioApi(
 
 /**
  * 8. 실시간 녹음 시작 API (POST /api/workspaces/{workspace_id}/meetings/start)
- * 실시간 녹음(웹소켓 스트리밍) 기능 구현 시 사용 — 현재 단계에선 UI 미연결
  */
 export async function startMeetingApi(
   workspaceId: string,
@@ -708,15 +691,10 @@ export async function startMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 녹음 시작에 실패했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 회의를 시작할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 연결하려는 채팅방입니다.";
-      } else if (response.status === 422) {
-        defaultMsg = "회의 제목을 입력해 주세요.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 회의를 시작할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 연결하려는 채팅방입니다.";
+      else if (response.status === 422) defaultMsg = "회의 제목을 입력해 주세요.";
 
       return {
         status: "error",
@@ -745,7 +723,6 @@ export async function startMeetingApi(
 
 /**
  * 9. 실시간 녹음 종료 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/end)
- * 실시간 녹음 기능 구현 시 사용 — 현재 단계에선 UI 미연결
  */
 export async function endMeetingApi(
   workspaceId: string,
@@ -810,7 +787,6 @@ export async function endMeetingApi(
 
 /**
  * 10. 실시간 녹음 일시정지 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/pause)
- * 실시간 녹음 기능 구현 시 사용 — 현재 단계에선 UI 미연결
  */
 export async function pauseMeetingApi(
   workspaceId: string,
@@ -838,17 +814,11 @@ export async function pauseMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 일시정지에 실패했습니다.";
-      if (response.status === 400) {
-        defaultMsg = "실시간 녹음 회의가 아닙니다.";
-      } else if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 일시정지할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      } else if (response.status === 409) {
-        defaultMsg = "녹음 중인 회의가 아닙니다.";
-      }
+      if (response.status === 400) defaultMsg = "실시간 녹음 회의가 아닙니다.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 일시정지할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      else if (response.status === 409) defaultMsg = "녹음 중인 회의가 아닙니다.";
 
       return {
         status: "error",
@@ -877,7 +847,6 @@ export async function pauseMeetingApi(
 
 /**
  * 11. 실시간 녹음 재개 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/resume)
- * 실시간 녹음 기능 구현 시 사용 — 현재 단계에선 UI 미연결
  */
 export async function resumeMeetingApi(
   workspaceId: string,
@@ -905,17 +874,11 @@ export async function resumeMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 재개에 실패했습니다.";
-      if (response.status === 400) {
-        defaultMsg = "실시간 녹음 회의가 아닙니다.";
-      } else if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 재개할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      } else if (response.status === 409) {
-        defaultMsg = "일시정지 중인 회의가 아닙니다.";
-      }
+      if (response.status === 400) defaultMsg = "실시간 녹음 회의가 아닙니다.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 재개할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      else if (response.status === 409) defaultMsg = "일시정지 중인 회의가 아닙니다.";
 
       return {
         status: "error",
@@ -944,9 +907,6 @@ export async function resumeMeetingApi(
 
 /**
  * 12. 회의 제목 변경 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id})
- *
- * 회의 상태(recording/paused/completed 등)와 무관하게 언제든 변경 가능. 변경된 회의 정보
- * 전체를 응답으로 받는다 (다른 엔드포인트와 달리 status/message 래핑 없이 회의 객체 그대로 옴).
  */
 export async function renameMeetingApi(
   workspaceId: string,
@@ -979,15 +939,10 @@ export async function renameMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 제목 변경에 실패했습니다.";
-      if (response.status === 400) {
-        defaultMsg = "제목을 1~200자로 입력해 주세요.";
-      } else if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 변경할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 400) defaultMsg = "제목을 1~200자로 입력해 주세요.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 변경할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -1016,7 +971,6 @@ export async function renameMeetingApi(
 
 /**
  * 회의 제목/주제/장소 수정 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id})
- * renameMeetingApi와 같은 엔드포인트지만 topic/location도 같이 보낸다 (백엔드가 title은 필수로 요구함).
  */
 export async function updateMeetingInfoApi(
   workspaceId: string,
@@ -1050,15 +1004,10 @@ export async function updateMeetingInfoApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 정보 수정에 실패했습니다.";
-      if (response.status === 400) {
-        defaultMsg = "제목을 1~200자로 입력해 주세요.";
-      } else if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 변경할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 400) defaultMsg = "제목을 1~200자로 입력해 주세요.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 변경할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -1087,10 +1036,6 @@ export async function updateMeetingInfoApi(
 
 /**
  * 13. 화자 이름 매핑 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/speakers)
- *
- * STT 원본 화자 라벨(SPEAKER_00 등)을 실명으로 매핑한다. 저장된 발화도 즉시 소급 변경되고
- * (되돌릴 수 없음), 이후 실시간 발화에도 계속 적용된다. 여러 번 호출해도 기존 매핑은 유지된 채
- * 새 매핑만 누적된다.
  */
 export async function mapSpeakerNamesApi(
   workspaceId: string,
@@ -1124,13 +1069,9 @@ export async function mapSpeakerNamesApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "화자 이름 매핑에 실패했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 매핑할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 매핑할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -1189,13 +1130,9 @@ export async function getMeetingAttendeesApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "참석자 목록을 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -1224,7 +1161,6 @@ export async function getMeetingAttendeesApi(
 
 /**
  * 회의 참석자 지정/수정 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/attendees)
- * 부분 추가가 아니라 목록 전체를 통째로 교체한다.
  */
 export async function setMeetingAttendeesApi(
   workspaceId: string,
@@ -1257,15 +1193,10 @@ export async function setMeetingAttendeesApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "참석자 지정에 실패했습니다.";
-      if (response.status === 400) {
-        defaultMsg = "워크스페이스 멤버가 아닌 사용자가 포함되어 있습니다.";
-      } else if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 지정할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 400) defaultMsg = "워크스페이스 멤버가 아닌 사용자가 포함되어 있습니다.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 지정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -1294,7 +1225,6 @@ export async function setMeetingAttendeesApi(
 
 /**
  * 회의 예약 API (POST /api/workspaces/{workspace_id}/meetings/schedule)
- * 실제 녹음은 시작하지 않고, 나중에 시작할 회의를 미리 만들어 둔다.
  */
 export async function scheduleMeetingApi(
   workspaceId: string,
@@ -1331,15 +1261,10 @@ export async function scheduleMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의 예약에 실패했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 회의를 예약할 수 있습니다.";
-      } else if (response.status === 400) {
-        defaultMsg = "참석자 중 워크스페이스 멤버가 아닌 사용자가 있습니다.";
-      } else if (response.status === 422) {
-        defaultMsg = "회의 제목 또는 예정 시각을 확인해 주세요.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 회의를 예약할 수 있습니다.";
+      else if (response.status === 400) defaultMsg = "참석자 중 워크스페이스 멤버가 아닌 사용자가 있습니다.";
+      else if (response.status === 422) defaultMsg = "회의 제목 또는 예정 시각을 확인해 주세요.";
 
       return {
         status: "error",
@@ -1391,11 +1316,8 @@ export async function getUpcomingMeetingsApi(workspaceId: string): Promise<GetUp
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "예정된 회의 목록을 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
 
       return {
         status: "error",
@@ -1450,15 +1372,10 @@ export async function beginScheduledMeetingApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "예정된 회의를 시작하지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 회의를 시작할 수 있습니다.";
-      } else if (response.status === 409) {
-        defaultMsg = "이미 시작되었거나 예정된 회의가 아닙니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 회의를 시작할 수 있습니다.";
+      else if (response.status === 409) defaultMsg = "이미 시작되었거나 예정된 회의가 아닙니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 회의입니다.";
 
       return {
         status: "error",
@@ -1514,13 +1431,9 @@ export async function getMeetingExportApi(
 
     if (!response.ok || data.status === "error") {
       let defaultMsg = "회의록 데이터를 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
-      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
 
       return {
         status: "error",
@@ -1609,19 +1522,6 @@ export async function getRecentMeetingsApi(
   }
 }
 
-export interface SearchMeetingsParams {
-  q?: string;
-  date_from?: string;
-  date_to?: string;
-}
-
-export interface SearchMeetingsResponse {
-  status: "success" | "error";
-  meetings: RecentMeetingItem[];
-  total_count: number;
-  message: string;
-  error: string | null;
-}
 /**
  * 키워드/의미 기반 회의록 검색 API (GET /api/workspaces/{workspace_id}/meetings/search)
  */
