@@ -213,6 +213,16 @@ REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정
 # (speaker_id_service._MIN_EMBED_SEC).
 REALTIME_PARTIAL_SPEAKER_TAIL_SEC = 2.0
 
+# 확정 청크 안에서 화자가 바뀌면 그 지점에서 나눠 각각 전사할지.
+#
+# 청크는 VAD가 침묵을 찾을 때까지 최대 28초까지 늘어나는데, 두 사람이 쉼 없이 주고받으면
+# 한 청크에 여러 화자가 들어간다. 예전에는 청크 전체에 화자 라벨 하나만 붙어서
+# "질문과 답변이 한 사람 발언으로 묶이는" 결과가 나왔다.
+#
+# 화자 전환이 없는 청크(대부분)에서는 분할이 일어나지 않아 기존과 동일하게 동작한다.
+# 끄면 청크당 화자 하나를 배정하던 이전 동작으로 돌아간다.
+REALTIME_SPEAKER_SPLIT_ENABLED = os.getenv("REALTIME_SPEAKER_SPLIT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+
 # ──────────────────────────────────────────
 # 인식 힌트(initial_prompt) 설정
 # ──────────────────────────────────────────

@@ -18,6 +18,7 @@ from ..core.config import (
     REALTIME_PARTIAL_INTERVAL_SEC,
     REALTIME_PARTIAL_MIN_SEC,
     REALTIME_PARTIAL_SPEAKER_TAIL_SEC,
+    REALTIME_SPEAKER_SPLIT_ENABLED,
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
     REALTIME_FINAL_USES_FAST_MODEL,
@@ -225,6 +226,123 @@ class RealtimeSTTSession:
             seg["confident"] = is_confident(seg.get("avg_logprob"), seg.get("no_speech_prob"))
             seg["user_edited"] = False
 
+    def _speaker_turns(self, audio: np.ndarray) -> list[tuple[int, int, str | None]]:
+        """
+        청크를 화자 턴 단위로 나눈다. [(시작 샘플, 끝 샘플, 화자), ...]
+
+        왜 필요한가: 청크는 VAD가 침묵을 찾을 때까지 최대 28초까지 늘어난다. 두 사람이
+        쉼 없이 주고받으면 한 청크에 여러 화자가 들어가는데, 청크당 라벨 하나만 붙이면
+        질문과 답변이 한 사람 발언으로 묶인다.
+
+        동작:
+          1. VAD로 발화 구간을 뽑고
+          2. 구간마다 목소리로 화자를 판정하고(읽기 전용 — 프로필은 아래 3에서만 갱신)
+          3. 연속된 같은 화자를 하나의 턴으로 병합
+
+        **화자 전환이 없으면 턴 하나만 돌려준다** — 이 경우 호출부는 기존과 똑같이
+        전사를 한 번만 하므로 추가 비용이 없다. 대부분의 청크가 여기 해당한다.
+
+        턴 경계는 다음 턴의 첫 발화 시작점으로 잡는다. 구간 사이 침묵도 어느 한 턴에
+        반드시 포함시켜야 오디오가 새지 않는다(전사 입력에서 빠지면 말이 잘린다).
+        """
+        spans = get_speech_timestamps(
+            audio, VadOptions(min_silence_duration_ms=REALTIME_SILENCE_MS),
+            sampling_rate=REALTIME_SAMPLE_RATE,
+        )
+        if len(spans) < 2:
+            return [(0, len(audio), None)]   # 나눌 근거 없음 — 호출부가 통째로 처리
+
+        # 각 발화 구간의 화자 판정. 너무 짧은 구간은 임베딩이 불안정해 판정을 포기하고
+        # (None) 아래에서 이웃 구간의 화자를 승계한다 — "네", "음" 같은 짧은 맞장구가
+        # 엉뚱한 화자로 튀어 턴을 잘게 쪼개는 걸 막는다.
+        labels: list[str | None] = []
+        for span in spans:
+            piece = audio[span["start"]:span["end"]]
+            if len(piece) < _MIN_PARTIAL_SPEAKER_SAMPLES:
+                labels.append(None)
+            else:
+                labels.append(self.speaker_identifier.identify(piece, update_profile=False))
+
+        # 판정 못 한 구간을 앞쪽 이웃으로, 앞이 없으면 뒤쪽 이웃으로 채운다
+        for i, label in enumerate(labels):
+            if label is not None:
+                continue
+            prev = next((labels[j] for j in range(i - 1, -1, -1) if labels[j] is not None), None)
+            nxt = next((labels[j] for j in range(i + 1, len(labels)) if labels[j] is not None), None)
+            labels[i] = prev if prev is not None else nxt
+
+        # 연속 동일 화자 병합 → 턴 경계
+        turns: list[tuple[int, int, str | None]] = []
+        turn_start = 0
+        for i in range(1, len(spans)):
+            if labels[i] == labels[i - 1]:
+                continue
+            turns.append((turn_start, spans[i]["start"], labels[i - 1]))
+            turn_start = spans[i]["start"]
+        turns.append((turn_start, len(audio), labels[-1]))
+        return turns
+
+    async def _transcribe_with_speakers(self, audio, precise_task, final_model):
+        """
+        화자 전환을 반영해 전사한다. (세그먼트 목록, 대표 화자)를 반환.
+
+        화자 전환이 없으면(대부분) 이미 시작해둔 precise_task를 그대로 쓰고 화자만
+        붙인다 — 전사와 화자 판정이 병렬로 도는 기존 경로 그대로다.
+        전환이 있을 때만 그 전사를 버리고 턴별로 다시 전사한다. 버려지는 비용이 있지만,
+        전환은 소수이고 미리 시작해두는 편이 대부분의 청크에서 이득이다.
+
+        대표 화자는 청크에서 가장 오래 말한 사람 — 회의록 오디오 저장(recorder)이
+        청크당 화자 하나를 받기 때문에 필요하다.
+        """
+        loop = asyncio.get_event_loop()
+
+        if not REALTIME_SPEAKER_SPLIT_ENABLED:
+            speaker_task = loop.run_in_executor(None, self.speaker_identifier.identify, audio)
+            segments, speaker = await asyncio.gather(precise_task, speaker_task)
+            return segments, speaker
+
+        turns = await loop.run_in_executor(None, self._speaker_turns, audio)
+
+        if len(turns) < 2:
+            # 화자 전환 없음 — 청크 전체로 한 번 판정(프로필 갱신 포함)하고 끝.
+            speaker_task = loop.run_in_executor(None, self.speaker_identifier.identify, audio)
+            segments, speaker = await asyncio.gather(precise_task, speaker_task)
+            return segments, speaker
+
+        precise_task.cancel()
+        logger.info(
+            f"🔀 [{self.session_id}] 청크 안에서 화자 전환 감지 — {len(turns)}개 턴으로 분할 전사"
+        )
+
+        async def _one_turn(start: int, end: int, provisional: str | None):
+            piece = audio[start:end]
+            offset = start / REALTIME_SAMPLE_RATE
+            # 턴 전체 오디오로 다시 판정한다 — 구간 단위보다 오디오가 많아 더 정확하고,
+            # 여기서만 프로필을 갱신해 잘못된 배정이 지문을 오염시킬 여지를 줄인다.
+            seg_task = loop.run_in_executor(
+                None, self._transcribe, final_model, piece, PRECISE_BEAM_SIZE, self.initial_prompt
+            )
+            spk_task = loop.run_in_executor(None, self.speaker_identifier.identify, piece)
+            segments, speaker = await asyncio.gather(seg_task, spk_task)
+            for seg in segments:
+                # 턴 안에서의 시각을 청크 기준으로 되돌린다 (청크→회의 기준 보정은 호출부가 담당)
+                seg["start"] = round(seg["start"] + offset, 2)
+                seg["end"] = round(seg["end"] + offset, 2)
+                seg["speaker"] = speaker or provisional
+            return segments, speaker, end - start
+
+        results = await asyncio.gather(*(_one_turn(*t) for t in turns))
+
+        merged: list[dict] = []
+        spoken: dict[str, int] = {}
+        for segments, speaker, samples in results:
+            merged.extend(segments)
+            if speaker:
+                spoken[speaker] = spoken.get(speaker, 0) + samples
+        merged.sort(key=lambda s: s["start"])
+        dominant = max(spoken, key=spoken.get) if spoken else None
+        return merged, dominant
+
     async def process_chunk(self, audio: np.ndarray, offset_sec: float) -> dict:
         """
         확정 전사(Precise)와 화자 식별을 병렬로 실행.
@@ -250,17 +368,19 @@ class RealtimeSTTSession:
             precise_segments = await precise_task
             speaker_label = self.fixed_speaker
         elif self.speaker_identifier is not None:
-            speaker_task = loop.run_in_executor(None, self.speaker_identifier.identify, audio)
-            precise_segments, speaker_label = await asyncio.gather(precise_task, speaker_task)
+            precise_segments, speaker_label = await self._transcribe_with_speakers(
+                audio, precise_task, final_model
+            )
         else:
             precise_segments = await precise_task
             speaker_label = None
 
         latency_sec = round(time.monotonic() - started, 2)
         self._apply_offset_and_confidence(precise_segments, offset_sec)
+        # 화자 분할 경로는 세그먼트마다 이미 speaker를 넣어뒀다. 나머지 경로만 일괄 배정.
         if speaker_label is not None:
             for seg in precise_segments:
-                seg["speaker"] = speaker_label
+                seg.setdefault("speaker", speaker_label)
 
         if self.recorder is not None:
             # NAS 위 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로.
