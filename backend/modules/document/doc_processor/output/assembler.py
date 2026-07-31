@@ -51,9 +51,11 @@ def _build_plain_text(doc: DocumentResult) -> str:
                 parts.append(key)
         # 차트 (VL 결과 — RAG 검색용으로 포함)
         # charts 배열과 동일한 필터 적용 — 필터에서 걸러진 환각/가비지
-        # 텍스트가 content(검색 본문)에만 남는 오염 방지
+        # 텍스트가 content(검색 본문)에만 남는 오염 방지.
+        # 제목 유효성은 더 이상 게이트가 아님 — 실제 데이터가 있으면
+        # 제목을 못 찾아도 유실시키지 않는다 (_chart_effective_title 참고).
         for chart in page.content.charts:
-            if not _chart_has_content(chart) or not _chart_title(chart):
+            if not _chart_has_content(chart):
                 continue
             key = chart.description.strip()
             if key and key not in seen:
@@ -199,6 +201,20 @@ def _chart_title(chart) -> str:
     return ""
 
 
+def _chart_effective_title(chart, page_no: int) -> str:
+    """진짜 제목을 못 찾아도 실제 데이터가 있는 차트를 통째로 버리지 않도록,
+    축 단위 라벨 등 유효하지 않은 제목이라도 있으면 그거라도 쓰고,
+    아예 없으면 페이지 번호 기반 제네릭 제목으로 대체합니다.
+    """
+    title = _chart_title(chart)
+    if title:
+        return title
+    vl_title = (chart.extracted_data or {}).get("title", "").strip()
+    if vl_title:
+        return vl_title
+    return f"차트 (페이지 {page_no})"
+
+
 def _build_charts(doc: DocumentResult) -> list[dict]:
     """VL가 추출한 차트를 전체 문서 단위로 수집합니다."""
     charts: list[dict] = []
@@ -206,9 +222,7 @@ def _build_charts(doc: DocumentResult) -> list[dict]:
         for chart in page.content.charts:
             if not _chart_has_content(chart):
                 continue
-            title = _chart_title(chart)
-            if not title:
-                continue
+            title = _chart_effective_title(chart, page.page)
             entry: dict = {
                 "page": page.page,
                 "raw_text": chart.description.strip(),
@@ -347,7 +361,7 @@ def _build_chunks(doc: DocumentResult) -> list[dict]:
                 chunks.append({"text": text, "style": "image", "page_number": pg})
 
         for chart in page.content.charts:
-            if not _chart_has_content(chart) or not _chart_title(chart):
+            if not _chart_has_content(chart):
                 continue
             text = chart.description.strip()
             if text:
