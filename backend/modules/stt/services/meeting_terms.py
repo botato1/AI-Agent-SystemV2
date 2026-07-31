@@ -61,12 +61,45 @@ _STOP = {
 _VARIANT_MAX_DISTANCE = 1
 _VARIANT_MIN_LEN = 3        # 2음절 단어는 편집거리 1이 흔해 오차단 위험이 크다
 
+# ── 외래어 판별 (양성 필터) ────────────────────────────────
+# 불용어 목록으로 일반어를 걸러내는 방식은 끝이 없다 — 어미 활용이 무한하기 때문에
+# "있습니다, 빨라졌어요, 끝내겠습니다, 위주잖아요"가 계속 새로 등장한다.
+# 그래서 **받을 것만 받는** 쪽으로 뒤집는다.
+#
+# 우리가 원하는 건 STT가 틀리는 외래어 표기 기술 용어인데, 한국어 외래어 표기는
+# 영어 자음군을 옮기느라 다음 두 특징 중 하나를 거의 반드시 가진다:
+#   ① 받침 없는 'ㅡ' 음절 — 스, 트, 드, 크, 프, 브 (strike→스트라이크, build→빌드)
+#   ② ㅋ/ㅌ/ㅍ 초성    — 컨, 터, 포, 페, 키 (container→컨테이너, port→포트)
+# 순수 한국어 어미·조사는 이 특징이 없다("습니다"의 '습'은 종성이 있어 ①에 안 걸린다).
+_CHO_KTP = {15, 16, 17}      # ㅋ, ㅌ, ㅍ (초성 인덱스)
+_JUNG_EU = 18                # ㅡ
+# '그', '으'는 ①에 해당하지만 한국어에서 압도적으로 흔해(그냥, 그런데) 제외한다.
+_EU_EXCLUDE = {"그", "으"}
+
+
+def _looks_like_loanword(term: str) -> bool:
+    """외래어 표기로 보이는지. 영문 약어는 무조건 통과."""
+    if term.isascii():
+        return True
+    for ch in term:
+        code = ord(ch) - 0xAC00
+        if not (0 <= code < 11172):
+            continue
+        cho, jung, jong = code // 588, (code % 588) // 28, code % 28
+        if cho in _CHO_KTP:
+            return True
+        if jung == _JUNG_EU and jong == 0 and ch not in _EU_EXCLUDE:
+            return True
+    return False
+
 
 def _normalize(token: str) -> str | None:
     if token.isascii():
         return token
     for suffix in _SUFFIXES:
-        if token.endswith(suffix) and len(token) - len(suffix) >= 2:
+        # 남는 어간이 1글자여도 일단 떼고, 아래에서 길이로 거른다.
+        # ("팀이" → "팀" → 1글자라 폐기. 안 떼면 "팀이"가 용어로 남는다)
+        if token.endswith(suffix) and len(token) > len(suffix):
             token = token[:-len(suffix)]
             break
     return token if len(token) >= 2 else None
@@ -152,6 +185,10 @@ def collect_session_terms(
             for raw in _TOKEN.findall(seg.get("text") or ""):
                 term = _normalize(raw)
                 if not term or term in _STOP or term in known_terms:
+                    continue
+                # 외래어처럼 생기지 않았으면 버린다 — 순수 한국어/한자어는 STT가
+                # 이미 잘 맞히므로 힌트로 줄 이유가 없고 목록 예산만 잡아먹는다.
+                if not _looks_like_loanword(term):
                     continue
                 counts[term] += 1
                 meetings_seen[term].add(meeting_id)
