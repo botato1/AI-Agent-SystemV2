@@ -17,6 +17,9 @@ Whisper 계열 대신 도입한 이유 (실측 근거, 2026-07-30):
     작동하고 출력 형식은 제어하지 못한다).
   - no_speech_prob를 주지 않는다(아래 참고).
   - AI-Hub 평가에서 없는 고유명사를 만들어낸 사례가 있음 — 환각 감시 필요.
+  - **컨텍스트를 그대로 받아적는 경우가 있다.** Whisper보다 훨씬 견고하지만 면역은
+    아니다 — 짧고 불분명한 구간에서 용어 목록을 출력한 사례가 실제 회의에서
+    관측됐다(2026-07-31). _is_context_echo가 그런 출력을 걸러낸다.
 
 타임스탬프에 대하여:
   Qwen 본체는 세그먼트 타임스탬프를 주지 않지만, TransformersWhisperEngine도
@@ -39,6 +42,11 @@ from .whisper_engine import (
 # 한 창에서 생성할 최대 토큰 수. 30초 발화가 이보다 길게 전사되는 경우는 없지만,
 # 환각 루프에 빠졌을 때 무한정 생성하는 걸 막는 상한 역할도 한다.
 _MAX_NEW_TOKENS = 448
+
+# 컨텍스트 받아적기 판정 기준 (_is_context_echo).
+# 20자 연속 일치 + 출력의 절반 이상 — 실제 발화가 이 조건을 만족하기는 매우 어렵다.
+_ECHO_MIN_RUN = 20
+_ECHO_MIN_RATIO = 0.5
 
 
 class Qwen3ASREngine:
@@ -140,11 +148,59 @@ class Qwen3ASREngine:
         )
         generated_ids = outputs.sequences[:, prompt_len:]
         text = self.processor.decode(generated_ids, return_format="transcription_only")[0].strip()
+        if self._is_context_echo(text, context):
+            # 오디오 대신 컨텍스트를 받아적은 출력 — 회의록에 넣으면 안 된다.
+            # 빈 텍스트를 돌려주면 호출부가 세그먼트를 만들지 않는다.
+            logger.warning(
+                f"⚠️ 컨텍스트 받아적기 감지 — 세그먼트 폐기: {text[:60]}..."
+            )
+            return "", self._avg_logprob(outputs, generated_ids, beam_size)
+
         if QWEN_ITN_ENABLED:
             # 발음형 숫자를 아라비아 숫자로 되돌린다 ("팔천이번" → "8002번").
             # 확신할 수 없는 부분은 원문 그대로 남기는 보수적 변환.
             text = to_digits(text)
         return text, self._avg_logprob(outputs, generated_ids, beam_size)
+
+    @staticmethod
+    def _is_context_echo(text: str, context: str | None) -> bool:
+        """
+        전사 결과가 컨텍스트(용어 목록)를 그대로 받아적은 것인지 판정.
+
+        왜 필요한가: 실제 회의에서 관측된 실패다 — 짧거나 불분명한 구간에서 모델이
+        오디오 대신 시스템 메시지의 용어 목록을 출력했다.
+            "용어: 임베딩, 웹소켓, 파인튜닝, WAV, STT, API, JSON, ..."
+        Whisper의 initial_prompt에서 겪은 것과 같은 실패 방식이다. Qwen은 컨텍스트
+        주입을 학습으로 배워 훨씬 견고하지만 **면역은 아니다** — 이 전제로 방어한다.
+
+        판정 기준: 출력과 컨텍스트의 최장 공통 부분문자열이 20자 이상이면서
+        그것이 출력의 절반 이상을 차지하면 받아적기로 본다.
+        실제 발화가 용어를 20자 넘게 연속으로, 그것도 발언 대부분을 채우며
+        나열하는 경우는 사실상 없다. 애매하면 통과시킨다 — 멀쩡한 발언을
+        지우는 쪽이 더 나쁘다.
+        """
+        if not context or not text:
+            return False
+
+        def squash(s: str) -> str:
+            return "".join(ch for ch in s if ch.isalnum())
+
+        a, b = squash(text), squash(context)
+        if len(a) < _ECHO_MIN_RUN:
+            return False
+
+        # 최장 공통 부분문자열 길이 (짧은 문자열 기준이라 O(len(a)*len(b))로 충분)
+        prev = [0] * (len(b) + 1)
+        best = 0
+        for i in range(1, len(a) + 1):
+            cur = [0] * (len(b) + 1)
+            for j in range(1, len(b) + 1):
+                if a[i - 1] == b[j - 1]:
+                    cur[j] = prev[j - 1] + 1
+                    best = max(best, cur[j])
+            prev = cur
+
+        return best >= _ECHO_MIN_RUN and best >= len(a) * _ECHO_MIN_RATIO
 
     @staticmethod
     def _build_conversation(audio: np.ndarray, language: str | None, context: str | None) -> list[dict]:

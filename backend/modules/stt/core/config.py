@@ -258,9 +258,11 @@ REALTIME_SPEAKER_SPLIT_ENABLED = os.getenv("REALTIME_SPEAKER_SPLIT_ENABLED", "1"
 #
 # INITIAL_PROMPT_ENABLED=1로 실험은 가능하되, 기본값은 끔.
 #
-# ⚠️ 위 내용은 Whisper 계열에만 해당한다. Qwen3-ASR은 컨텍스트 바이어싱을 학습에
-# 포함한 모델이라 같은 방식으로 무너지지 않는다 — 오히려 용어 재현율이 80.7%에서
-# 92.8%로 올랐고 속도 비용은 0이었다. 그래서 qwen 엔진은 아래 별도 설정을 쓴다.
+# ⚠️ 위 내용은 Whisper 계열에 해당한다. Qwen3-ASR은 컨텍스트 바이어싱을 학습에
+# 포함한 모델이라 훨씬 견고하고(용어 재현율 80.7%→92.8%, 속도 비용 0) 실사용에서
+# 문제 없이 쓰고 있지만, **면역은 아니다** — 2026-07-31 실제 회의에서 짧고 불분명한
+# 구간 하나가 용어 목록을 그대로 받아적은 사례가 관측됐다. qwen_engine의
+# _is_context_echo가 그런 출력을 걸러낸다.
 INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "0").strip().lower() not in ("0", "false", "no")
 TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
 # Qwen 컨텍스트용 목록은 따로 둔다 — Whisper 프롬프트의 제약(목록형 취약성,
