@@ -28,6 +28,22 @@ STT_UPLOAD_URL = os.getenv(
 )
 STT_REQUEST_TIMEOUT_SECONDS = 600  # 오디오 길이 비례 GPU 추론 시간 + 화자분리 포함
 
+# 정밀 재분석 결과 조회 (웹훅 수신 후 호출)
+STT_SERVER_BASE_URL = os.getenv("STT_SERVER_BASE_URL", "http://61.81.98.82:8002")
+
+
+def fetch_refined_transcript(stt_meeting_id: str) -> dict:
+    """8002의 GET /api/meetings/{id}로 정밀 재분석 결과를 가져온다.
+
+    stt_meeting_id는 8002 자체 형식의 ID(웹훅 payload의 meeting_id)이며,
+    우리 Meeting.id(UUID)와는 다르다 - session_id로 우리 회의를 찾은 뒤,
+    이 함수엔 웹훅 payload의 meeting_id를 그대로 넘겨야 한다.
+    """
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings/{stt_meeting_id}")
+    response.raise_for_status()
+    return response.json()
+
 
 async def _request_stt(file_content: bytes, filename: str) -> dict:
     """오디오 파일을 STT REST 서버로 전송하고 STT+화자분리 결과를 받는다."""
