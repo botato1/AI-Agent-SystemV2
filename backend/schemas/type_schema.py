@@ -233,6 +233,7 @@ DecisionStatus = Literal[
     "active",
     "superseded",
     "cancelled",
+    "pending",
 ]
 
 TaskStatus = Literal[
