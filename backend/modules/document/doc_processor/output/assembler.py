@@ -57,16 +57,18 @@ def _build_plain_text(doc: DocumentResult) -> str:
         for chart in page.content.charts:
             if not _chart_has_content(chart):
                 continue
-            # 수치가 신뢰할 수 없으면(환각) 가짜 표 대신 제목만 남기고
-            # 실제 그림은 image_path로 저장된 크롭 이미지를 참고하게 한다.
-            if _chart_data_reliable(chart):
+            # 수치가 신뢰할 수 없으면(환각) 가짜 표 대신 제목 + 페이지 번호만
+            # 남기고, 실제 그림은 image_path로 저장된 크롭 이미지를 참고하게
+            # 한다. 뒤에 오는 문단과 헷갈리지 않도록 빈 줄로 한 번 띄운다.
+            data_reliable = _chart_data_reliable(chart)
+            if data_reliable:
                 key = chart.description.strip()
             else:
                 title = _chart_effective_title(chart, page.page)
-                key = f"[차트: {title}] (자동 인식 정확도가 낮아 원본 이미지 참고)"
+                key = f"[차트: {title}] (자동 인식 정확도가 낮아 원본 이미지 참고 · {page.page}페이지)"
             if key and key not in seen:
                 seen.add(key)
-                parts.append(key)
+                parts.append(key if data_reliable else key + "\n")
     return "\n".join(parts)
 
 
