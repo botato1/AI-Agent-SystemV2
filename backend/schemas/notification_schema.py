@@ -57,6 +57,8 @@ class NotificationSchema(ORMBaseSchema):
         max_length=30,
     )
     ref_id: Optional[UUID] = None
+    meeting_id: Optional[UUID] = None      # ref_type == "meeting_segment"일 때만 채워짐
+    document_id: Optional[UUID] = None     # related_file_id 그대로
     room_id: Optional[UUID] = None
 
     is_read: bool

@@ -18,6 +18,7 @@ class Notification(Base):
     message = Column(Text, nullable=True)
     ref_type = Column(String(30), nullable=True)
     ref_id = Column(UUID(as_uuid=True), nullable=True)
+    related_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)  # document_recommendation 등에서 사용
     room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     is_read = Column(Boolean, nullable=False, server_default="false")
     read_at = Column(DateTime(timezone=True), nullable=True)

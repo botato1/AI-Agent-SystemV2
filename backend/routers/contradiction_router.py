@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import contradiction_crud, file_crud, notification_crud, workspace_crud
+from backend.db.crud import contradiction_crud, file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
@@ -31,6 +31,25 @@ def _get_contradiction_or_404(db: Session, contradiction_id: uuid.UUID, workspac
             detail="모순 항목을 찾을 수 없습니다.",
         )
     return contradiction
+
+def _resolve_source_meeting(db: Session, contradiction):
+    """session_meeting_id(결정 기반) 우선, 없으면 meeting_segment_id로 역추적(문서 기반)."""
+    if contradiction.session_meeting_id:
+        return meeting_crud.get_meeting(db, contradiction.session_meeting_id)
+    if contradiction.meeting_segment_id:
+        segment = meeting_crud.get_segment(db, contradiction.meeting_segment_id)
+        if segment:
+            return meeting_crud.get_meeting(db, segment.meeting_id)
+    return None
+
+
+def _resolve_reference_meeting(db: Session, contradiction):
+    """reference_type이 decision일 때만 — 그 결정이 나온 회의."""
+    if contradiction.reference_type == "decision" and contradiction.reference_decision_id:
+        decision = db.get(Decision, contradiction.reference_decision_id)
+        if decision:
+            return meeting_crud.get_meeting(db, decision.meeting_id)
+    return None
 
 def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     """reference_type에 따라 근거 자료의 이름(파일명/결정 제목)을 채워서 반환한다.
@@ -66,6 +85,17 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     schema.reference_source_name = source_name
     schema.display_message = display_message
     schema.resolution_type = resolution.resolution_type if resolution else None
+
+    source_meeting = _resolve_source_meeting(db, contradiction)
+    if source_meeting:
+        schema.source_meeting_title = source_meeting.title
+        schema.source_meeting_time = source_meeting.started_at
+
+    reference_meeting = _resolve_reference_meeting(db, contradiction)
+    if reference_meeting:
+        schema.reference_meeting_title = reference_meeting.title
+        schema.reference_meeting_time = reference_meeting.started_at
+
     return schema
 
 
