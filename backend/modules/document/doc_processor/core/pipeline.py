@@ -446,18 +446,36 @@ class DocumentPipeline:
         # 만들므로 버린다. 개별 후보를 2개 이상 포함할 때만 컨테이너로 판정
         # (1개 포함은 부분/전체 크롭 관계일 수 있어 유지).
         # diagram 큰 박스는 위 2단계의 "큰 쪽 유지" 규칙 대상이므로 제외.
+        #
+        # 단, table_image를 포함하는 경우는 예외 — chart와 table은 서로 다른
+        # 객체라 "부분/전체 크롭"일 수가 없으므로, 1개만 겹쳐도 컨테이너가
+        # 표 영역까지 삼킨 오검출로 보고 무조건 버린다 (2026-07-31).
+        # 표가 chart 박스 아래로 살짝 삐져나오는 경우가 흔해 90% 완전 포함
+        # 기준(_is_contained 기본값)으로는 못 잡으므로 50%로 완화해서 체크한다.
         for big in candidates:
             if id(big) in dropped_ids or big["fig_type"] != "chart":
                 continue
-            contained = sum(
-                1 for other in candidates
+            others_inside = [
+                other for other in candidates
                 if other is not big
                 and id(other) not in dropped_ids
                 and self._is_contained(other["bbox"], [big["bbox"]])
+            ]
+            contains_table = any(
+                other["fig_type"] == "table_image"
+                and self._is_contained(other["bbox"], [big["bbox"]], threshold=0.5)
+                for other in candidates
+                if other is not big and id(other) not in dropped_ids
             )
-            if contained >= 2:
+            if contains_table:
                 print(
-                    f"  [SKIP] 개별 figure {contained}개를 감싸는 컨테이너 chart → 스킵 "
+                    f"  [SKIP] 표 영역을 포함하는 chart 컨테이너 → 스킵 "
+                    f"(bbox={big['bbox']})"
+                )
+                dropped_ids.add(id(big))
+            elif len(others_inside) >= 2:
+                print(
+                    f"  [SKIP] 개별 figure {len(others_inside)}개를 감싸는 컨테이너 chart → 스킵 "
                     f"(bbox={big['bbox']})"
                 )
                 dropped_ids.add(id(big))
