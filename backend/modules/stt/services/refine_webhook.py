@@ -30,16 +30,18 @@ from ..core.config import (
     REFINE_WEBHOOK_TIMEOUT_SEC,
     REFINE_WEBHOOK_RETRIES,
     REFINE_WEBHOOK_RETRY_DELAY_SEC,
+    REFINE_WEBHOOK_SECRET,
+    REFINE_WEBHOOK_SECRET_HEADER,
 )
 
 
 def _post(url: str, payload: dict, timeout: float) -> int:
     """동기 POST. 블로킹이므로 반드시 executor에서 호출할 것."""
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if REFINE_WEBHOOK_SECRET:
+        headers[REFINE_WEBHOOK_SECRET_HEADER] = REFINE_WEBHOOK_SECRET
+    request = urllib.request.Request(url, data=body, method="POST", headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.status
 
@@ -79,6 +81,16 @@ async def notify_refine_done(
             )
             logger.info(f"📬 [{meeting_id}] 재분석 완료 웹훅 전송 (status={status}, HTTP {code})")
             return
+        except urllib.error.HTTPError as e:
+            # 4xx는 재시도해도 결과가 같다 — 시크릿이 틀렸거나 경로가 잘못된 것이라
+            # 사람이 고쳐야 한다. 조용히 3번 반복하면 원인을 못 찾는다.
+            if 400 <= e.code < 500:
+                logger.error(
+                    f"❌ [{meeting_id}] 재분석 완료 웹훅 거부됨 (HTTP {e.code}) — "
+                    f"인증 헤더({REFINE_WEBHOOK_SECRET_HEADER})나 URL을 확인할 것. 재시도하지 않음."
+                )
+                return
+            raise
         except Exception as e:
             # 소비자 서버가 재시작 중일 수 있어 몇 번 재시도한다. 통지를 놓치면
             # 소비자 쪽 후처리가 아예 시작되지 않으므로 한 번 실패로 포기하지 않는다.

@@ -321,6 +321,10 @@ DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 # 미설정(None)이면 웹훅을 보내지 않는다 — 기존 동작과 동일.
 REFINE_WEBHOOK_URL = os.getenv("REFINE_WEBHOOK_URL") or None
 REFINE_WEBHOOK_TIMEOUT_SEC = float(os.getenv("REFINE_WEBHOOK_TIMEOUT_SEC", "10"))
+# 수신 측이 요구하는 인증 헤더. 시크릿은 자격증명이므로 절대 코드/설정 파일에 넣지 말고
+# 환경변수로만 주입할 것 (.env는 gitignore 대상).
+REFINE_WEBHOOK_SECRET = os.getenv("REFINE_WEBHOOK_SECRET") or None
+REFINE_WEBHOOK_SECRET_HEADER = os.getenv("REFINE_WEBHOOK_SECRET_HEADER", "X-Webhook-Secret")
 # 소비자 서버가 재시작 중일 수 있어 재시도한다. 통지를 놓치면 소비자 쪽 후처리가
 # 아예 시작되지 않으므로 한 번 실패로 포기하지 않는다(지연은 delay × 시도횟수로 증가).
 REFINE_WEBHOOK_RETRIES = int(os.getenv("REFINE_WEBHOOK_RETRIES", "3"))
