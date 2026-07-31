@@ -57,7 +57,13 @@ def _build_plain_text(doc: DocumentResult) -> str:
         for chart in page.content.charts:
             if not _chart_has_content(chart):
                 continue
-            key = chart.description.strip()
+            # 수치가 신뢰할 수 없으면(환각) 가짜 표 대신 제목만 남기고
+            # 실제 그림은 image_path로 저장된 크롭 이미지를 참고하게 한다.
+            if _chart_data_reliable(chart):
+                key = chart.description.strip()
+            else:
+                title = _chart_effective_title(chart, page.page)
+                key = f"[차트: {title}] (자동 인식 정확도가 낮아 원본 이미지 참고)"
             if key and key not in seen:
                 seen.add(key)
                 parts.append(key)
@@ -102,6 +108,45 @@ def _data_looks_hallucinated(data: list[dict]) -> bool:
         if isinstance(v, (int, float))
     ]
     return len(nums) >= 8 and len(set(nums)) == 1
+
+
+def _chart_series_values_identical(data: list[dict]) -> bool:
+    """행마다 서로 다른 계열(컬럼)의 숫자 값이 전부 똑같은지 검사합니다.
+
+    실제 서로 다른 지표(예: 부동산원 vs KB)가 매 시점 완전히 같은 값일 확률은
+    거의 없다 — VL이 실제 곡선을 못 읽고 축 눈금(X/Y축 라벨)을 그대로
+    값처럼 베낀 전형적인 환각 패턴이다. 행의 80% 이상에서 이 패턴이 나오면
+    환각으로 간주한다.
+    """
+    numeric_rows = 0
+    identical_rows = 0
+    for row in data:
+        nums = [v for v in row.values() if isinstance(v, (int, float))]
+        if len(nums) >= 2:
+            numeric_rows += 1
+            if len(set(nums)) == 1:
+                identical_rows += 1
+    if numeric_rows == 0:
+        return False
+    return identical_rows / numeric_rows >= 0.8
+
+
+def _chart_data_reliable(chart) -> bool:
+    """차트의 data(계열 수치)를 표로 보여줄 만큼 신뢰할 수 있는지 확인합니다.
+
+    신뢰할 수 없으면(환각으로 판단되면) 호출부에서 수치 표 대신 이미지로만
+    보여주고, 텍스트는 제목 정도만 남긴다.
+    """
+    if not chart.extracted_data:
+        return False
+    data = chart.extracted_data.get("data")
+    if not data:
+        return False
+    if _data_looks_hallucinated(data):
+        return False
+    if _chart_series_values_identical(data):
+        return False
+    return True
 
 
 def _chart_has_content(chart) -> bool:
@@ -223,13 +268,16 @@ def _build_charts(doc: DocumentResult) -> list[dict]:
             if not _chart_has_content(chart):
                 continue
             title = _chart_effective_title(chart, page.page)
+            data_reliable = _chart_data_reliable(chart)
             entry: dict = {
                 "page": page.page,
                 "raw_text": chart.description.strip(),
                 "title": title,
                 "image_path": chart.image_path,
+                # 프론트가 데이터 표 대신 이미지만 보여줘야 하는지 판단하는 플래그
+                "data_reliable": data_reliable,
             }
-            if chart.extracted_data.get("data"):
+            if data_reliable:
                 entry["data"] = _dedupe_rows(chart.extracted_data["data"])
             charts.append(entry)
     return charts
@@ -363,7 +411,11 @@ def _build_chunks(doc: DocumentResult) -> list[dict]:
         for chart in page.content.charts:
             if not _chart_has_content(chart):
                 continue
-            text = chart.description.strip()
+            if _chart_data_reliable(chart):
+                text = chart.description.strip()
+            else:
+                title = _chart_effective_title(chart, pg)
+                text = f"[차트: {title}] (자동 인식 정확도가 낮아 원본 이미지 참고)"
             if text:
                 chunks.append({"text": text, "style": "chart", "page_number": pg})
 
