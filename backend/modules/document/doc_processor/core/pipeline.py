@@ -314,6 +314,44 @@ class DocumentPipeline:
                 return True
         return False
 
+    @staticmethod
+    def _trim_bbox_excluding(
+        container: tuple[float, float, float, float],
+        exclude: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        """container bbox에서 exclude bbox와 겹치는 가장자리를 잘라낸 bbox를 반환합니다.
+
+        완전한 다각형 차집합 대신, exclude가 container의 위/아래/좌/우 중
+        한쪽 가장자리에 거의 붙어서 겹치는(표가 chart 박스 아래쪽을 침범하는 등)
+        실무에서 흔한 케이스만 처리합니다. 애매하게 겹치면(가운데를 관통하는 등)
+        원래 bbox를 그대로 반환합니다 — 호출부에서 이 경우 안전하게 통째로 스킵합니다.
+        """
+        cx0, cy0, cx1, cy1 = container
+        ex0, ey0, ex1, ey1 = exclude
+
+        ix0, iy0 = max(cx0, ex0), max(cy0, ey0)
+        ix1, iy1 = min(cx1, ex1), min(cy1, ey1)
+        if ix1 <= ix0 or iy1 <= iy0:
+            return container  # 안 겹침
+
+        overlap_w = ix1 - ix0
+        overlap_h = iy1 - iy0
+        c_w, c_h = cx1 - cx0, cy1 - cy0
+
+        # 가로로 컨테이너 폭 대부분을 덮으면 위/아래 가장자리 트리밍 후보
+        if overlap_w >= c_w * 0.8:
+            if ey1 >= cy1 - 1:      # exclude가 컨테이너 아래쪽에 붙음
+                return (cx0, cy0, cx1, min(cy1, ey0))
+            if ey0 <= cy0 + 1:      # exclude가 컨테이너 위쪽에 붙음
+                return (cx0, max(cy0, ey1), cx1, cy1)
+        # 세로로 컨테이너 높이 대부분을 덮으면 좌/우 가장자리 트리밍 후보
+        if overlap_h >= c_h * 0.8:
+            if ex1 >= cx1 - 1:      # exclude가 컨테이너 오른쪽에 붙음
+                return (cx0, cy0, min(cx1, ex0), cy1)
+            if ex0 <= cx0 + 1:      # exclude가 컨테이너 왼쪽에 붙음
+                return (max(cx0, ex1), cy0, cx1, cy1)
+        return container  # 애매한 겹침 — 트리밍 불가
+
     # ── YOLO style 적용 ──────────────────────────────────────────────────────
 
     @staticmethod
@@ -447,9 +485,12 @@ class DocumentPipeline:
         # (1개 포함은 부분/전체 크롭 관계일 수 있어 유지).
         # diagram 큰 박스는 위 2단계의 "큰 쪽 유지" 규칙 대상이므로 제외.
         #
-        # 단, table_image를 포함하는 경우는 예외 — chart와 table은 서로 다른
-        # 객체라 "부분/전체 크롭"일 수가 없으므로, 1개만 겹쳐도 컨테이너가
-        # 표 영역까지 삼킨 오검출로 보고 무조건 버린다 (2026-07-31).
+        # 단, table_image와 겹치는 경우는 예외 — chart와 table은 서로 다른
+        # 객체라 "부분/전체 크롭"일 수가 없다. 그렇다고 통째로 버리면 표와
+        # 겹치지 않는 나머지 영역(진짜 차트 콘텐츠)까지 같이 유실되므로,
+        # 표와 겹치는 가장자리만 잘라내고 나머지는 살려서 OCR한다.
+        # 트리밍이 애매해서 실패하면(가운데를 관통하는 등) 안전하게 통째로
+        # 버린다 (2026-07-31).
         # 표가 chart 박스 아래로 살짝 삐져나오는 경우가 흔해 90% 완전 포함
         # 기준(_is_contained 기본값)으로는 못 잡으므로 50%로 완화해서 체크한다.
         for big in candidates:
@@ -461,18 +502,38 @@ class DocumentPipeline:
                 and id(other) not in dropped_ids
                 and self._is_contained(other["bbox"], [big["bbox"]])
             ]
-            contains_table = any(
-                other["fig_type"] == "table_image"
+            overlapping_tables = [
+                other for other in candidates
+                if other is not big
+                and id(other) not in dropped_ids
+                and other["fig_type"] == "table_image"
                 and self._is_contained(other["bbox"], [big["bbox"]], threshold=0.5)
-                for other in candidates
-                if other is not big and id(other) not in dropped_ids
-            )
-            if contains_table:
+            ]
+            if overlapping_tables:
+                trimmed_bbox = big["bbox"]
+                for tbl in overlapping_tables:
+                    trimmed_bbox = self._trim_bbox_excluding(trimmed_bbox, tbl["bbox"])
+                if trimmed_bbox == big["bbox"]:
+                    print(
+                        f"  [SKIP] 표 영역을 포함하는 chart 컨테이너 → 트리밍 불가, 통째로 스킵 "
+                        f"(bbox={big['bbox']})"
+                    )
+                    dropped_ids.add(id(big))
+                    continue
+                recropped = crop_layout_rect(page_image, trimmed_bbox, dpi=self.dpi)
+                if not is_valid_crop(recropped):
+                    print(
+                        f"  [SKIP] chart에서 표 겹침 영역 제외 후 크롭이 너무 작음 → 스킵 "
+                        f"(원래={big['bbox']} → 조정={trimmed_bbox})"
+                    )
+                    dropped_ids.add(id(big))
+                    continue
                 print(
-                    f"  [SKIP] 표 영역을 포함하는 chart 컨테이너 → 스킵 "
-                    f"(bbox={big['bbox']})"
+                    f"  [TRIM] chart bbox에서 표와 겹치는 영역 제외 "
+                    f"(원래={big['bbox']} → 조정={trimmed_bbox})"
                 )
-                dropped_ids.add(id(big))
+                big["bbox"] = trimmed_bbox
+                big["cropped"] = recropped
             elif len(others_inside) >= 2:
                 print(
                     f"  [SKIP] 개별 figure {len(others_inside)}개를 감싸는 컨테이너 chart → 스킵 "
