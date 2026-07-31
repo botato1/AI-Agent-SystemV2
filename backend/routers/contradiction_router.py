@@ -127,6 +127,20 @@ def get_contradiction_list(
         contradictions=[_to_contradiction_schema(db, c) for c in items]
     )
 
+# 회의 종료 후 decision 변경 후보 조회 (같은 decision당 최신 1건만)
+@router.get("/meetings/{meeting_id}/decision-changes", response_model=ContradictionListResponse)
+def get_meeting_decision_changes_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    items = contradiction_crud.list_latest_decision_changes_by_meeting(db, meeting_id)
+    return ContradictionListResponse(
+        contradictions=[_to_contradiction_schema(db, c) for c in items]
+    )
+
 
 # 모순 단건 조회
 @router.get("/{contradiction_id}", response_model=ContradictionSchema)
