@@ -1,7 +1,6 @@
 // src/components/DocumentDetailPanel.tsx
 import { DocumentDetail, DocumentFigure } from "../services/document";
-import { cleanExtractedText } from "./DocumentContentBlocks";
-import DocumentOriginalViewer from "./DocumentOriginalViewer"; // 신규 추가
+import ContentBlocks, { cleanExtractedText } from "./DocumentContentBlocks";
 
 interface DocumentDetailPanelProps {
   detail: DocumentDetail | null;
@@ -19,19 +18,20 @@ export default function DocumentDetailPanel({ detail, figures, isLoading, t }: D
     );
   }
 
+  const originalText = detail?.raw.original_text ?? "";
+
   return (
     <div className="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
-      {/* 💡 실제 업로드된 파일 바이너리 그대로 보여주는 원본 패널 (2/3 폭) */}
+      {/* 실제 파일이 아니라, AI가 추출/정리한 원본 텍스트 (실제 원본 파일은 [원본 파일] 탭에서 확인) */}
+      {/* 표 구조를 보존해야 하므로 여기서 미리 cleanExtractedText를 돌리면 안 됨 (ContentBlocks가 표/문단을 나눠서 문단만 정리함) */}
       <div className="col-span-2 flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-hidden">
         <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
           {t.doc_tab_original}
         </p>
-        {detail ? (
-          <DocumentOriginalViewer
-            workspaceId={detail.workspace_id}
-            documentId={detail.document_id}
-            documentName={detail.filename}
-          />
+        {originalText ? (
+          <div className="flex-1 space-y-3 overflow-y-auto custom-scrollbar pr-1">
+            <ContentBlocks text={originalText} />
+          </div>
         ) : (
           <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-recall-border bg-recall-bgMain p-4 text-center">
             <p className="text-sm text-recall-textMuted">{t.original_not_supported}</p>
