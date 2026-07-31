@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from backend.schemas.common_schema import (
     ORMBaseSchema,
@@ -44,11 +44,14 @@ class ContradictionSchema(ORMBaseSchema):
     source_type: ContradictionSourceType
     meeting_segment_id: Optional[UUID] = None
     room_message_id: Optional[UUID] = None
+    session_meeting_id: Optional[UUID] = None
+    session_room_id: Optional[UUID] = None
 
     reference_type: ContradictionReferenceType
-    reference_file_id: UUID
+    reference_file_id: Optional[UUID] = None
     reference_chunk_id: Optional[UUID] = None
     reference_code_fact_id: Optional[UUID] = None
+    reference_decision_id: Optional[UUID] = None
 
     statement_text_snapshot: str = Field(
         ...,
@@ -58,6 +61,13 @@ class ContradictionSchema(ORMBaseSchema):
         ...,
         min_length=1,
     )
+    reference_source_name: Optional[str] = None  # 근거 문서명 또는 결정 제목 (프론트 표시용)
+    display_message: Optional[str] = None  # 프론트에 바로 띄울 수 있는 조합 문구
+    resolution_type: Optional[ContradictionResolutionType] = None  # 해결된 경우만 값 있음
+    source_meeting_title: Optional[str] = None   # 모순이 감지된 회의 제목
+    source_meeting_time: Optional[datetime] = None
+    reference_meeting_title: Optional[str] = None  # 원래 결정이 나온 회의 제목 (reference_type=decision일 때만)
+    reference_meeting_time: Optional[datetime] = None
     reference_location: Optional[dict[str, Any]] = None
     reason: Optional[str] = None
 
@@ -120,10 +130,10 @@ class ContradictionSchema(ORMBaseSchema):
                     "reference_chunk_id가 필수입니다."
                 )
 
-            if self.reference_code_fact_id is not None:
+            if self.reference_code_fact_id is not None or self.reference_decision_id is not None:
                 raise ValueError(
                     "reference_type이 content_chunk이면 "
-                    "reference_code_fact_id는 NULL이어야 합니다."
+                    "reference_code_fact_id/reference_decision_id는 NULL이어야 합니다."
                 )
 
         elif self.reference_type == "code_fact":
@@ -133,13 +143,29 @@ class ContradictionSchema(ORMBaseSchema):
                     "reference_code_fact_id가 필수입니다."
                 )
 
-            if self.reference_chunk_id is not None:
+            if self.reference_chunk_id is not None or self.reference_decision_id is not None:
                 raise ValueError(
                     "reference_type이 code_fact이면 "
-                    "reference_chunk_id는 NULL이어야 합니다."
+                    "reference_chunk_id/reference_decision_id는 NULL이어야 합니다."
+                )
+
+        elif self.reference_type == "decision":
+            if self.reference_decision_id is None:
+                raise ValueError(
+                    "reference_type이 decision이면 "
+                    "reference_decision_id가 필수입니다."
+                )
+
+            if self.reference_chunk_id is not None or self.reference_code_fact_id is not None:
+                raise ValueError(
+                    "reference_type이 decision이면 "
+                    "reference_chunk_id/reference_code_fact_id는 NULL이어야 합니다."
                 )
 
         return self
+
+
+
 
 
 # =============================================================================
@@ -201,3 +227,15 @@ class ChangeSummaryDraftSchema(TimestampSchema):
         default=None,
         max_length=100,
     )
+    
+# =============================================================================
+# Re:Call: contradictions API 요청/응답
+# =============================================================================
+
+class ContradictionListResponse(BaseModel):
+    contradictions: list[ContradictionSchema] = Field(default_factory=list)
+
+
+class ContradictionResolveRequest(BaseModel):
+    resolution_type: ContradictionResolutionType
+    note: Optional[str] = None

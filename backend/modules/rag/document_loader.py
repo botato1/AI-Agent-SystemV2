@@ -57,9 +57,9 @@ def _chunk_document(chunks: list) -> list[dict]:
 
     규칙:
     - style == "caption" → 제외 (호출부에서 미리 제거 예정이지만 방어 코드로 유지)
-    - style == "title"   → 새 청크 경계. 현재 모인 body가 있으면 먼저 확정.
-                           다음 청크의 맨 앞에 이 title을 포함시킴.
-    - style == "body"    → 현재 청크에 계속 추가.
+    - style in ("title", "heading") → 새 청크 경계. 현재 모인 내용이 있으면 먼저 확정.
+                           다음 청크의 맨 앞에 이 제목을 포함시킴.
+    - 그 외 ("body", "table", "image", "chart" 등) → 현재 청크에 계속 추가.
                            DOC_CHUNK_MAX를 넘으면 현재 청크 확정 후 새로 시작.
 
     반환: [{"content": str, "page_number": int}, ...]
@@ -71,13 +71,13 @@ def _chunk_document(chunks: list) -> list[dict]:
     current_chars = 0
 
     def flush(lines, title, page):
-        if not lines:
+        if not lines and not title:
             return
         content = "\n".join(lines).strip()
+        if title:
+            content = f"{title}\n{content}".strip() if content else title
         if not content:
             return
-        if title:
-            content = f"{title}\n{content}"
         result.append({"content": content, "page_number": page})
 
     for chunk in chunks:
@@ -98,15 +98,15 @@ def _chunk_document(chunks: list) -> list[dict]:
         if style == "caption":
             continue
 
-        if style == "title":
-            if current_lines:
+        if style in ("title", "heading"):
+            if current_lines or current_title:
                 flush(current_lines, current_title, current_page)
                 current_lines = []
                 current_chars = 0
             current_title = content
             current_page = page
 
-        elif style == "body":
+        else:
             content_len = len(content)
             if current_chars + content_len > DOC_CHUNK_MAX and current_chars >= DOC_CHUNK_MIN:
                 flush(current_lines, current_title, current_page)

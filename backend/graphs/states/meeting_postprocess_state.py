@@ -40,5 +40,5 @@ class MeetingPostprocessState(CommonState, total=False):
     # 결정사항 및 할 일 추출
     extracted_decisions: NotRequired[list[dict[str, Any]]]
     decision_ids: NotRequired[list[str]]
-    extracted_action_items: NotRequired[list[dict[str, Any]]]
-    action_item_ids: NotRequired[list[str]]
+    extracted_tasks: NotRequired[list[dict[str, Any]]]
+    task_ids: NotRequired[list[str]]

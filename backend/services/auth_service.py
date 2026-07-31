@@ -1,10 +1,17 @@
 # backend/services/auth_service.py
 
+import os
+import uuid
+from typing import Optional
+
+import httpx
+from pathlib import Path
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from jose import JWTError
+from jose import ExpiredSignatureError, JWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,9 +29,17 @@ from backend.schemas.auth_schema import (
     TokenResponse,
     UserPublicSchema,
     CheckUserIdResponse,
+    EmailCheckResponse,
+    PasswordResetRequestRequest,
+    PasswordResetRequestResponse,
+    PasswordResetConfirmRequest,
+    PasswordResetConfirmResponse,
+    AccountDeleteRequest,
+    AccountDeleteResponse,
+    VoiceProfileResponse,
 )
 
-from backend.db.crud import auth_crud
+from backend.db.crud import auth_crud, workspace_crud
 
 from backend.core.security import (
     hash_password,
@@ -35,10 +50,14 @@ from backend.core.security import (
     get_user_id_from_refresh_token,
     hash_token,
     REFRESH_TOKEN_EXPIRE_DAYS,
+    create_password_reset_token,
+    verify_password_reset_token,
+    password_fingerprint,
+    verify_workspace_invite_token,
 )
 
 from backend.core.config import settings
-
+from backend.core.email import send_password_reset_email
 
 def _create_token_response(db: Session, user_id: UUID) -> TokenResponse:
     access_token = create_access_token(user_id=str(user_id))
@@ -166,11 +185,33 @@ def signup(db: Session, request: SignupRequest) -> SignupResponse:
             detail="이미 사용 중인 아이디 또는 이메일입니다.",
         )
 
+    invite_status = None
+    if request.invite_token:
+        try:
+            payload = verify_workspace_invite_token(request.invite_token)
+            if payload.get("sub") == request.email:
+                workspace_crud.add_member(
+                    db,
+                    workspace_id=uuid.UUID(payload["workspace_id"]),
+                    user_id=user.id,
+                    added_by=uuid.UUID(payload["invited_by"]),
+                    role=payload["role"],
+                )
+                invite_status = "joined"
+            else:
+                invite_status = "invite_invalid"
+        except ExpiredSignatureError:
+            invite_status = "invite_expired"
+        except JWTError:
+            invite_status = "invite_invalid"
+            # 초대 토큰이 잘못됐어도 회원가입 자체는 막지 않음
+
     return SignupResponse(
         status="success",
         user=UserPublicSchema.model_validate(user),
         message="회원가입이 완료되었습니다.",
         error=None,
+        invite_status=invite_status,
     )
 
 
@@ -348,3 +389,306 @@ def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest
         message="사용자 정보가 수정되었습니다.",
         error=None,
     )
+
+# 이메일 중복 확인
+def check_email_available(db: Session, email: str) -> EmailCheckResponse:
+    exists = auth_crud.get_user_by_email(db, email) is not None
+
+    return EmailCheckResponse(
+        status="success",
+        email=email,
+        available=not exists,
+        message="이미 사용 중인 이메일입니다." if exists else "사용 가능한 이메일입니다.",
+        error=None,
+    )
+
+
+# 비밀번호 재설정 요청 - 계정 존재 여부와 무관하게 항상 동일한 응답
+def request_password_reset(db: Session, request: PasswordResetRequestRequest) -> PasswordResetRequestResponse:
+    user = auth_crud.get_user_by_email(db, request.email)
+
+    if user:
+        reset_token = create_password_reset_token(str(user.id), user.password_hash)
+        send_password_reset_email(user.email, reset_token)
+
+    return PasswordResetRequestResponse(
+        status="success",
+        message="입력하신 이메일로 비밀번호 재설정 링크를 발송했습니다. (계정이 존재하는 경우)",
+        error=None,
+    )
+
+
+# 비밀번호 재설정 확인 - 지문 비교로 재사용 차단, 성공 시 기존 세션 전부 로그아웃
+def confirm_password_reset(db: Session, request: PasswordResetConfirmRequest) -> PasswordResetConfirmResponse:
+    try:
+        payload = verify_password_reset_token(request.reset_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않거나 만료된 재설정 링크입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(payload["sub"]))
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    # 토큰 발급 이후 비밀번호가 이미 바뀌었다면(=이미 이 토큰으로 재설정했다면) 재사용 차단
+    if payload.get("pwd_fp") != password_fingerprint(user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="이미 사용되었거나 만료된 재설정 링크입니다.",
+        )
+
+    _validate_password_format(request.new_password)
+
+    auth_crud.update_user_password(db, user.id, hash_password(request.new_password))
+    auth_crud.revoke_all_refresh_tokens_for_user(db, user.id)
+
+    return PasswordResetConfirmResponse(
+        status="success",
+        message="비밀번호가 재설정되었습니다. 다시 로그인해주세요.",
+        error=None,
+    )
+
+
+# 회원 탈퇴 - 소프트 삭제 + 기존 세션 전부 로그아웃
+def delete_account(db: Session, access_token: str, request: AccountDeleteRequest) -> AccountDeleteResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    if not verify_password(request.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="비밀번호가 올바르지 않습니다.",
+        )
+
+    auth_crud.revoke_all_refresh_tokens_for_user(db, user.id)
+    auth_crud.soft_delete_user(db, user.id)
+
+    return AccountDeleteResponse(
+        status="success",
+        message="회원 탈퇴가 완료되었습니다.",
+        error=None,
+    )
+
+PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
+ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+MAX_PROFILE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
+
+STT_SERVER_BASE_URL = os.getenv("STT_SERVER_BASE_URL", "http://61.81.98.82:8002")
+
+def _delete_old_profile_image(old_image_url: str | None) -> None:
+    """기존 프로필 이미지 파일을 삭제한다. 실패해도 무시(치명적이지 않음)."""
+    if not old_image_url:
+        return
+    try:
+        old_path = PROFILE_IMAGE_STORAGE_DIR / Path(old_image_url).name
+        old_path.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"[auth_service] 기존 프로필 이미지 삭제 실패: {repr(e)}")
+
+def update_profile_image(db: Session, access_token: str, filename: str, file_content: bytes) -> ProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_PROFILE_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="지원하지 않는 이미지 형식입니다 (png/jpg/jpeg만 가능).",
+        )
+
+    if len(file_content) > MAX_PROFILE_IMAGE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이미지 파일은 5MB 이하만 업로드할 수 있습니다.",
+        )
+
+    PROFILE_IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{uuid.uuid4()}{extension}"
+    (PROFILE_IMAGE_STORAGE_DIR / stored_filename).write_bytes(file_content)
+
+    old_image_url = user.profile_image_url
+    image_url = f"/static/profile_images/{stored_filename}"
+    auth_crud.update_user_profile(db, user.id, profile_image_url=image_url)
+    user = auth_crud.get_user_by_id(db, user.id)
+    _delete_old_profile_image(old_image_url)
+
+    return ProfileResponse(
+        status="success",
+        user=UserPublicSchema.model_validate(user),
+        message="프로필 이미지가 변경되었습니다.",
+        error=None,
+    )
+
+def get_voice_profile_script() -> str:
+    try:
+        response = httpx.get(f"{STT_SERVER_BASE_URL}/api/profiles/script", timeout=10.0)
+        response.raise_for_status()
+        return response.json().get("script", "")
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에서 문장을 가져오지 못했습니다.",
+        )
+
+
+def register_voice_profile(
+    db: Session, access_token: str, audio_bytes: bytes, speaker_name_override: Optional[str] = None,
+) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    if auth_crud.get_voice_profile(db, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 목소리가 등록돼 있습니다. 재등록하려면 먼저 삭제해주세요.",
+        )
+
+    params = {"speaker_name": speaker_name_override} if speaker_name_override else {}
+    try:
+        response = httpx.post(
+            f"{STT_SERVER_BASE_URL}/api/profiles",
+            params=params,
+            content=audio_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에 등록하지 못했습니다.",
+        )
+
+    if result.get("name_extraction_failed") and not speaker_name_override:
+        return VoiceProfileResponse(
+            registered=False,
+            name_extraction_failed=True,
+            detected_text=result.get("detected_text"),
+        )
+
+    speaker_name = result.get("speaker_name") or speaker_name_override
+    row = auth_crud.create_voice_profile(
+        db, user_id=user.id, speaker_name=speaker_name, detected_text=result.get("detected_text"),
+    )
+    return VoiceProfileResponse(
+        registered=True, registered_at=row.registered_at,
+        speaker_name=speaker_name, detected_text=result.get("detected_text"),
+    )
+
+
+def get_voice_profile_status(db: Session, access_token: str) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    row = auth_crud.get_voice_profile(db, UUID(user_pk))
+    if not row:
+        return VoiceProfileResponse(registered=False)
+    return VoiceProfileResponse(
+        registered=True, registered_at=row.registered_at,
+        speaker_name=row.speaker_name, detected_text=row.detected_text,
+    )
+
+
+def rename_voice_profile(db: Session, access_token: str, new_name: str) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    row = auth_crud.get_voice_profile(db, UUID(user_pk))
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="등록된 목소리가 없습니다.",
+        )
+
+    try:
+        response = httpx.patch(
+            f"{STT_SERVER_BASE_URL}/api/profiles/{row.speaker_name}/rename",
+            params={"new_name": new_name},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에서 이름 변경에 실패했습니다.",
+        )
+
+    updated = auth_crud.update_voice_profile_speaker_name(db, UUID(user_pk), new_name)
+    return VoiceProfileResponse(registered=True, registered_at=updated.registered_at, speaker_name=new_name)
+
+
+def remove_voice_profile(db: Session, access_token: str) -> VoiceProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    row = auth_crud.get_voice_profile(db, UUID(user_pk))
+    speaker_name = row.speaker_name if row else None
+
+    auth_crud.delete_voice_profile(db, UUID(user_pk))
+
+    if speaker_name:
+        try:
+            httpx.delete(f"{STT_SERVER_BASE_URL}/api/profiles/{speaker_name}", timeout=10.0)
+        except httpx.HTTPError as e:
+            print(f"[auth_service] 8002 프로필 삭제 실패: {repr(e)}")
+
+    return VoiceProfileResponse(registered=False)

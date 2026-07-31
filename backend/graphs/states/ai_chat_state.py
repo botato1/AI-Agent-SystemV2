@@ -11,7 +11,7 @@ from backend.graphs.states.common_state import CommonState
 class AIChatState(CommonState, total=False):
     # 세션 및 질문
     session_id: Required[str]
-    room_id: Required[str]
+    room_id: NotRequired[str]
     user_id: Required[str]
     user_message: Required[str]
     chat_history: NotRequired[list[dict[str, Any]]]

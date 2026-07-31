@@ -17,6 +17,7 @@ class Worktree(Base):
 
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
     root_folder_name = Column(String(255), nullable=False)
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     total_file_count = Column(Integer, nullable=False, server_default="0")
@@ -59,6 +60,7 @@ class WorkspaceFile(Base):
     origin_type = Column(String(30), nullable=False)
     file_size_bytes = Column(BigInteger, nullable=False)
     sha256_hash = Column(String(64), nullable=False)
+    external_ref = Column(String(255), nullable=True)
 
     version_group_id = Column(UUID(as_uuid=True), nullable=False)
     version_no = Column(Integer, nullable=False, server_default="1")
@@ -84,7 +86,7 @@ class WorkspaceFile(Base):
         ),
         CheckConstraint(
             "origin_type IN ('worktree','document_analysis','room_upload',"
-            "'meeting_upload','live_recording')",
+            "'meeting_upload','live_recording','meeting_summary')",
             name="chk_workspace_files_origin",
         ),
         CheckConstraint(

@@ -31,6 +31,7 @@ class SignupRequest(BaseModel):
         ...,
         min_length=1,
         max_length=50,
+        title="id",
         description="로그인에 사용할 아이디",
     )
     email: str = Field(
@@ -49,11 +50,13 @@ class SignupRequest(BaseModel):
         max_length=50,
         description="화면에 표시할 이름",
     )
+    invite_token: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
     username: str = Field(
         ...,
+        title="id",
         description="로그인 아이디",
     )
     password: str = Field(
@@ -103,6 +106,7 @@ class SignupResponse(BaseModel):
     user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
+    invite_status: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
@@ -142,6 +146,61 @@ class CheckUserIdResponse(BaseModel):
     message: str
     error: Optional[str] = None
 
+# =============================================================================
+# Re:Call: 신규 인증 API 요청/응답
+# =============================================================================
+
+class EmailCheckResponse(BaseModel):
+    status: str
+    email: str
+    available: bool
+    message: str
+    error: Optional[str] = None
+
+
+class PasswordResetRequestRequest(BaseModel):
+    email: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="비밀번호 재설정 링크를 받을 이메일",
+    )
+
+
+class PasswordResetRequestResponse(BaseModel):
+    status: str
+    message: str
+    error: Optional[str] = None
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    reset_token: str = Field(
+        ...,
+        description="이메일로 받은 비밀번호 재설정 토큰",
+    )
+    new_password: str = Field(
+        ...,
+        description="새 비밀번호",
+    )
+
+
+class PasswordResetConfirmResponse(BaseModel):
+    status: str
+    message: str
+    error: Optional[str] = None
+
+
+class AccountDeleteRequest(BaseModel):
+    current_password: str = Field(
+        ...,
+        description="본인 확인용 현재 비밀번호",
+    )
+
+
+class AccountDeleteResponse(BaseModel):
+    status: str
+    message: str
+    error: Optional[str] = None
 
 # =============================================================================
 # Re:Call: users
@@ -180,18 +239,6 @@ class UserSchema(TimestampSchema, SoftDeleteSchema):
     last_login_at: Optional[datetime] = None
 
 
-class UserPublicSchema(ORMBaseSchema):
-    """API 응답 등 외부에 노출할 수 있는 사용자 스키마."""
-
-    id: UUID
-    username: str
-    email: str
-    display_name: str
-    account_status: AccountStatus
-    last_login_at: Optional[datetime] = None
-    created_at: datetime
-
-
 # =============================================================================
 # Re:Call: refresh_tokens
 # =============================================================================
@@ -217,3 +264,22 @@ class RefreshTokenSchema(ORMBaseSchema):
         max_length=255,
     )
     created_at: datetime
+
+class UserPublicSchema(ORMBaseSchema):
+    """API 응답 등 외부에 노출할 수 있는 사용자 스키마."""
+
+    id: UUID
+    username: str
+    email: str
+    display_name: str
+    profile_image_url: Optional[str] = None
+    account_status: AccountStatus
+    last_login_at: Optional[datetime] = None
+    created_at: datetime
+
+class VoiceProfileResponse(BaseModel):
+    registered: bool
+    registered_at: Optional[datetime] = None
+    speaker_name: Optional[str] = None
+    name_extraction_failed: bool = False
+    detected_text: Optional[str] = None

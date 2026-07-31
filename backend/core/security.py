@@ -8,12 +8,15 @@ import hashlib
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
+import uuid as uuid_lib
+
 from backend.core.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+WS_TICKET_EXPIRE_SECONDS = 180
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 14
 ALGORITHM = "HS256"
 
 
@@ -126,3 +129,103 @@ def get_user_id_from_access_token(token: str) -> str:
 def get_user_id_from_refresh_token(token: str) -> str:
     payload = verify_refresh_token(token)
     return payload["sub"]
+
+# 비밀번호 해시의 일부를 재설정 토큰에 지문으로 남긴다.
+# 비밀번호가 바뀌면 지문도 달라지므로, 이미 사용된(비밀번호가 이미 바뀐)
+# reset_token은 검증 시 자동으로 걸러진다 (재사용 방지).
+def password_fingerprint(password_hash: str) -> str:
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+
+# Password Reset Token 생성 : 기본 만료 시간 = settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+def create_password_reset_token(
+    user_id: str,
+    password_hash: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "type": "password_reset",
+        "pwd_fp": password_fingerprint(password_hash),
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+# Password Reset Token인지 확인 후 payload 반환
+def verify_password_reset_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "password_reset":
+        raise JWTError("비밀번호 재설정 토큰이 아닙니다.")
+
+    if not payload.get("sub"):
+        raise JWTError("토큰에 user_id 정보가 없습니다.")
+
+    return payload
+
+# Password Reset Token에서 user_id 추출
+def get_user_id_from_password_reset_token(token: str) -> str:
+    payload = verify_password_reset_token(token)
+    return payload["sub"]
+
+# WebSocket 연결용 일회용 티켓 발급 (기본 만료 60초 — 발급 직후 바로 연결한다는 전제)
+def create_ws_ticket(user_id: str, meeting_id: str, expires_delta: Optional[timedelta] = None) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "meeting_id": meeting_id,
+        "type": "ws_ticket",
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+# WebSocket 티켓 검증 (type/meeting_id/jti 확인 후 payload 반환)
+def verify_ws_ticket(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "ws_ticket":
+        raise JWTError("WebSocket 티켓이 아닙니다.")
+
+    if not payload.get("sub") or not payload.get("meeting_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+
+    return payload
+
+def create_workspace_invite_token(
+    workspace_id: str,
+    email: str,
+    role: str,
+    invited_by: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=7))
+
+    payload: dict[str, Any] = {
+        "sub": email,
+        "type": "workspace_invite",
+        "workspace_id": workspace_id,
+        "role": role,
+        "invited_by": invited_by,
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def verify_workspace_invite_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "workspace_invite":
+        raise JWTError("워크스페이스 초대 토큰이 아닙니다.")
+
+    return payload

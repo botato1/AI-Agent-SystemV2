@@ -1,0 +1,801 @@
+# backend/routers/meeting_router.py
+
+import hashlib
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy.orm import Session
+
+from backend.core.security import create_ws_ticket
+from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.db.session import get_db
+from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud
+from backend.services import meeting_service
+from backend.services.meeting_service import process_uploaded_audio_stt
+from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
+from backend.modules.judgment import agenda_reminder
+from backend.routers import meeting_ws_router
+from backend.schemas.meeting_schema import (
+    MeetingStartRequest,
+    MeetingResponse,
+    MeetingListResponse,
+    MeetingSegmentListResponse,
+    MeetingSegmentResponse,
+    MeetingSummaryResponse,
+    DecisionListResponse,
+    DecisionResponse,
+    MeetingStartResponse,
+    SpeakerLabelMappingRequest,
+    MeetingTitleUpdateRequest,
+    DecisionWithHistoryListResponse,
+    DecisionWithHistoryResponse,
+    DecisionHistoryEntry,
+    MeetingAttendeeResponse,
+    MeetingAttendeeListResponse,
+    AttendeeMappingRequest,
+    MeetingExportResponse,
+    MeetingRecentItem,
+    MeetingRecentListResponse,
+    MeetingScheduleRequest,
+    UpcomingMeetingItem,
+    UpcomingMeetingListResponse,
+    MeetingJoinResponse,
+)
+
+
+router = APIRouter(prefix="/api/workspaces/{workspace_id}/meetings", tags=["Meetings"])
+decisions_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Decisions"])
+
+# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (document_service.py와 동일한 임시 조치)
+MEETING_AUDIO_STORAGE_DIR = Path("data/uploads/audio")
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
+
+
+def _is_allowed_audio_file(file: UploadFile) -> bool:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix in ALLOWED_AUDIO_EXTENSIONS:
+        return True
+    return bool(file.content_type and file.content_type.startswith("audio/"))
+
+
+def _save_audio_to_local_storage(file_content: bytes, filename: str) -> tuple[str, str]:
+    MEETING_AUDIO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{uuid.uuid4()}{Path(filename).suffix}"
+    storage_path = MEETING_AUDIO_STORAGE_DIR / stored_filename
+    storage_path.write_bytes(file_content)
+    return str(storage_path), stored_filename
+
+
+def _get_meeting_or_404(db: Session, meeting_id: uuid.UUID, workspace_id: uuid.UUID):
+    meeting = meeting_crud.get_meeting(db, meeting_id)
+    if not meeting or meeting.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의를 찾을 수 없습니다.",
+        )
+    return meeting
+
+
+def _resolve_related_room(db: Session, workspace_id: uuid.UUID, related_room_id):
+    if not related_room_id:
+        return None
+    room = room_crud.get_room_by_id(db, related_room_id, workspace_id)
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="연결하려는 채팅방을 찾을 수 없습니다.",
+        )
+    return room
+
+
+# 실시간 녹음 시작
+@router.post("/start", response_model=MeetingStartResponse, status_code=status.HTTP_201_CREATED)
+def start_meeting_api(
+    workspace_id: uuid.UUID,
+    request: MeetingStartRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _resolve_related_room(db, workspace_id, request.related_room_id)
+
+    category = room_crud.get_default_category(db, workspace_id)
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
+
+    started_at = datetime.now(timezone.utc)
+    title = (request.title or "").strip()
+    title_is_auto = not title
+    if title_is_auto:
+        title = f"{started_at.month}월 {started_at.day}일 회의"
+
+    meeting = meeting_crud.create_meeting(
+        db,
+        workspace_id=workspace_id,
+        category_id=category.id,
+        title=title,
+        title_is_auto=title_is_auto,
+        location=request.location,
+        topic=request.topic,
+        recording_mode=request.recording_mode,
+        input_type="live_recording",
+        started_by=uuid.UUID(current_user_id),
+        related_room_id=request.related_room_id,
+        status="recording",
+        started_at=started_at,
+    )
+
+    ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
+    reminder_result = agenda_reminder.check_on_session_start(db, category.id)
+
+    return MeetingStartResponse(
+        **MeetingResponse.model_validate(meeting).model_dump(),
+        ws_ticket=ws_ticket,
+        agenda_reminder=reminder_result["popup"],
+    )
+
+
+# 음성 파일 업로드 (등록 후 백그라운드로 8002 STT 처리 → 회의 후처리까지 자동 진행)
+@router.post("/upload", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
+async def upload_meeting_api(
+    workspace_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    title: str | None = Form(default=None, max_length=200),
+    file: UploadFile = File(...),
+    related_room_id: uuid.UUID | None = Form(None),
+    location: str | None = Form(None),
+    topic: str | None = Form(None),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _resolve_related_room(db, workspace_id, related_room_id)
+
+    if not file.filename or not _is_allowed_audio_file(file):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="지원하지 않는 음성 파일 형식입니다.",
+        )
+
+    category = room_crud.get_default_category(db, workspace_id)
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
+
+    file_content = await file.read()
+    storage_path, stored_filename = _save_audio_to_local_storage(file_content, file.filename)
+
+    workspace_file = file_crud.create_workspace_file(
+        db,
+        workspace_id=workspace_id,
+        category_id=category.id,
+        uploaded_by=uuid.UUID(current_user_id),
+        original_filename=file.filename,
+        stored_filename=stored_filename,
+        storage_path=storage_path,
+        mime_type=file.content_type,
+        extension=Path(file.filename).suffix.lstrip("."),
+        file_kind="audio",
+        origin_type="meeting_upload",
+        file_size_bytes=len(file_content),
+        sha256_hash=hashlib.sha256(file_content).hexdigest(),
+        version_group_id=uuid.uuid4(),
+        analysis_status="pending",
+    )
+    resolved_title = (title or "").strip()
+    title_is_auto = not resolved_title
+    if title_is_auto:
+        now = datetime.now(timezone.utc)
+        resolved_title = f"{now.month}월 {now.day}일 회의"
+
+    meeting = meeting_crud.create_meeting(
+        db,
+        workspace_id=workspace_id,
+        category_id=category.id,
+        title=resolved_title,
+        title_is_auto=title_is_auto,
+        location=location,
+        topic=topic,
+        input_type="audio_upload",
+        started_by=uuid.UUID(current_user_id),
+        related_room_id=related_room_id,
+        source_file_id=workspace_file.id,
+        status="created",
+    )
+
+    background_tasks.add_task(
+        process_uploaded_audio_stt,
+        meeting.id, workspace_id, category.id, file_content,
+    )
+
+    return MeetingResponse.model_validate(meeting)
+
+
+# 실시간 녹음 종료
+@router.post("/{meeting_id}/end", response_model=MeetingResponse)
+def end_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.input_type != "live_recording":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="실시간 녹음 회의가 아닙니다.",
+        )
+    if meeting.status != "recording":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+
+    ended_at = datetime.now(timezone.utc)
+    duration_ms = (
+        max(0, int((ended_at - meeting.started_at).total_seconds() * 1000) - meeting.paused_duration_ms)
+        if meeting.started_at else None
+    )
+
+    # recording -> processing 전이를 원자적으로 시도한다. WS 종료(_finalize_meeting_if_recording)가
+    # 근접한 시점에 같은 전이를 시도할 수 있으므로, 실제로 이긴 쪽만 후처리를 예약해야 중복 실행을 막는다.
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="recording", to_status="processing",
+        ended_at=ended_at, duration_ms=duration_ms,
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+    meeting = transitioned
+
+    # 응답은 바로 내려주고, 요약/결정사항/할 일 생성(LLM 호출 포함)은 백그라운드에서 처리.
+    background_tasks.add_task(
+        meeting_service.run_meeting_postprocess_and_notify,
+        meeting_id=str(meeting_id),
+        workspace_id=str(workspace_id),
+        category_id=str(meeting.category_id),
+    )
+
+    return MeetingResponse.model_validate(meeting)
+
+
+# 회의 목록 조회
+@router.get("", response_model=MeetingListResponse)
+def get_meeting_list(
+    workspace_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meetings = meeting_crud.list_meetings(db, workspace_id)
+    return MeetingListResponse(meetings=[MeetingResponse.model_validate(m) for m in meetings])
+
+# 최근 회의록 목록 — 대시보드용, 참석인원/모순개수/미리보기 포함
+@router.get("/recent", response_model=MeetingRecentListResponse)
+def get_recent_meetings_api(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=10, ge=1, le=50),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+
+    meetings = meeting_crud.list_recent_meetings(db, workspace_id, limit=limit)
+    total_count = meeting_crud.count_meetings(db, workspace_id)
+
+    items = []
+    for m in meetings:
+        summary = meeting_crud.get_meeting_summary(db, m.id)
+        attendees = meeting_crud.get_attendees(db, m.id)
+        items.append(MeetingRecentItem(
+            id=m.id,
+            title=m.title,
+            started_at=m.started_at,
+            duration_ms=m.duration_ms,
+            attendee_count=len(attendees),
+            preview=(summary.short_summary[:80] if summary and summary.short_summary else None),
+            contradiction_count=contradiction_crud.count_by_meeting(db, m.id),
+        ))
+
+    return MeetingRecentListResponse(meetings=items, total_count=total_count)
+
+# 회의록 검색 — 제목/주제/요약 텍스트 매칭 + 회의 내용 의미 검색 결합, 날짜 필터
+@router.get("/search", response_model=MeetingRecentListResponse)
+def search_meetings_api(
+    workspace_id: uuid.UUID,
+    q: str | None = Query(default=None),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+
+    matched: dict[uuid.UUID, "Meeting"] = {}
+
+    if q:
+        for m in meeting_crud.search_meetings_by_text(db, workspace_id, q):
+            matched[m.id] = m
+
+        try:
+            chunk_results = search_hybrid(
+                query_text=q, workspace_id=str(workspace_id),
+                collection_name=MEETING_COLLECTION,
+            )
+        except Exception as e:
+            print(f"[meeting_router] 회의 의미 검색 실패: {repr(e)}")
+            chunk_results = []
+
+        for r in chunk_results:
+            if r.get("score", 0.0) < 0.4:
+                continue
+            file_id = r.get("document_id")
+            if not file_id:
+                continue
+            meeting = meeting_crud.get_meeting_by_source_file_id(db, uuid.UUID(file_id))
+            if meeting and meeting.workspace_id == workspace_id and meeting.id not in matched:
+                matched[meeting.id] = meeting
+    else:
+        for m in meeting_crud.list_meetings_by_date_range(db, workspace_id, date_from, date_to):
+            matched[m.id] = m
+
+    results = list(matched.values())
+    if date_from:
+        results = [m for m in results if m.started_at and m.started_at >= date_from]
+    if date_to:
+        results = [m for m in results if m.started_at and m.started_at <= date_to]
+    results.sort(key=lambda m: m.started_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    items = []
+    for m in results:
+        summary = meeting_crud.get_meeting_summary(db, m.id)
+        attendees = meeting_crud.get_attendees(db, m.id)
+        items.append(MeetingRecentItem(
+            id=m.id,
+            title=m.title,
+            started_at=m.started_at,
+            duration_ms=m.duration_ms,
+            attendee_count=len(attendees),
+            preview=(summary.short_summary[:80] if summary and summary.short_summary else None),
+            contradiction_count=contradiction_crud.count_by_meeting(db, m.id),
+        ))
+
+    return MeetingRecentListResponse(meetings=items, total_count=len(items))
+
+# 회의 예약 — 실제 녹음은 아직 시작 안 함
+@router.post("/schedule", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
+def schedule_meeting_api(
+    workspace_id: uuid.UUID,
+    request: MeetingScheduleRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+
+    category = room_crud.get_default_category(db, workspace_id)
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
+
+    for user_id in request.attendee_ids:
+        if not workspace_crud.get_membership(db, workspace_id, user_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"워크스페이스 멤버가 아닌 사용자입니다: {user_id}",
+            )
+
+    scheduled_title = (request.title or "").strip()
+    title_is_auto = not scheduled_title
+    if title_is_auto:
+        scheduled_title = f"{request.scheduled_at.month}월 {request.scheduled_at.day}일 회의"
+
+    meeting = meeting_crud.create_meeting(
+        db,
+        workspace_id=workspace_id,
+        category_id=category.id,
+        title=scheduled_title,
+        title_is_auto=title_is_auto,
+        location=request.location,
+        topic=request.topic,
+        input_type="live_recording",
+        started_by=uuid.UUID(current_user_id),
+        status="scheduled",
+        scheduled_at=request.scheduled_at,
+    )
+
+    if request.attendee_ids:
+        meeting_crud.set_attendees(db, meeting.id, request.attendee_ids)
+
+    return MeetingResponse.model_validate(meeting)
+
+
+# 예정된 회의 목록
+@router.get("/upcoming", response_model=UpcomingMeetingListResponse)
+def get_upcoming_meetings_api(
+    workspace_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meetings = meeting_crud.list_upcoming_meetings(db, workspace_id)
+
+    items = []
+    for m in meetings:
+        attendee_rows = meeting_crud.get_attendees(db, m.id)
+        items.append(UpcomingMeetingItem(
+            id=m.id,
+            title=m.title,
+            topic=m.topic,
+            location=m.location,
+            scheduled_at=m.scheduled_at,
+            attendees=[
+                MeetingAttendeeResponse(user_id=a.user_id, display_name=u.display_name)
+                for a, u in attendee_rows
+            ],
+        ))
+    return UpcomingMeetingListResponse(meetings=items)
+
+# 예정된 회의를 실제 녹음으로 시작
+@router.post("/{meeting_id}/begin", response_model=MeetingStartResponse)
+def begin_scheduled_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.status != "scheduled":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="예정된 회의가 아닙니다.",
+        )
+
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="scheduled", to_status="recording",
+        started_at=datetime.now(timezone.utc),
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="예정된 회의가 아닙니다.",
+        )
+
+    ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
+    reminder_result = agenda_reminder.check_on_session_start(db, transitioned.category_id)
+
+    return MeetingStartResponse(
+        **MeetingResponse.model_validate(transitioned).model_dump(),
+        ws_ticket=ws_ticket,
+        agenda_reminder=reminder_result["popup"],
+    )
+
+# 회의 단건 조회
+@router.get("/{meeting_id}", response_model=MeetingResponse)
+def get_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+    return MeetingResponse.model_validate(meeting)
+
+# 회의 제목 변경
+@router.patch("/{meeting_id}", response_model=MeetingResponse)
+def update_meeting_title_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: MeetingTitleUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+    
+    updated = meeting_crud.update_meeting_info(
+        db, meeting_id,
+        title=request.title, location=request.location, topic=request.topic,
+        title_is_auto=False,
+    )
+    return MeetingResponse.model_validate(updated)
+
+
+# 회의 삭제
+@router.delete("/{meeting_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+    meeting_crud.delete_meeting(db, meeting_id)
+
+
+# 발화 세그먼트 목록 조회
+@router.get("/{meeting_id}/segments", response_model=MeetingSegmentListResponse)
+def get_meeting_segments_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    segments = meeting_crud.get_segments(db, meeting_id)
+    return MeetingSegmentListResponse(
+        segments=[MeetingSegmentResponse.model_validate(s) for s in segments]
+    )
+
+
+# 회의 요약 조회
+@router.get("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
+def get_meeting_summary_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    summary = meeting_crud.get_meeting_summary(db, meeting_id)
+    if not summary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의 요약을 찾을 수 없습니다.",
+        )
+    return MeetingSummaryResponse.model_validate(summary)
+
+# 회의록 내보내기용 데이터 일괄 조회 — 문서 조립은 프론트에서 처리
+@router.get("/{meeting_id}/export", response_model=MeetingExportResponse)
+def get_meeting_export_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    summary = meeting_crud.get_meeting_summary(db, meeting_id)
+    attendee_rows = meeting_crud.get_attendees(db, meeting_id)
+    segments = meeting_crud.get_segments(db, meeting_id)
+
+    return MeetingExportResponse(
+        meeting_id=meeting.id,
+        title=meeting.title,
+        location=meeting.location,
+        topic=meeting.topic,
+        started_at=meeting.started_at,
+        attendees=[
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            for attendee, user in attendee_rows
+        ],
+        short_summary=summary.short_summary if summary else None,
+        filtered_transcript=summary.filtered_transcript if summary else None,
+        segments=[MeetingSegmentResponse.model_validate(s) for s in segments],
+    )
+
+
+# 회의 결정사항 목록 조회
+@router.get("/{meeting_id}/decisions", response_model=DecisionListResponse)
+def get_meeting_decisions_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    decisions = meeting_crud.list_decisions_by_meeting(db, meeting_id)
+    return DecisionListResponse(
+        decisions=[DecisionResponse.model_validate(d) for d in decisions]
+    )
+
+# 실시간 녹음 일시정지
+@router.post("/{meeting_id}/pause", response_model=MeetingResponse)
+def pause_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.input_type != "live_recording":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="실시간 녹음 회의가 아닙니다.",
+        )
+
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="recording", to_status="paused",
+        paused_at=datetime.now(timezone.utc),
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+
+    meeting_ws_router.set_stream_paused(meeting_id, True)
+    return MeetingResponse.model_validate(transitioned)
+
+
+# 실시간 녹음 재개
+@router.post("/{meeting_id}/resume", response_model=MeetingResponse)
+def resume_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.input_type != "live_recording":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="실시간 녹음 회의가 아닙니다.",
+        )
+    if meeting.status != "paused" or meeting.paused_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="일시정지 상태가 아닙니다.",
+        )
+
+    additional_pause_ms = int(
+        (datetime.now(timezone.utc) - meeting.paused_at).total_seconds() * 1000
+    )
+
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="paused", to_status="recording",
+        paused_duration_ms=meeting.paused_duration_ms + additional_pause_ms,
+        paused_at=None,
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="일시정지 상태가 아닙니다.",
+        )
+
+    meeting_ws_router.set_stream_paused(meeting_id, False)
+    return MeetingResponse.model_validate(transitioned)
+
+# 화자 라벨(SPEAKER_00 등)을 실명으로 매핑 — 회의 진행 중/종료 후 언제든 호출 가능
+@router.patch("/{meeting_id}/speakers")
+def update_meeting_speakers_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: SpeakerLabelMappingRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    updated = meeting_crud.update_speaker_labels(db, meeting_id, request.mapping)
+    return {
+        "status": "success",
+        "meeting_id": str(meeting_id),
+        "speaker_labels": updated.speaker_labels,
+        "message": "화자 이름이 매핑되었습니다.",
+    }
+
+# 진행 중인 "각자 PC에서" 모드 회의에 참가 — 본인 몫의 ws_ticket 발급
+@router.post("/{meeting_id}/join", response_model=MeetingJoinResponse)
+def join_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if meeting.recording_mode != "individual":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'각자 PC에서' 모드 회의만 참가할 수 있습니다.",
+        )
+    if meeting.status != "recording":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="녹음 중인 회의가 아닙니다.",
+        )
+
+    ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
+    return MeetingJoinResponse(ws_ticket=ws_ticket)
+
+# 참석 인원 조회
+@router.get("/{meeting_id}/attendees", response_model=MeetingAttendeeListResponse)
+def get_meeting_attendees_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    rows = meeting_crud.get_attendees(db, meeting_id)
+    return MeetingAttendeeListResponse(
+        attendees=[
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            for attendee, user in rows
+        ]
+    )
+
+
+# 참석 인원 지정/수정 — 워크스페이스 멤버 중에서만 선택 가능
+@router.patch("/{meeting_id}/attendees", response_model=MeetingAttendeeListResponse)
+def update_meeting_attendees_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: AttendeeMappingRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    for user_id in request.user_ids:
+        if not workspace_crud.get_membership(db, workspace_id, user_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"워크스페이스 멤버가 아닌 사용자입니다: {user_id}",
+            )
+
+    rows = meeting_crud.set_attendees(db, meeting_id, request.user_ids)
+    return MeetingAttendeeListResponse(
+        attendees=[
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            for attendee, user in rows
+        ]
+    )
+
+# 워크스페이스 전체 결정사항 조회 (기본: status=active, 변경 이력 포함)
+@decisions_router.get("/decisions", response_model=DecisionWithHistoryListResponse)
+def get_workspace_decisions_api(
+    workspace_id: uuid.UUID,
+    status_filter: str | None = Query(default=None, alias="status"),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    decisions = meeting_crud.list_decisions_by_workspace(db, workspace_id, status=status_filter)
+
+    results = []
+    for d in decisions:
+        chain = meeting_crud.get_decision_history_chain(db, d.id)
+        history = [
+            DecisionHistoryEntry(value=c.decision_text, reason=c.reason, decided_at=c.decided_at, status=c.status)
+            for c in chain
+        ]
+        item = DecisionWithHistoryResponse.model_validate(d)
+        item.history = history
+        results.append(item)
+
+    return DecisionWithHistoryListResponse(decisions=results)
