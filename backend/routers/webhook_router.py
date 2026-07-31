@@ -66,10 +66,12 @@ def stt_refine_webhook(
             print(f"[webhook] 재분석 세그먼트 {len(refined_data.get('segments', []))}개 조회 완료")
         except Exception as e:
             print(f"[webhook] 재분석 결과 조회 실패: {repr(e)}")
-        # TODO: 시간(start/end) 기준으로 meeting_segments 매칭/교체,
-        # 후처리 트리거는 가동현 확인 후 반영
+        # [결정 - 가동현] 웹훅 도착까지 후처리를 기다리지 않는다 - 재분석 완료 시점이
+        # 예측 불가능해서 UX가 나빠지고, 후처리 재실행 시 decision/task 중복 생성
+        # 방지 가드를 우회해야 해서 범위가 커짐. 재분석 결과는 로그로만 남기고
+        # 자동 반영하지 않는다 (수동 트리거는 후속 작업, 지금 스코프 아님).
     else:
-        print(f"[webhook] 정밀 재분석 실패: meeting_id={meeting_id} - 실시간 결과로 진행")
-        # TODO: 실시간 세그먼트로 후처리 트리거 (아직 트리거 시점 결정 전)
+        print(f"[webhook] 정밀 재분석 실패: meeting_id={meeting_id} - 이미 실시간 결과로 처리 완료됨")
+        # [결정 - 가동현] 실시간 처리를 그대로 유지하므로 별도 폴백 트리거 불필요
 
     return
