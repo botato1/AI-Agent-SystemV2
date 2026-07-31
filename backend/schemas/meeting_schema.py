@@ -290,6 +290,22 @@ class MeetingResponse(TimestampSchema):
 class MeetingStartResponse(MeetingResponse):
     ws_ticket: str
 
+class AgendaReminderItem(BaseModel):
+    id: UUID
+    title: str
+    decision_text: str
+    reason: Optional[str] = None
+
+
+class AgendaReminderPopup(BaseModel):
+    type: str
+    message: str
+    items: list[AgendaReminderItem] = Field(default_factory=list)
+
+
+class MeetingStartResponse(MeetingResponse):
+    ws_ticket: str
+    agenda_reminder: AgendaReminderPopup
 
 class MeetingListResponse(BaseModel):
     meetings: list[MeetingResponse] = Field(default_factory=list)
