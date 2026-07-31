@@ -17,7 +17,7 @@ from .services.speaker_id_service import load_speaker_embedding_inference
 from .services.profile_store import GlobalProfileStore
 
 
-def _load_whisper_model(model_id: str, adapter_path: str | None = None):
+def _load_whisper_model(model_id: str, adapter_path: str | None = None, with_context: bool = True):
     """
     STT_ENGINE에 따라 엔진을 분기 로딩.
     - faster_whisper(ctranslate2): x86_64 GPU 서버 (기존 방식, 제일 빠름)
@@ -25,12 +25,19 @@ def _load_whisper_model(model_id: str, adapter_path: str | None = None):
     - qwen: Qwen3-ASR (Whisper 비계열). 팀 용어·속도 우위, 숫자 표기는 미해결.
     세 엔진 모두 동일한 .transcribe() 인터페이스를 제공하므로 호출부 코드는 그대로 재사용됨.
     adapter_path는 transformers 엔진에서만 의미 있음 (LoRA 검증용, 평소엔 None).
+
+    with_context=False면 용어 컨텍스트를 심지 않는다 — 잠정(partial) 전사용 모델이
+    여기 해당한다. 잠정은 1초마다 버퍼 전체를 다시 훑는 저지연 경로라 프롬프트 토큰만큼
+    부담을 얹으면 전사 큐가 포화된다. 실측: 용어 204개 0.85초 / 1000개 1.18초 /
+    3000개 2.15초 — 목록 길이가 곧 지연이다. 최종 텍스트는 확정 전사가 결정하므로
+    잠정에 용어 힌트를 줄 이득보다 지연 손해가 크다.
     """
     if STT_ENGINE == "qwen":
         from .services.qwen_engine import Qwen3ASREngine
         # 컨텍스트는 회의별 참석자 이름이 붙어야 완성되므로 여기서는 용어만 심고,
         # 이름은 전사 호출 시 initial_prompt로 덮어쓴다(build_qwen_context).
-        return Qwen3ASREngine(model_id, device=DEVICE, context=build_qwen_context())
+        context = build_qwen_context() if with_context else None
+        return Qwen3ASREngine(model_id, device=DEVICE, context=context)
 
     if STT_ENGINE == "transformers":
         from .services.whisper_engine import TransformersWhisperEngine
@@ -60,7 +67,8 @@ async def lifespan(app: FastAPI):
         logger.info("♻️  잠정 전사에 확정 모델 인스턴스 재사용 (동일 모델 — 지연 주의)")
     else:
         logger.info(f"🧠 STT 모델 로딩 중... 엔진={STT_ENGINE} / 모델={WHISPER_MODEL_FAST} / {DEVICE}")
-        app.state.stt_model_fast = _load_whisper_model(WHISPER_MODEL_FAST)
+        # 용어 컨텍스트는 심지 않는다 — 잠정 전사의 지연을 늘릴 뿐이다(위 docstring 참고).
+        app.state.stt_model_fast = _load_whisper_model(WHISPER_MODEL_FAST, with_context=False)
         logger.info("✅ STT (실시간/초안용) 모델 로딩 완료")
 
     logger.info("🧠 pyannote 화자 분리 파이프라인 로딩 중...")
