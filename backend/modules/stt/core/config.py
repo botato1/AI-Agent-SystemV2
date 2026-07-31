@@ -223,6 +223,18 @@ REALTIME_PARTIAL_SPEAKER_TAIL_SEC = 2.0
 # 끄면 청크당 화자 하나를 배정하던 이전 동작으로 돌아간다.
 REALTIME_SPEAKER_SPLIT_ENABLED = os.getenv("REALTIME_SPEAKER_SPLIT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 
+# 화자 전환을 찾을 때 발화 구간을 나누는 침묵 길이.
+#
+# ⚠️ REALTIME_SILENCE_MS(청크를 끊는 기준)보다 반드시 짧아야 한다. 같으면 기능이
+# 사실상 죽는다 — 간격이 그보다 길면 청크가 거기서 끊겨 화자당 청크 하나가 되니
+# 분할할 게 없고, 짧으면 VAD가 발화를 하나로 봐서 분할할 근거가 없다. 두 조건 사이
+# 좁은 창에서만 발동하는 셈이다(실시간 검증에서 0회 나온 원인).
+#
+# 짧게 잡을수록 빠른 주고받기까지 잡아내지만, 한 사람의 말 중간 호흡까지 구간으로
+# 쪼개 판정 횟수가 늘어난다. 쪼개져도 같은 화자로 판정되면 다시 하나로 병합되므로
+# 결과는 안전하고 비용만 조금 는다.
+REALTIME_SPEAKER_SPLIT_SILENCE_MS = int(os.getenv("REALTIME_SPEAKER_SPLIT_SILENCE_MS", "200"))
+
 # ──────────────────────────────────────────
 # 인식 힌트(initial_prompt) 설정
 # ──────────────────────────────────────────

@@ -19,6 +19,7 @@ from ..core.config import (
     REALTIME_PARTIAL_MIN_SEC,
     REALTIME_PARTIAL_SPEAKER_TAIL_SEC,
     REALTIME_SPEAKER_SPLIT_ENABLED,
+    REALTIME_SPEAKER_SPLIT_SILENCE_MS,
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
     REALTIME_FINAL_USES_FAST_MODEL,
@@ -245,8 +246,10 @@ class RealtimeSTTSession:
         턴 경계는 다음 턴의 첫 발화 시작점으로 잡는다. 구간 사이 침묵도 어느 한 턴에
         반드시 포함시켜야 오디오가 새지 않는다(전사 입력에서 빠지면 말이 잘린다).
         """
+        # 청크를 끊는 기준(REALTIME_SILENCE_MS)보다 짧은 침묵을 본다. 같은 값을 쓰면
+        # 간격이 그보다 길 때 청크가 이미 끊겨 있어 분할할 대상이 없다 — 기능이 죽는다.
         spans = get_speech_timestamps(
-            audio, VadOptions(min_silence_duration_ms=REALTIME_SILENCE_MS),
+            audio, VadOptions(min_silence_duration_ms=REALTIME_SPEAKER_SPLIT_SILENCE_MS),
             sampling_rate=REALTIME_SAMPLE_RATE,
         )
         if len(spans) < 2:
