@@ -82,12 +82,21 @@ async def notify_refine_done(
             logger.info(f"📬 [{meeting_id}] 재분석 완료 웹훅 전송 (status={status}, HTTP {code})")
             return
         except urllib.error.HTTPError as e:
-            # 4xx는 재시도해도 결과가 같다 — 시크릿이 틀렸거나 경로가 잘못된 것이라
-            # 사람이 고쳐야 한다. 조용히 3번 반복하면 원인을 못 찾는다.
+            # 4xx는 재시도해도 결과가 같다 — 사람이 고쳐야 하는 문제라 즉시 보고한다.
+            # 응답 본문을 반드시 남긴다: 상태 코드만으로는 원인을 못 좁힌다
+            # (401=시크릿, 404=경로, 400=페이로드 형식 — 대응이 전부 다르다).
             if 400 <= e.code < 500:
+                try:
+                    detail = e.read().decode("utf-8", "replace")[:500]
+                except Exception:
+                    detail = "(응답 본문을 읽지 못함)"
                 logger.error(
-                    f"❌ [{meeting_id}] 재분석 완료 웹훅 거부됨 (HTTP {e.code}) — "
-                    f"인증 헤더({REFINE_WEBHOOK_SECRET_HEADER})나 URL을 확인할 것. 재시도하지 않음."
+                    f"❌ [{meeting_id}] 재분석 완료 웹훅 거부됨 (HTTP {e.code}) — 재시도하지 않음.\n"
+                    f"   보낸 곳: {REFINE_WEBHOOK_URL}\n"
+                    f"   인증 헤더: {REFINE_WEBHOOK_SECRET_HEADER} "
+                    f"({'설정됨' if REFINE_WEBHOOK_SECRET else '미설정'})\n"
+                    f"   보낸 본문: {json.dumps(payload, ensure_ascii=False)}\n"
+                    f"   응답: {detail}"
                 )
                 return
             raise
