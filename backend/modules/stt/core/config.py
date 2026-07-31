@@ -357,6 +357,20 @@ MAX_SPEAKERS = 6  # 팀 인원(6명)에 맞춤
 SPEAKER_EMBEDDING_MODEL = "pyannote/wespeaker-voxceleb-resnet34-LM"
 SPEAKER_SIMILARITY_THRESHOLD = 0.5   # 이 이상 유사하면 같은 화자로 판단. 모델 교체 후 재튜닝 필요할 수 있음
 
+# 닫힌 집합에서 이 유사도 미만이면 이름을 붙이지 않고 화자 미상(None)으로 둔다.
+#
+# 왜 필요한가: 닫힌 집합은 매칭이 아무리 나빠도 "가장 가까운 사람"에게 무조건 배정한다.
+# 하한이 없으면 유사도 0.32짜리 판정에도 확신에 차서 이름이 붙는다.
+# 실측(5인 회의 구간별): 정상 매칭은 0.72인데 오배정 구간은 0.32~0.37이고
+# 1·2등 격차가 0.01~0.05로 사실상 구분이 안 되는 상태였다.
+# **틀린 이름보다 "미상"이 낫다** — 회의록에서 사람이 고칠 수 있고, 모순 감지가
+# 엉뚱한 사람의 발언으로 판단하는 것도 막는다.
+#
+# ⚠️ 이 값을 켜면 세그먼트의 speaker가 null일 수 있다. 프론트/소비자는 이름 없이
+#    텍스트만 표시하도록 처리해야 한다(잠정 자막은 이미 null을 허용한다).
+# 표본이 적어 잠정값이다 — 로그의 "화자 미상" 빈도를 보고 조정할 것.
+SPEAKER_MIN_ASSIGN_SIMILARITY = float(os.getenv("SPEAKER_MIN_ASSIGN_SIMILARITY", "0.4"))
+
 # 로거 설정
 logger = logging.getLogger("vigo_project")
 logger.setLevel(logging.INFO)

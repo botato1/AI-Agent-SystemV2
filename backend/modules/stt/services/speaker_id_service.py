@@ -10,6 +10,7 @@ from ..core.config import (
     REALTIME_SAMPLE_RATE,
     SPEAKER_EMBEDDING_MODEL,
     SPEAKER_SIMILARITY_THRESHOLD,
+    SPEAKER_MIN_ASSIGN_SIMILARITY,
     MAX_SPEAKERS,
 )
 
@@ -169,13 +170,27 @@ class LiveSpeakerIdentifier:
         if not update_profile:
             # 읽기 전용 — 닫힌 집합이면 최근접 등록자, 열린 집합이면 임계값을 넘을 때만.
             # 새 화자를 만들지 않으므로 잠정 자막에 유령 화자가 등장하지 않는다.
+            # 하한은 확정 경로와 동일하게 적용한다 — 잠정에서만 이름이 뜨다가 확정에서
+            # 사라지면 화면이 더 혼란스럽다.
+            if best_score < SPEAKER_MIN_ASSIGN_SIMILARITY:
+                return None
             if self._closed_set or best_score >= self.similarity_threshold:
                 return best_label
             return None
 
         if self._closed_set:
-            # 인원수를 미리 알고 있으므로 새 화자를 만들지 않고 무조건 가장 가까운 등록자에게 배정.
-            # 단, 프로필 갱신(이동 평균)은 유사도가 충분히 높을 때만 — 겹쳐 말한 구간 등이
+            # 매칭이 너무 나쁘면 이름을 붙이지 않는다. 닫힌 집합은 원래 "무조건 가장
+            # 가까운 사람"에게 배정하는데, 하한이 없으면 유사도 0.32짜리에도 확신에 차서
+            # 이름이 붙는다(실측: 정상 매칭 0.72 vs 오배정 구간 0.32~0.37).
+            # 틀린 이름보다 미상이 낫다 — 회의록에서 고칠 수 있고, 모순 감지가 엉뚱한
+            # 사람의 발언으로 판단하는 것도 막는다.
+            if best_score < SPEAKER_MIN_ASSIGN_SIMILARITY:
+                logger.info(
+                    f"🤷 화자 미상 — 최고 유사도 {best_score:.2f}가 하한"
+                    f"({SPEAKER_MIN_ASSIGN_SIMILARITY})에 못 미침 (최근접: {best_label})"
+                )
+                return None
+            # 프로필 갱신(이동 평균)은 유사도가 충분히 높을 때만 — 겹쳐 말한 구간 등이
             # 잘못 배정됐을 때 엉뚱한 사람의 목소리 지문을 조금씩 오염시키는 걸 방지
             if best_score >= self.similarity_threshold:
                 self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding

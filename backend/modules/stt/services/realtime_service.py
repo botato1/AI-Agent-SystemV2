@@ -31,6 +31,10 @@ from ..core.config import (
 # 이보다 짧으면 목소리 특성보다 발음 내용에 휘둘려 엉뚱한 화자로 튄다.
 _MIN_PARTIAL_SPEAKER_SAMPLES = REALTIME_SAMPLE_RATE
 
+# 화자 전환으로 청크를 나눌 때 각 턴의 최소 길이. 이보다 짧으면 앞 턴에 흡수한다.
+# 임베딩 하한(1초)보다 넉넉히 잡는다 — 딱 1초짜리 오디오로는 판정이 흔들린다.
+_MIN_SPLIT_TURN_SAMPLES = int(1.5 * REALTIME_SAMPLE_RATE)
+
 
 def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
     """두 단어 리스트에서 앞에서부터 일치하는 부분만 뽑음 (Local Agreement 핵심 로직)."""
@@ -283,7 +287,21 @@ class RealtimeSTTSession:
             turns.append((turn_start, spans[i]["start"], labels[i - 1]))
             turn_start = spans[i]["start"]
         turns.append((turn_start, len(audio), labels[-1]))
-        return turns
+
+        # 너무 짧은 턴은 앞 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
+        # 라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
+        # 때문에 긴 발화를 쪼개는 건 얻는 것보다 잃는 게 크다.
+        merged: list[tuple[int, int, str | None]] = []
+        for start, end, label in turns:
+            too_short = (end - start) < _MIN_SPLIT_TURN_SAMPLES
+            if too_short and merged:
+                prev_start, _, prev_label = merged[-1]
+                merged[-1] = (prev_start, end, prev_label)
+            elif too_short and not merged:
+                merged.append((start, end, label))   # 첫 턴은 흡수할 앞이 없다
+            else:
+                merged.append((start, end, label))
+        return merged
 
     async def _transcribe_with_speakers(self, audio, precise_task, final_model):
         """
