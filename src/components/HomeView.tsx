@@ -34,17 +34,16 @@ interface UpcomingFormData {
   title: string;
   topic: string;
   location: string;
-  date: string; // yyyy-mm-dd - 새 예약에만 사용, 수정 시엔 무시됨(백엔드가 일정 변경 미지원)
-  time: string; // hh:mm
+  date: string;
+  time: string;
   attendeeIds: string[];
 }
 
-// 녹음과 무관한 순수 메모형 일정 - 백엔드에 대응하는 개념이 없어서 이 브라우저에만 저장된다
 interface LocalEvent {
   id: string;
   title: string;
-  date: string; // yyyy-mm-dd
-  time: string; // hh:mm
+  date: string;
+  time: string;
 }
 
 type UpcomingKind = "meeting" | "memo";
@@ -135,7 +134,6 @@ function weatherLabel(code: number): string {
   return "-";
 }
 
-{/* 💡 시각 + 날씨 (현재 위치 자동 감지 및 지역명 표시) 위젯 */}
 function ClockAndWeatherWidget() {
   const [now, setNow] = useState(new Date());
   const [weather, setWeather] = useState<{ temp: number; code: number } | null>(null);
@@ -158,7 +156,6 @@ function ClockAndWeatherWidget() {
           fetchLocationAndWeather(lat, lon);
         },
         () => {
-          // 권한 거부 시 기본값 (대전/서울)
           fetchLocationAndWeather(36.3504, 127.3845, "대전");
         }
       );
@@ -167,7 +164,6 @@ function ClockAndWeatherWidget() {
     }
 
     async function fetchLocationAndWeather(lat: number, lon: number, defaultName?: string) {
-      // 1. 역지오코딩으로 지역명 가져오기 (open-meteo reverse geocoding API)
       try {
         if (defaultName) {
           setLocationName(defaultName);
@@ -190,7 +186,6 @@ function ClockAndWeatherWidget() {
         if (!cancelled) setLocationName("현재 위치");
       }
 
-      // 2. 날씨 정보 가져오기
       try {
         const weatherRes = await fetch(
           `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`
@@ -217,7 +212,6 @@ function ClockAndWeatherWidget() {
 
   return (
     <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm flex items-center justify-between">
-      {/* 시각 */}
       <div>
         <div className="flex items-baseline gap-1">
           <p className="text-3xl font-bold text-recall-text tracking-tight">{displayHours}:{minutes}</p>
@@ -225,7 +219,6 @@ function ClockAndWeatherWidget() {
         </div>
       </div>
 
-      {/* 날씨 및 지역명 */}
       <div className="text-right border-l border-recall-border/60 pl-4">
         {weather ? (
           <div>
@@ -233,7 +226,6 @@ function ClockAndWeatherWidget() {
               <p className="text-xl font-bold text-recall-text">{weather.temp}°</p>
               <span className="text-xs font-medium text-recall-textMuted">{weatherLabel(weather.code)}</span>
             </div>
-            {/* 💡 날씨 아래 작게 표시되는 지역명 */}
             <p className="text-[11px] text-recall-textMuted mt-0.5 font-medium">📍 {locationName}</p>
           </div>
         ) : (
@@ -244,9 +236,6 @@ function ClockAndWeatherWidget() {
   );
 }
 
-{/* 예정된 항목 팝업 모달 - "회의 예약"(실제 백엔드, 나중에 녹음으로 전환 가능)과
-    "일반 일정"(이 브라우저에만 남는 순수 메모) 두 타입을 토글로 고른다.
-    회의 예약 수정은 제목/주제/장소만 가능(백엔드가 일정/참석자 변경 API를 아직 지원하지 않음). */}
 function UpcomingModal({
   workspaceId,
   editingItem,
@@ -474,7 +463,6 @@ function UpcomingModal({
   );
 }
 
-{/* 내보낼 회의 선택 팝업 모달 */}
 function SelectExportMeetingModal({
   workspaceId,
   onClose,
@@ -550,7 +538,6 @@ export default function HomeView({
     { kind: "meeting"; data: UpcomingMeeting } | { kind: "memo"; data: LocalEvent } | null
   >(null);
 
-  // 모달 제어 상태
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showManageMembersModal, setShowManageMembersModal] = useState(false);
   const [showSelectExportModal, setShowSelectExportModal] = useState(false);
@@ -564,7 +551,6 @@ export default function HomeView({
   useEffect(() => {
     loadUpcoming();
     setLocalEvents(loadLocalEvents(workspaceId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
   if (!hasSeenOnboarding) {
@@ -651,7 +637,7 @@ export default function HomeView({
   const now = new Date();
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-recall-bgMain">
+    <div className="h-full w-full overflow-y-auto bg-recall-bgMain custom-scrollbar">
       {/* 상단 배너 */}
       <div className="relative border-b border-recall-border">
         <div className="relative h-28 overflow-hidden bg-[linear-gradient(180deg,#dbe9fd_0%,#bcd7fb_100%)] dark:bg-[linear-gradient(180deg,#132241_0%,#0d1a30_100%)] dark:opacity-80">
@@ -694,27 +680,40 @@ export default function HomeView({
       </div>
 
       <div className="w-full px-8 py-6">
-        {/* 회의 시작 이동 카카오 카드 */}
-        <div className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-recall-border bg-recall-bg p-5 shadow-sm">
-          <div>
-            <p className="text-base font-semibold text-recall-text">{t.home_start_card_greeting(userName)}</p>
+        {/* 🌟 15% 진함 정도의 딱 알맞고 은은한 그라데이션 배경 + 전진 배치된 버튼 */}
+        <div
+          onClick={() => onNavigate("voiceMeeting")}
+          className="group relative mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 rounded-2xl border border-recall-accent/20 bg-gradient-to-r from-recall-accent/15 via-recall-accent/5 to-transparent p-6 shadow-sm hover:border-recall-accent/50 transition-all cursor-pointer active:scale-[0.99]"
+        >
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold text-recall-text">
+              {t.home_start_card_greeting(userName)}
+            </h2>
+            <p className="text-xs sm:text-sm text-recall-textMuted mt-1.5 leading-relaxed">
+              실시간 음성 인식(STT) 및 AI 대화 요약과 함께 즉시 새로운 회의를 진행해보세요.
+            </p>
           </div>
+
           <button
-            onClick={() => onNavigate("voiceMeeting")}
-            className="flex flex-shrink-0 items-center gap-2 rounded-xl bg-recall-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 transition shadow-sm shadow-recall-accent/20"
+            onClick={(e) => {
+              e.stopPropagation();
+              onNavigate("voiceMeeting");
+            }}
+            className="flex items-center gap-2.5 rounded-xl bg-recall-accent px-6 py-3.5 text-sm sm:text-base font-bold text-white hover:opacity-95 transition shadow-md shadow-recall-accent/20 group-hover:translate-x-1 shrink-0"
           >
-            <MicIcon size={16} />
-            {t.home_start_meeting}
+            <MicIcon size={18} />
+            <span>{t.home_start_meeting || "지금 회의 시작하기"}</span>
+            <span>→</span>
           </button>
         </div>
 
-        {/* 💡 요청하신 3열 레이아웃 구조 (이미지와 동일) */}
+        {/* 3열 대시보드 레이아웃 */}
         <div className="grid grid-cols-12 gap-4">
           
-          {/* 1열 (왼쪽): 예정된 회의 (위) + 확인이 필요한 부분 (아래) */}
+          {/* 1열 (왼쪽): 예정된 회의 + 확인이 필요한 부분 */}
           <div className="col-span-3 space-y-4">
             
-            {/* 예정된 회의 (여백 축소 적용) */}
+            {/* 예정된 회의 */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between border-b border-recall-border/60 pb-2">
                 <p className="text-base font-bold text-recall-text">예정된 회의</p>
@@ -797,7 +796,7 @@ export default function HomeView({
               )}
             </div>
 
-            {/* 확인이 필요한 부분 (두 발언 비교 / 넘어가기 버튼 복원) */}
+            {/* 확인이 필요한 부분 */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between border-b border-recall-border/60 pb-2">
                 <p className="text-base font-bold text-recall-text">
@@ -827,7 +826,6 @@ export default function HomeView({
                         {c.reference_source_name || "회의록 내용"} · {formatShortDate(c.detected_at)}
                       </p>
 
-                      {/* 💡 두 발언 비교 / 넘어가기 버튼 */}
                       <div className="flex items-center gap-2 pt-1 border-t border-amber-500/10">
                         <button
                           onClick={() => onNavigate("voiceMeeting")}
@@ -850,7 +848,7 @@ export default function HomeView({
 
           </div>
 
-          {/* 2열 (중앙): 최근 회의록 (길게 확장) */}
+          {/* 2열 (중앙): 최근 회의록 */}
           <div className="col-span-5">
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm h-full flex flex-col justify-between">
               <div>
@@ -919,10 +917,8 @@ export default function HomeView({
           {/* 3열 (오른쪽): 현재시각+날씨 / 바로 가기 / 이번 주 요약 */}
           <div className="col-span-4 space-y-4">
             
-            {/* 시각 + 날씨 (현재 위치 자동 연동) */}
             <ClockAndWeatherWidget />
 
-            {/* 바로 가기 카드 */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm">
               <p className="mb-3 text-base font-bold text-recall-text">바로 가기</p>
               
@@ -964,7 +960,6 @@ export default function HomeView({
               </div>
             </div>
 
-            {/* 이번 주 요약 카드 (인식 정확도 제거 후 3개 타일) */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between border-b border-recall-border/60 pb-3">
                 <p className="text-base font-bold text-recall-text">이번 주</p>
@@ -974,7 +969,6 @@ export default function HomeView({
               </div>
 
               <div className="grid grid-cols-3 divide-x divide-recall-border/60 border border-recall-border/60 rounded-xl overflow-hidden bg-recall-bgSoft">
-                {/* 1. 회의 수 */}
                 <div className="p-3.5 flex flex-col justify-between text-center">
                   <p className="text-2xl font-bold text-recall-text">
                     {dashboardSummary?.week_meeting_count ?? 0}
@@ -982,7 +976,6 @@ export default function HomeView({
                   <p className="text-xs text-recall-textMuted font-medium mt-2">회의</p>
                 </div>
 
-                {/* 2. 기록된 시간 */}
                 <div className="p-3.5 flex flex-col justify-between text-center">
                   <p className="text-2xl font-bold text-recall-text">
                     {formatMsToHoursMinutes(dashboardSummary?.week_duration_ms ?? 0)}
@@ -990,7 +983,6 @@ export default function HomeView({
                   <p className="text-xs text-recall-textMuted font-medium mt-2">기록된 시간</p>
                 </div>
 
-                {/* 3. 짚어낸 모순 */}
                 <div className="p-3.5 flex flex-col justify-between text-center">
                   <p className="text-2xl font-bold text-recall-danger">
                     {dashboardSummary?.week_contradiction_count ?? 0}
@@ -1004,7 +996,6 @@ export default function HomeView({
         </div>
       </div>
 
-      {/* 예정된 회의 일정 팝업 모달 */}
       {showUpcomingModal && (
         <UpcomingModal
           workspaceId={workspaceId}
@@ -1017,7 +1008,6 @@ export default function HomeView({
         />
       )}
 
-      {/* 회의록 검색 팝업 모달 */}
       {showSearchModal && (
         <MeetingSearchModal
           workspaceId={workspaceId}
@@ -1026,7 +1016,6 @@ export default function HomeView({
         />
       )}
 
-      {/* 팀원 관리 팝업 모달 */}
       {showManageMembersModal && (
         <ManageMembersModal
           workspaceId={workspaceId}
@@ -1036,7 +1025,6 @@ export default function HomeView({
         />
       )}
 
-      {/* 내보낼 회의 선택 팝업 모달 */}
       {showSelectExportModal && (
         <SelectExportMeetingModal
           workspaceId={workspaceId}
@@ -1048,7 +1036,6 @@ export default function HomeView({
         />
       )}
 
-      {/* 최종 회의록 내보내기 팝업 모달 */}
       {selectedExportMeetingId && (
         <MeetingExportModal
           workspaceId={workspaceId}
