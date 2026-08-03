@@ -19,14 +19,20 @@ class Meeting(Base):
     related_room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
     source_file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
     title = Column(String(200), nullable=False)
+    title_is_auto = Column(Boolean, nullable=False, server_default="false")
+    location = Column(String(200), nullable=True)
+    topic = Column(String(200), nullable=True)
+    recording_mode = Column(String(20), nullable=False, server_default="single_device")
     input_type = Column(String(30), nullable=False)
     status = Column(String(20), nullable=False, server_default="created")
     started_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     duration_ms = Column(BigInteger, nullable=True)
     paused_at = Column(DateTime(timezone=True), nullable=True)
     paused_duration_ms = Column(BigInteger, nullable=False, server_default="0")
+    speaker_labels = Column(JSONB, nullable=True)  # {"SPEAKER_00": "지수", ...} 화자 라벨→실명 매핑
     created_at = created_at_col()
     updated_at = updated_at_col()
     deleted_at = Column(DateTime(timezone=True), nullable=True)
@@ -37,8 +43,12 @@ class Meeting(Base):
             name="chk_meetings_input_type",
         ),
         CheckConstraint(
-            "status IN ('created','recording','paused','processing','completed','failed','cancelled')",
+            "status IN ('scheduled','created','recording','paused','processing','completed','failed','cancelled')",
             name="chk_meetings_status",
+        ),
+        CheckConstraint(
+            "recording_mode IN ('single_device','individual')",
+            name="chk_meetings_recording_mode",
         ),
         Index(
             "idx_meetings_workspace", "workspace_id", "started_at",
@@ -85,6 +95,7 @@ class MeetingSummary(Base):
     short_summary = Column(Text, nullable=True)
     discussion_points = Column(JSONB, nullable=True)
     full_transcript = Column(Text, nullable=True)
+    filtered_transcript = Column(Text, nullable=True)  # 잡담 제외한 전체 내용 (가동현 프롬프트 작업 전까지 NULL)
     generation_status = Column(String(20), nullable=False, server_default="pending")
     generation_error = Column(Text, nullable=True)
     model_name = Column(String(100), nullable=True)
@@ -121,7 +132,9 @@ class Decision(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        CheckConstraint("status IN ('active','superseded','cancelled')", name="chk_decisions_status"),
+        CheckConstraint(
+            "status IN ('active','superseded','cancelled','pending')", name="chk_decisions_status"
+        ),
         Index(
             "idx_decisions_meeting", "meeting_id", "decided_at",
             postgresql_where=text("deleted_at IS NULL"),
@@ -168,4 +181,17 @@ class Task(Base):
             "idx_tasks_category", "category_id", "status", "due_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+    )
+
+class MeetingAttendee(Base):
+    __tablename__ = "meeting_attendees"
+
+    id = uuid_pk()
+    meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    added_at = created_at_col()
+
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "user_id", name="uq_meeting_attendees"),
+        Index("idx_meeting_attendees_meeting", "meeting_id"),
     )

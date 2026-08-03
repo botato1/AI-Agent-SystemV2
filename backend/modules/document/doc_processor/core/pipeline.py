@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import re
 import time
+import uuid
 
 import fitz
 import pdfplumber
@@ -17,6 +19,7 @@ from doc_processor.core.models import (
     PageContent,
     PageResult,
     TableBlock,
+    compute_doc_id,
 )
 from doc_processor.core.pdf_classifier import classify_pdf
 from doc_processor.confidence.engine import ConfidenceEngine
@@ -35,12 +38,14 @@ from doc_processor.parsers.image_parser import (
     render_page,
 )
 from doc_processor.ocr.table_ocr import get_or_create_tsr, run_table_ocr
-from doc_processor.ocr.vl_engine import VLEngine as QwenVLEngine
-from doc_processor.ocr.paddle_vl_1_6_engine import PaddleVL16Engine
+from doc_processor.ocr.vl_engine import VLEngine as QwenVLEngine, unload as _unload_qwen_vl
+from doc_processor.ocr.paddle_vl_1_6_engine import PaddleVL16Engine, unload as _unload_paddle_vl
 from doc_processor.postprocess.vl_parser import parse as vl_parse
 from doc_processor.parsers.table_parser import extract_tables
 from doc_processor.parsers.text_parser import extract_text_blocks
 from doc_processor.ocr.image_preprocessor import preprocess_for_ocr
+
+_FIGURE_STORAGE_DIR = Path(__file__).parent.parent.parent / "storage" / "uploads" / "documents" / "figures"
 
 
 class DocumentPipeline:
@@ -116,10 +121,6 @@ class DocumentPipeline:
         if self._paddle is None:
             print("[Pipeline] Loading PaddleOCR...")
             self._paddle = PaddleEngine()
-        # surya 비활성화 (surya-ocr 0.20.0 Docker 의존성 문제)
-        # if self._surya is None:
-        #     print("[Pipeline] Loading Surya OCR...")
-        #     self._surya = SuryaEngine()
 
     def run(self, pdf_path: str) -> DocumentResult:
         path = Path(pdf_path)
@@ -158,6 +159,7 @@ class DocumentPipeline:
         self._ocr_stats = OcrStats()
         self._worst_ocr = []                    # worst-20 리스트 초기화
         _pipeline_start = time.perf_counter()   # 전체 처리 시간 측정 시작
+        self._current_doc_id = compute_doc_id(str(path))   # figure 이미지 저장 경로용 doc_id (assembler.py와 동일 공식)
 
         doc = DocumentResult(source=str(path), pdf_type=pdf_type)
 
@@ -236,7 +238,10 @@ class DocumentPipeline:
 
         # 4. 보충 OCR: YOLO/PyMuPDF 처리 후에도 내용이 거의 없으면
         #    전체 페이지 OCR로 누락된 이미지 영역을 보충한다.
-        has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 2
+        #    단, VL 큐에 이 페이지의 표/차트 처리가 대기 중이면 스킵한다
+        #    (아직 처리 안 된 것을 "내용 없음"으로 착각해 전체 페이지를
+        #    중복으로 재-OCR하는 버그 수정 — 2026-07-16)
+        has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 0
         has_ocr_text  = bool(content.images)
         has_tables    = bool(content.tables)
         has_pending_vl = any(task["page_no"] == page_no for task in self._vl_queue)
@@ -308,6 +313,44 @@ class DocumentPipeline:
             if overlap / fig_area >= threshold:
                 return True
         return False
+
+    @staticmethod
+    def _trim_bbox_excluding(
+        container: tuple[float, float, float, float],
+        exclude: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        """container bbox에서 exclude bbox와 겹치는 가장자리를 잘라낸 bbox를 반환합니다.
+
+        완전한 다각형 차집합 대신, exclude가 container의 위/아래/좌/우 중
+        한쪽 가장자리에 거의 붙어서 겹치는(표가 chart 박스 아래쪽을 침범하는 등)
+        실무에서 흔한 케이스만 처리합니다. 애매하게 겹치면(가운데를 관통하는 등)
+        원래 bbox를 그대로 반환합니다 — 호출부에서 이 경우 안전하게 통째로 스킵합니다.
+        """
+        cx0, cy0, cx1, cy1 = container
+        ex0, ey0, ex1, ey1 = exclude
+
+        ix0, iy0 = max(cx0, ex0), max(cy0, ey0)
+        ix1, iy1 = min(cx1, ex1), min(cy1, ey1)
+        if ix1 <= ix0 or iy1 <= iy0:
+            return container  # 안 겹침
+
+        overlap_w = ix1 - ix0
+        overlap_h = iy1 - iy0
+        c_w, c_h = cx1 - cx0, cy1 - cy0
+
+        # 가로로 컨테이너 폭 대부분을 덮으면 위/아래 가장자리 트리밍 후보
+        if overlap_w >= c_w * 0.8:
+            if ey1 >= cy1 - 1:      # exclude가 컨테이너 아래쪽에 붙음
+                return (cx0, cy0, cx1, min(cy1, ey0))
+            if ey0 <= cy0 + 1:      # exclude가 컨테이너 위쪽에 붙음
+                return (cx0, max(cy0, ey1), cx1, cy1)
+        # 세로로 컨테이너 높이 대부분을 덮으면 좌/우 가장자리 트리밍 후보
+        if overlap_h >= c_h * 0.8:
+            if ex1 >= cx1 - 1:      # exclude가 컨테이너 오른쪽에 붙음
+                return (cx0, cy0, min(cx1, ex0), cy1)
+            if ex0 <= cx0 + 1:      # exclude가 컨테이너 왼쪽에 붙음
+                return (max(cx0, ex1), cy0, cx1, cy1)
+        return container  # 애매한 겹침 — 트리밍 불가
 
     # ── YOLO style 적용 ──────────────────────────────────────────────────────
 
@@ -441,18 +484,59 @@ class DocumentPipeline:
         # 만들므로 버린다. 개별 후보를 2개 이상 포함할 때만 컨테이너로 판정
         # (1개 포함은 부분/전체 크롭 관계일 수 있어 유지).
         # diagram 큰 박스는 위 2단계의 "큰 쪽 유지" 규칙 대상이므로 제외.
+        #
+        # 단, table_image와 겹치는 경우는 예외 — chart와 table은 서로 다른
+        # 객체라 "부분/전체 크롭"일 수가 없다. 그렇다고 통째로 버리면 표와
+        # 겹치지 않는 나머지 영역(진짜 차트 콘텐츠)까지 같이 유실되므로,
+        # 표와 겹치는 가장자리만 잘라내고 나머지는 살려서 OCR한다.
+        # 트리밍이 애매해서 실패하면(가운데를 관통하는 등) 안전하게 통째로
+        # 버린다 (2026-07-31).
+        # 표가 chart 박스 아래로 살짝 삐져나오는 경우가 흔해 90% 완전 포함
+        # 기준(_is_contained 기본값)으로는 못 잡으므로 50%로 완화해서 체크한다.
         for big in candidates:
             if id(big) in dropped_ids or big["fig_type"] != "chart":
                 continue
-            contained = sum(
-                1 for other in candidates
+            others_inside = [
+                other for other in candidates
                 if other is not big
                 and id(other) not in dropped_ids
                 and self._is_contained(other["bbox"], [big["bbox"]])
-            )
-            if contained >= 2:
+            ]
+            overlapping_tables = [
+                other for other in candidates
+                if other is not big
+                and id(other) not in dropped_ids
+                and other["fig_type"] == "table_image"
+                and self._is_contained(other["bbox"], [big["bbox"]], threshold=0.5)
+            ]
+            if overlapping_tables:
+                trimmed_bbox = big["bbox"]
+                for tbl in overlapping_tables:
+                    trimmed_bbox = self._trim_bbox_excluding(trimmed_bbox, tbl["bbox"])
+                if trimmed_bbox == big["bbox"]:
+                    print(
+                        f"  [SKIP] 표 영역을 포함하는 chart 컨테이너 → 트리밍 불가, 통째로 스킵 "
+                        f"(bbox={big['bbox']})"
+                    )
+                    dropped_ids.add(id(big))
+                    continue
+                recropped = crop_layout_rect(page_image, trimmed_bbox, dpi=self.dpi)
+                if not is_valid_crop(recropped):
+                    print(
+                        f"  [SKIP] chart에서 표 겹침 영역 제외 후 크롭이 너무 작음 → 스킵 "
+                        f"(원래={big['bbox']} → 조정={trimmed_bbox})"
+                    )
+                    dropped_ids.add(id(big))
+                    continue
                 print(
-                    f"  [SKIP] 개별 figure {contained}개를 감싸는 컨테이너 chart → 스킵 "
+                    f"  [TRIM] chart bbox에서 표와 겹치는 영역 제외 "
+                    f"(원래={big['bbox']} → 조정={trimmed_bbox})"
+                )
+                big["bbox"] = trimmed_bbox
+                big["cropped"] = recropped
+            elif len(others_inside) >= 2:
+                print(
+                    f"  [SKIP] 개별 figure {len(others_inside)}개를 감싸는 컨테이너 chart → 스킵 "
                     f"(bbox={big['bbox']})"
                 )
                 dropped_ids.add(id(big))
@@ -485,7 +569,7 @@ class DocumentPipeline:
 
             self._ocr_stats.attempt_count += 1
             self._ocr_stats.success_count += 1
-            self._append_ocr_result(content, ocr_result, list(nb), page_no)
+            self._append_ocr_result(content, ocr_result, list(nb), page_no, cropped_image=cropped)
 
     # ── OCR 경로 B: PyMuPDF 이미지 블록 기반 (Docling 없을 때 폴백) ──────────
 
@@ -534,13 +618,22 @@ class DocumentPipeline:
 
                 self._ocr_stats.attempt_count += 1
                 self._ocr_stats.success_count += 1
-                self._append_ocr_result(content, ocr_result, list(nb), page_no)
+                self._append_ocr_result(content, ocr_result, list(nb), page_no, cropped_image=cropped)
 
         elif not content.text and not content.tables:
             print("  → 텍스트/표 없음, 페이지 전체 OCR")
             self._ocr_full_page(fitz_page, content, page_no=page_no)
         else:
             print("  → 이미지 없음, OCR 스킵")
+
+    def _save_figure_image(self, image, page_no: int) -> str:
+        """크롭된 figure 이미지를 파일로 저장하고, 응답에 실을 상대경로를 반환합니다."""
+        doc_id = self._current_doc_id
+        dir_path = _FIGURE_STORAGE_DIR / doc_id
+        dir_path.mkdir(parents=True, exist_ok=True)
+        filename = f"page{page_no}_{uuid.uuid4().hex[:8]}.png"
+        image.save(dir_path / filename)
+        return f"documents/figures/{doc_id}/{filename}"
 
     # ── 페이지 전체 OCR (스캔 페이지용) ──────────────────────────────────────
 
@@ -552,7 +645,7 @@ class DocumentPipeline:
             return
         self._ocr_stats.success_count += 1   # full_page 성공 집계
         w, h = page_image.size
-        self._append_ocr_result(content, ocr_result, [0.0, 0.0, float(w), float(h)], page_no)
+        self._append_ocr_result(content, ocr_result, [0.0, 0.0, float(w), float(h)], page_no, cropped_image=page_image)
 
     # ── VL 일괄 처리 ─────────────────────────────────────────────────────────
 
@@ -597,7 +690,7 @@ class DocumentPipeline:
                 }
                 self._ocr_stats.success_count += 1
                 self._append_ocr_result(
-                    task["content"], result, task["bbox"], task["page_no"]
+                    task["content"], result, task["bbox"], task["page_no"], cropped_image=task["image"]
                 )
 
         # ── Pass 1: PaddleOCR-VL-1.6 (표) ─────────────────────────────────
@@ -606,6 +699,7 @@ class DocumentPipeline:
             paddle_engine = PaddleVL16Engine()
             _process_tasks(paddle_engine, table_tasks, "paddle-vl-1.6")
             del paddle_engine
+            _unload_paddle_vl()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print("[VL] Paddle-VL 언로드 완료")
@@ -620,6 +714,7 @@ class DocumentPipeline:
             _process_tasks(qwen_engine, chart_tasks, "qwen3-vl")
             _process_tasks(qwen_engine, diagram_tasks, "qwen3-vl-diagram")
             del qwen_engine
+            _unload_qwen_vl()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print("[VL] Qwen3-VL 언로드 완료")
@@ -672,9 +767,14 @@ class DocumentPipeline:
         ocr_result: dict,
         bbox: list[float],
         page_no: int,
+        cropped_image=None,
     ) -> None:
         """OCR 결과를 fig_type에 따라 content.images / tables / charts에 추가합니다."""
         vl_fig_type = ocr_result.get("vl_fig_type")
+
+        image_path = ""
+        if cropped_image is not None:
+            image_path = self._save_figure_image(cropped_image, page_no)
 
         if vl_fig_type == "diagram":
             parsed = vl_parse(ocr_result["text"], vl_fig_type, page_no)
@@ -687,6 +787,7 @@ class DocumentPipeline:
                 surya_lines=ocr_result.get("surya_lines", []),
                 quality_score=ocr_result["quality_score"],
                 image_type="diagram",
+                image_path=image_path,
             ))
         elif vl_fig_type in ("table_image", "chart"):
             parsed = vl_parse(ocr_result["text"], vl_fig_type, page_no)
@@ -695,6 +796,7 @@ class DocumentPipeline:
                     data=[],
                     markdown=parsed["markdown"],
                     bbox=bbox,
+                    image_path=image_path,
                 ))
             else:
                 vl_title = parsed.get("title", "")
@@ -708,6 +810,7 @@ class DocumentPipeline:
                         "data":  parsed.get("data", []),
                         "raw_text": parsed["raw_text"],
                     },
+                    image_path=image_path,
                 ))
         else:
             content.images.append(ImageBlock(
@@ -719,6 +822,7 @@ class DocumentPipeline:
                 surya_lines=ocr_result.get("surya_lines", []),
                 quality_score=ocr_result["quality_score"],
                 debug=ocr_result.get("debug"),
+                image_path=image_path,
             ))
 
     # ── OCR 실행 공통 로직 ────────────────────────────────────────────────────

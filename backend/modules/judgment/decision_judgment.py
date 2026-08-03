@@ -1,99 +1,190 @@
 """실시간 판단 파이프라인 1-1: 결정 비교 판단 (통합)
 
-모순 감지 / 결정 리마인더 / 반복 논의 알림, 이 세 기능은 별개가 아니라 하나의
-판단 파이프라인이 결과에 따라 갈라진 것이다 (설계 문서 1-1 참조).
+결정 리마인더 / 근거 명확한 변경 / 근거 불명확한 변경, 이 세 기능은 별개가 아니라
+하나의 판단 파이프라인이 결과에 따라 갈라진 것이다 (설계 문서 1-1 참조).
 
-핵심 원칙 — "이미 결정된 걸 다르게 말하는 것 = 모순":
+핵심 원칙 — "이미 결정된 걸 다르게 말하는 것 = 변경 후보":
 발화가 새로운 값/입장을 제시하는가(→ 값 비교로), 아니면 주제만 재언급하는가
 (→ 리마인더)를 먼저 가른다. 재확인이 "글자 그대로 같을 때만"으로 좁아지는 걸
 피하기 위함.
 
-2단계 판단:
+3단계 판단 (전부 Model1 단일 파인튜닝 모델을 배치별 instruction으로 순차 호출):
   1단계) 새 값 제시 여부   → 아니오: Case 0(리마인더)
-  2단계) 값이 같은가/사유가 명확한가 → Case 1(무시)/Case 2(조용히 흘림)/
-                                         Case 3(모순)/Case 4(보류·반복카운트)
+  2단계) 값이 기존과 같은가 → 예: Case 1(무시)
+  3단계) 근거가 명확한가   → 예: Case 2(명확한 근거의 변경) / 아니오: Case 3(명확한 근거 없이 변경)
+
+[수정 - 2026.07.27] confidence/Model2 이원화 및 Case 4(보류·반복카운트) 제거.
+Case 4는 세션 카운트 기반으로 재설계해서 별도로 다시 넣을 예정 - 지금은 없음.
+
+[수정] 카테고리 내 active decision 전체를 topic_match로 판단하던 것(벡터 검색
+완전 제거)을 되돌림 - decision이 쌓일수록 발화 1개당 LLM 호출이 선형으로 늘어나
+느려지는 문제가 있었음. 벡터 검색을 "필터"가 아니라 "후보 축소"로만 앞단에 둔다
+(임계값을 낮게 잡아 진짜 매칭이 후보 밖으로 밀리는 걸 방지, 최종 판단은 여전히
+topic_match가 함).
+
+[수정] Case 2/3는 "모순"이 아니라 "결정 변경"으로 명명한다 - 문서 내용과의
+충돌(document_judgment)과는 성격이 달라, 근거 명확성 기준으로
+reasoned_change/unreasoned_change로 구분한다. 팝업은 세션 내 (decision, case)
+단위로 1회만 뜨지만, contradictions row는 매번 생성되어 post-meeting이 세션 내
+최신 행을 그대로 사용자 확인 대상으로 재사용할 수 있게 한다 (전체 회의를 다시
+읽고 재판단하지 않음 - decision_transition.py 참조).
 """
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from backend.db.crud import contradiction_crud, history_crud
-from backend.db.modules import Decision
-from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, OLLAMA_MODEL_LIGHT, _call_ollama
+from backend.db.modules import Decision, Meeting
+from backend.modules.llm.ollama_client import _call_ollama
 from backend.modules.rag import chroma_client
 
-DECISION_MATCH_THRESHOLD = 0.75  # TBD - 실험 후 조정 (post_meeting.decision_transition과 동일 값 사용)
-CONTRADICTION_POPUP_THRESHOLD = 0.6  # TBD - confidence 이 값 이상이어야 모순 팝업
+# [수정 - 2026.07.27] confidence/Model2 이원화 제거. 판단은 배치1~4 통합
+# 파인튜닝 모델(re-call-model1-unified-v2) 하나로, 단계별 개별 호출.
+# ollama_client.OLLAMA_MODEL_LIGHT를 그대로 안 쓰는 이유: 그건 의도분류/일반답변
+# 등 다른 기능도 같이 쓰는 공용 상수라, 판단 전용 모델을 거기 넣으면 다른 기능까지
+# 좁은 판단용 모델로 넘어가게 됨 - 판단 파이프라인 전용 상수를 따로 둔다.
+JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v2")
 
-JUDGMENT_PROMPT_TEMPLATE = """아래는 회의/채팅에서 방금 나온 발화와, 그것과 관련된 과거 결정이다.
-이 둘의 관계를 분석해서 JSON으로만 답하라. 다른 설명은 하지 마라.
+# [수정] 벡터 검색을 후보 축소용으로 재도입. top_k는 넉넉하게, threshold는 낮게
+# 잡아서 "필터"가 아니라 "후보 목록 좁히기"로만 동작하게 한다 (TBD - 실측 후 조정).
+DECISION_CANDIDATE_TOP_K = int(os.getenv("DECISION_CANDIDATE_TOP_K", "15"))
+DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.3"))
 
-[과거 결정]
+# [수정 - 리뷰 반영] 벡터 후보(top-15)를 전부 topic_match로 순회하면 무관한 발화 하나당
+# 최악의 경우 LLM 호출이 15번까지 순차로 늘어나 체감 지연이 커짐. 후보는 이미 벡터
+# 점수 순 정렬이므로, 상위 몇 개까지만 topic_match로 확인하고 그 안에서 못 찾으면
+# "none"으로 처리한다 (TBD - 실측 후 조정).
+TOPIC_MATCH_MAX_ATTEMPTS = int(os.getenv("TOPIC_MATCH_MAX_ATTEMPTS", "5"))
+
+# 배치1~3 학습 때 쓴 instruction 그대로 - 문구가 조금이라도 다르면 정확도가 크게 떨어짐
+JUDGMENT_STEP_INSTRUCTIONS = {
+    "presents_new_value": (
+        "아래는 회의/채팅에서 방금 나온 발화이다. 이 발화가 새로운 값/입장을 제시하는지, "
+        "아니면 단순히 과거 결정을 재언급/질문하는 것인지만 판단해서 JSON으로만 답하라."
+    ),
+    "same_as_existing": (
+        "아래는 회의/채팅에서 방금 나온 발화이다. 이 발화는 이미 새로운 값/입장을 제시하고 있다. "
+        "그 값이 기존 결정과 실질적으로 같은 내용인지 다른 내용인지만 판단해서 JSON으로만 답하라."
+    ),
+    "reason_is_clear": (
+        "아래는 회의/채팅에서 방금 나온 발화이다. 이 발화는 이미 기존 결정과 다른 새 값을 제시하고 있다. "
+        "왜 바뀌는지 근거/이유가 발화 안에 명확하게 드러나 있는지만 판단해서 JSON으로만 답하라."
+    ),
+}
+
+JUDGMENT_INPUT_TEMPLATE = """[과거 결정]
 {decision_text}
 (결정 이유: {decision_reason})
 
 [방금 발화]
-{statement}
+{statement}"""
 
-[판단 기준]
-1. presents_new_value: 발화가 이 주제에 대해 구체적인 새 값/입장을 제시하는가?
-   (단순히 "그거 어떻게 하기로 했죠?" 같은 질문/재언급이면 false)
-2. presents_new_value가 true일 때만 아래도 채운다:
-   - same_as_existing: 발화의 값이 기존 결정과 실질적으로 같은 내용인가?
-   - reason_is_clear: (same_as_existing이 false일 때) 왜 바뀌는지 근거가 발화에 명확히 있는가?
-   - confidence: 0.0~1.0, 이 판단에 대한 확신도
+# 배치4(topic_match) 학습 때 쓴 instruction/입력 라벨 그대로 - 문구가 조금이라도
+# 다르면 정확도가 크게 떨어짐 (dataset_topic_match_v2.jsonl 참조)
+TOPIC_MATCH_INSTRUCTION = (
+    "아래는 과거 의사결정과 새 발화이다.\n\n목표:\n새 발화가 과거 의사결정을 수정·대체·조정하려는 내용인지 판단하라.\n\n"
+    "같은 주제(true)인 경우\n"
+    "- 동일 항목을 다른 기술/서비스/제품으로 교체\n"
+    "- 동일 항목의 설정값(수치, 기간, 비율, 개수 등) 변경\n"
+    "- 동일 기능을 수행하는 대안 기술 제안\n"
+    "- 동일 의사결정의 구현 방식 변경\n\n"
+    "다른 주제(false)인 경우\n"
+    "- 같은 프로젝트라도 다른 컴포넌트에 대한 이야기\n"
+    "- 기존 결정과 독립적인 신규 기능 또는 신규 컴포넌트 제안\n"
+    "- 기존 결정과 직접적인 수정 관계가 없는 논의\n\n"
+    "판단 기준은 \"같은 기술 분야\"가 아니라\n\"동일한 의사결정을 수정하려는가\"이다."
+)
 
-[출력 JSON]
-{{
-  "presents_new_value": true/false,
-  "same_as_existing": true/false,
-  "reason_is_clear": true/false,
-  "confidence": 0.0
-}}
-"""
+TOPIC_MATCH_INPUT_TEMPLATE = """[과거 의사결정]
+{decision_text}
+(결정 이유: {decision_reason})
+
+[새 발화]
+{statement}"""
 
 
-def _parse_judgment(raw: str) -> dict:
-    fallback = {
-        "presents_new_value": False, "same_as_existing": True,
-        "reason_is_clear": True, "confidence": 0.0,
-    }
+def _ask_judgment_step(key: str, decision_text: str, decision_reason: str, statement: str) -> bool:
+    """JUDGMENT_MODEL에게 단계 하나(key)만 물어서 bool로 반환. 실패 시 False."""
+    input_text = JUDGMENT_INPUT_TEMPLATE.format(
+        decision_text=decision_text, decision_reason=decision_reason, statement=statement,
+    )
+    prompt = (
+        f"{JUDGMENT_STEP_INSTRUCTIONS[key]}\n\n{input_text}\n\n"
+        f'반드시 다음 JSON 형식으로만 답하라 (다른 설명 금지):\n{{\n  "{key}": true/false\n}}'
+    )
+    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
     try:
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
-            return fallback
+            return False
         parsed = json.loads(raw[start : end + 1])
-        for k, v in fallback.items():
-            parsed.setdefault(k, v)
-        return parsed
+        return bool(parsed.get(key, False))
     except (json.JSONDecodeError, ValueError):
-        return fallback
+        return False
 
 
-def _find_matching_decision(
-    workspace_id: uuid.UUID, category_id: uuid.UUID, statement: str
-) -> tuple[uuid.UUID, float] | None:
-    """
-    DECISION_COLLECTION에서 top-1만 채택 (규칙 A - 한 발화=한 주제 가정, MVP 스코프).
-    threshold 못 넘으면 None (과거 결정과 무관 → 1-2로 넘어감).
-    """
+def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -> bool:
+    """후보 decision과 발화가 실제로 같은 의사결정을 수정하려는 건지 topic_match로 검증."""
+    input_text = TOPIC_MATCH_INPUT_TEMPLATE.format(
+        decision_text=decision_text, decision_reason=decision_reason, statement=statement,
+    )
+    prompt = (
+        f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}\n\n"
+        f'다음 JSON만 출력한다.\n{{\n  "reason": "20자 이내",\n  "same_topic": true | false\n}}'
+    )
+    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
+    try:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            return False
+        parsed = json.loads(raw[start : end + 1])
+        return bool(parsed.get("same_topic", False))
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+
+def _get_candidate_decisions(
+    db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, statement: str
+) -> list[Decision]:
+    """벡터 검색으로 후보를 먼저 좁힌 뒤, topic_match는 그 후보에 대해서만 돈다.
+    [수정] active decision 전체를 매번 topic_match하면 decision이 쌓일수록
+    발화 1개당 LLM 호출이 선형으로 늘어 느려짐 - 벡터 검색을 "필터"가 아니라
+    "후보 축소"용으로 다시 앞단에 둔다. threshold를 낮게 잡아 임베딩이 약한
+    진짜 매칭도 후보에서 안 빠지게 한다. Decision엔 category_id가 없어
+    Meeting을 조인한다."""
     results = chroma_client.search_hybrid(
         query_text=statement,
         workspace_id=str(workspace_id),
         category_id=str(category_id),
-        top_k=1,
+        top_k=DECISION_CANDIDATE_TOP_K,
         collection_name=chroma_client.DECISION_COLLECTION,
     )
-    if not results or results[0]["score"] < DECISION_MATCH_THRESHOLD:
-        return None
+    candidate_ids = [
+        uuid.UUID(r["document_id"]) for r in results
+        if r.get("document_id") and r["score"] >= DECISION_CANDIDATE_THRESHOLD
+    ]
+    if not candidate_ids:
+        return []
 
-    document_id = results[0].get("document_id")
-    if not document_id:
-        return None
-    return uuid.UUID(document_id), results[0]["score"]
+    decisions = (
+        db.query(Decision)
+        .join(Meeting, Decision.meeting_id == Meeting.id)
+        .filter(
+            Decision.id.in_(candidate_ids),
+            Meeting.category_id == category_id,
+            Decision.workspace_id == workspace_id,
+            Decision.status == "active",
+            Decision.deleted_at.is_(None),
+        )
+        .all()
+    )
+    order = {cid: i for i, cid in enumerate(candidate_ids)}
+    decisions.sort(key=lambda d: order.get(d.id, len(order)))  # 벡터 점수 순서 유지
+    return decisions
 
 
 def judge(
@@ -111,43 +202,29 @@ def judge(
     발화 하나를 받아 1-1 판단을 수행한다.
 
     Returns:
-        {"case": "none"|"0"|"1"|"2"|"3"|"4", "popup": dict|None, "decision_id": str|None}
+        {"case": "none"|"0"|"1"|"2"|"3", "popup": dict|None, "decision_id": str|None}
         popup은 팝업을 띄워야 하면 {"type": ..., "message": ...} 형태, 아니면 None.
-        "none"은 DECISION_COLLECTION에 애초에 매칭이 없어 1-2로 넘겨야 함을 의미.
+        "none"은 관련 있는 active decision이 없어 1-2로 넘겨야 함을 의미.
     """
-    match = _find_matching_decision(workspace_id, category_id, statement)
-    if match is None:
+    candidates = _get_candidate_decisions(db, workspace_id, category_id, statement)
+
+    decision = None
+    for candidate in candidates[:TOPIC_MATCH_MAX_ATTEMPTS]:
+        if _ask_topic_match(candidate.decision_text, candidate.reason or "명시되지 않음", statement):
+            decision = candidate
+            break
+
+    if decision is None:
         return {"case": "none", "popup": None, "decision_id": None}
 
-    decision_id, match_score = match
-    decision = db.get(Decision, decision_id)
-    if not decision or decision.status != "active":
-        # 매칭은 됐는데 이미 superseded/cancelled인 경우 - 최신 상태가 아니므로 판단 대상 아님
-        return {"case": "none", "popup": None, "decision_id": None}
-
-    prompt = JUDGMENT_PROMPT_TEMPLATE.format(
-        decision_text=decision.decision_text,
-        decision_reason=decision.reason or "명시되지 않음",
-        statement=statement,
-    )
-    # Model1(경량, Qwen2.5-7B)로 1차 판단
-    raw = _call_ollama(prompt, timeout=60.0, model=OLLAMA_MODEL_LIGHT)
-    judgment = _parse_judgment(raw)
-
-    # [추가 - 2026.07.16] Model1/2 이원화: confidence 낮으면 Model2(Qwen3-8B)로 재판단.
-    # presents_new_value=false(Case 0, 리마인더)는 애초에 애매할 여지가 적은 표면
-    # 패턴 판단이라 escalate 대상에서 제외 - 새 값 제시가 있다고 판단됐는데
-    # (same_as_existing/reason_is_clear까지 포함한) confidence가 낮은 경우만 escalate.
-    if judgment["presents_new_value"] and judgment["confidence"] < CONTRADICTION_POPUP_THRESHOLD:
-        heavy_raw = _call_ollama(prompt, timeout=150.0, model=OLLAMA_MODEL_HEAVY)
-        heavy_judgment = _parse_judgment(heavy_raw)
-        # Model2 결과로 교체 (Model2가 더 넓은 컨텍스트/판단력으로 재확인한 결과를 신뢰)
-        judgment = heavy_judgment
-
+    decision_text = decision.decision_text
+    decision_reason = decision.reason or "명시되지 않음"
     session_kwargs = {"session_meeting_id": session_meeting_id, "session_room_id": session_room_id}
 
     # 1단계: 새 값 제시 여부
-    if not judgment["presents_new_value"]:
+    presents_new_value = _ask_judgment_step("presents_new_value", decision_text, decision_reason, statement)
+
+    if not presents_new_value:
         # Case 0: 리마인더 - 세션당 1회
         already_shown = history_crud.already_notified_in_session(
             db, reference_decision_id=decision.id, **session_kwargs
@@ -159,7 +236,8 @@ def judge(
             db,
             workspace_id=workspace_id, category_id=category_id,
             source_type=source_type, match_type="decision_reminder",
-            reference_decision_id=decision.id, confidence_score=match_score,
+            reference_decision_id=decision.id,
+            confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
             **session_kwargs,
         )
         return {
@@ -173,44 +251,32 @@ def judge(
         }
 
     # 2단계: 값이 같은가?
-    if judgment["same_as_existing"]:
+    same_as_existing = _ask_judgment_step("same_as_existing", decision_text, decision_reason, statement)
+
+    if same_as_existing:
         # Case 1: 팝업 없음
         return {"case": "1", "popup": None, "decision_id": str(decision.id)}
 
-    if judgment["reason_is_clear"]:
-        # Case 2: 정당한 변경 - 실시간 팝업 없이 흘려보냄 (post-meeting Case A로 자연 처리)
-        return {"case": "2", "popup": None, "decision_id": str(decision.id)}
+    # 3단계: 근거가 명확한가?
+    reason_is_clear = _ask_judgment_step("reason_is_clear", decision_text, decision_reason, statement)
 
-    confidence = judgment["confidence"]
+    # Case 2/3: "모순"이 아니라 근거 명확성 기준의 "결정 변경"으로 구분한다.
+    # 실제 decisions 반영은 여전히 post-meeting이 담당 - 여기선 알림 + 기록만 한다.
+    if reason_is_clear:
+        case, judgment_case = "2", "reasoned_change"
+        message = (f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{statement}'"
+                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" 바꾸시겠습니까?")
+    else:
+        case, judgment_case = "3", "unreasoned_change"
+        message = (f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{statement}'"
+                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" 바꾸시겠습니까?")
 
-    if confidence < CONTRADICTION_POPUP_THRESHOLD:
-        # 판단이 애매함 - Case 4 (보류/반복논의)
-        history_crud.record_match(
-            db,
-            workspace_id=workspace_id, category_id=category_id,
-            source_type=source_type, match_type="decision_reminder",
-            reference_decision_id=decision.id, confidence_score=confidence,
-            **session_kwargs,
-        )
-        repeat_count = history_crud.count_repeat_sessions(db, category_id, decision.id)
-        # TODO: 임계치(N) 미정 - 설계 문서 5장 질문 3, 지금은 3회로 임시 설정
-        REPEAT_THRESHOLD = 3
-        if repeat_count >= REPEAT_THRESHOLD:
-            return {
-                "case": "4",
-                "popup": {
-                    "type": "repeat_discussion",
-                    "message": f"'{decision.title}'에 대한 논의가 {repeat_count}번째 반복되고"
-                               f" 있습니다. 이번 회의에서 확정을 검토해보세요.",
-                },
-                "decision_id": str(decision.id),
-            }
-        return {"case": "4", "popup": None, "decision_id": str(decision.id)}
-
-    # Case 3: 모순 - confidence 충분히 높음
-    # 규칙 D(임시): 세션 내 같은 decision에 이미 모순 팝업 떴으면 팝업 생략 (기록은 남김)
+    # 팝업은 세션 내 (decision, judgment_case) 단위로 1회만 - 같은 decision이어도
+    # 근거 명확/불명확 여부가 바뀌면 별개 알림으로 취급해 각각 1회씩 뜬다.
     already_popped = contradiction_crud.already_popped_in_session_for_decision(
-        db, reference_decision_id=decision.id, **session_kwargs
+        db, reference_decision_id=decision.id, judgment_case=judgment_case, **session_kwargs
     )
 
     # make_deduplication_key의 3번째 인자명이 reference_file_id지만, decision 참조도
@@ -218,6 +284,8 @@ def judge(
     dedup_key = contradiction_crud.make_deduplication_key(
         source_type, source_id, decision.id, decision.id
     )
+    # 팝업 노출 여부와 무관하게 매번 기록 - post-meeting이 세션 내 이 decision의
+    # 최신 행을 그대로 사용자 확인 대상(변경 후보)으로 재사용한다.
     contradiction = contradiction_crud.create_contradiction(
         db,
         workspace_id=workspace_id, category_id=category_id,
@@ -225,22 +293,22 @@ def judge(
         reference_decision_id=decision.id,
         statement_text_snapshot=statement,
         reference_text_snapshot=decision.decision_text,
-        confidence_score=confidence,
+        confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
         deduplication_key=dedup_key,
+        judgment_case=judgment_case,
         **session_kwargs,
         **({"meeting_segment_id": source_id} if source_type == "meeting_segment"
            else {"room_message_id": source_id}),
     )
 
     if already_popped:
-        return {"case": "3", "popup": None, "decision_id": str(decision.id)}
+        return {"case": case, "popup": None, "decision_id": str(decision.id)}
 
     return {
-        "case": "3",
+        "case": case,
         "popup": {
-            "type": "contradiction",
-            "message": f"'{statement}'이(가) {decision.decided_at}에 결정된"
-                       f" '{decision.decision_text}'와 다릅니다. 바꾸시겠습니까?",
+            "type": judgment_case,
+            "message": message,
             "contradiction_id": str(contradiction.id),
             "actions": ["change_acknowledged", "keep_reference"],
         },

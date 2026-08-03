@@ -11,8 +11,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
 
-from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution
+from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
 
 
 def make_deduplication_key(
@@ -32,27 +33,27 @@ def already_popped_in_session_for_decision(
     session_meeting_id: Optional[uuid.UUID] = None,
     session_room_id: Optional[uuid.UUID] = None,
     reference_decision_id: uuid.UUID,
+    judgment_case: Optional[str] = None,
 ) -> bool:
     """
-    [추가 - 2026.07.16] 1-1 Case 3 / 1-5 규칙: 세션 내 같은 decision(슬롯)에 대해서는
-    발화가 여러 개(다른 화자, 다른 값)여도 모순 팝업은 최대 1회만 뜬다.
+    1-1 Case 2/3: 세션 내 같은 (decision, judgment_case) 조합에 대해서는 발화가
+    여러 개(다른 화자, 다른 값)여도 팝업은 최대 1회만 뜬다. judgment_case를 주지
+    않으면 case 구분 없이 decision 단위로만 체크한다.
 
-    기존 deduplication_key/cooldown은 "이 특정 발화 - 이 참조대상" 조합 단위였어서,
-    같은 세션 안에서 화자가 바뀌며 다른 값으로 계속 충돌하면 매번 새 dedup_key가 생겨
-    팝업이 반복되는 문제가 있었음. 이 함수는 그와 별개로 "세션+decision" 단위로 한 번
-    더 체크해서, 이미 이 세션에서 이 decision에 대한 모순이 한 번이라도 떴으면 이후
-    발화들은 팝업을 생략하게 한다 (contradictions row 자체는 감사기록용으로 계속 생성됨).
+    [수정] dedup을 decision 단위가 아니라 (decision, case) 단위로 거는 이유: 근거
+    명확(reasoned_change)/불명확(unreasoned_change) 여부는 발화마다 바뀔 수 있는
+    별개의 알림이라, 한쪽이 이미 떴다고 다른 쪽까지 막으면 안 된다.
 
-    [TODO - 임시 결정, 팀 테스트 후 재검토] 지금은 리마인더(Case 0)와 동일하게
-    "세션당 1회"로 통일했지만, 모순은 "변경 인지함/기존 유지" 액션이 완결돼야 하는
-    성격이라 미해결(unresolved) 상태인 동안 값이 바뀐 확정 발화가 새로 나올 때마다
-    다시 팝업해야 할 수도 있음. 시나리오 4(여러 명 반복언급) 테스트 데이터로 검증 후
-    이 함수의 동작(또는 호출 여부)을 재조정할 예정 (설계 문서 5장 질문 7 참조).
+    이 함수는 팝업 노출 여부만 결정하고, contradictions row 자체는 dedup 여부와
+    무관하게 항상 생성된다 (감사기록 + post-meeting이 세션 내 최신 행을 그대로
+    사용자 확인 대상으로 재사용하는 근거가 됨 - decision_transition.py 참조).
     """
     q = db.query(Contradiction).filter(
         Contradiction.reference_decision_id == reference_decision_id,
         Contradiction.reference_type == "decision",
     )
+    if judgment_case:
+        q = q.filter(Contradiction.judgment_case == judgment_case)
     if session_meeting_id:
         q = q.filter(Contradiction.session_meeting_id == session_meeting_id)
     if session_room_id:
@@ -99,6 +100,7 @@ def create_contradiction(
     session_room_id: Optional[uuid.UUID] = None,
     severity: str = "medium",
     cooldown_minutes: int = 30,
+    commit: bool = True,
     **extra_fields,
 ) -> Contradiction:
     """
@@ -109,6 +111,9 @@ def create_contradiction(
     reference_type='decision'인 경우 reference_file_id 대신 reference_decision_id를,
     session_meeting_id 또는 session_room_id를 반드시 채워야
     already_popped_in_session_for_decision()으로 세션당 1회 체크가 가능하다.
+
+    [추가] commit=False면 flush만 하고 커밋은 호출부에 맡긴다 - post_meeting
+    파이프라인의 원자적 1단계 커밋 구조에 이 함수가 끼어들 때 필요.
     """
     row = Contradiction(
         workspace_id=workspace_id,
@@ -128,9 +133,35 @@ def create_contradiction(
         **extra_fields,
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
+
+def delete_contradictions_by_reference_file(db: Session, file_id: uuid.UUID) -> int:
+    """해당 파일의 청크를 참조하는 contradictions를 하위 레코드(변경요약 초안,
+    해결 이력)까지 포함해 전부 삭제한다. 문서 삭제 시 FK 위반
+    (contradictions_reference_chunk_id_fkey)을 막기 위해 청크 삭제 전에 호출해야 한다."""
+    contradiction_ids = [
+        c.id for c in
+        db.query(Contradiction).filter(Contradiction.reference_file_id == file_id).all()
+    ]
+    if not contradiction_ids:
+        return 0
+
+    db.query(ChangeSummaryDraft).filter(
+        ChangeSummaryDraft.contradiction_id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.query(ContradictionResolution).filter(
+        ContradictionResolution.contradiction_id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.query(Contradiction).filter(
+        Contradiction.id.in_(contradiction_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+    return len(contradiction_ids)
 
 
 def list_unresolved(db: Session, workspace_id: uuid.UUID) -> list[Contradiction]:
@@ -177,6 +208,32 @@ def dismiss_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[
         db.commit()
         db.refresh(row)
     return row
+
+def get_resolution(db: Session, contradiction_id: uuid.UUID) -> Optional[ContradictionResolution]:
+    return (
+        db.query(ContradictionResolution)
+        .filter(ContradictionResolution.contradiction_id == contradiction_id)
+        .first()
+    )
+
+
+def reopen_contradiction(db: Session, contradiction_id: uuid.UUID) -> Optional[Contradiction]:
+    """keep_reference로 해결됐던 모순을 다시 unresolved로 되돌린다.
+    change_acknowledged는 decisions 테이블 전이까지 일으키므로 되돌리기 대상에서
+    제외해야 한다 - 그 검증은 호출부(라우터)에서 미리 하고, 여기선 단순히
+    해결 기록을 지우고 상태만 되돌린다."""
+    contradiction = db.get(Contradiction, contradiction_id)
+    if not contradiction:
+        return None
+
+    resolution = get_resolution(db, contradiction_id)
+    if resolution:
+        db.delete(resolution)
+
+    contradiction.status = "unresolved"
+    db.commit()
+    db.refresh(contradiction)
+    return contradiction
 
 
 def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Optional[ChangeSummaryDraft]:
@@ -289,3 +346,63 @@ def update_change_summary_draft(
         db.commit()
         db.refresh(row)
     return row
+
+def count_by_meeting(db: Session, meeting_id: uuid.UUID) -> int:
+    """session_meeting_id(결정 기반)와 meeting_segment_id 역추적(문서 기반) 둘 다 커버한다."""
+    return (
+        db.query(Contradiction)
+        .outerjoin(MeetingSegment, Contradiction.meeting_segment_id == MeetingSegment.id)
+        .filter(
+            or_(
+                Contradiction.session_meeting_id == meeting_id,
+                MeetingSegment.meeting_id == meeting_id,
+            )
+        )
+        .count()
+    )
+
+def count_in_range(db: Session, workspace_id: uuid.UUID, start: datetime, end: datetime) -> int:
+    return (
+        db.query(Contradiction)
+        .filter(
+            Contradiction.workspace_id == workspace_id,
+            Contradiction.detected_at >= start,
+            Contradiction.detected_at < end,
+        )
+        .count()
+    )
+
+def list_latest_decision_changes_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Contradiction]:
+    """회의 종료 후 사용자에게 보여줄 decision 변경 후보 목록.
+
+    같은 reference_decision_id에 대해 회의 중 여러 번 값이 바뀌었으면
+    가장 최근(detected_at) 것 하나만 노출한다 (승주 확인).
+    """
+    latest_per_decision = (
+        db.query(
+            Contradiction.reference_decision_id,
+            func.max(Contradiction.detected_at).label("latest_detected_at"),
+        )
+        .filter(
+            Contradiction.session_meeting_id == meeting_id,
+            Contradiction.reference_type == "decision",
+            Contradiction.status == "unresolved",
+        )
+        .group_by(Contradiction.reference_decision_id)
+        .subquery()
+    )
+
+    return (
+        db.query(Contradiction)
+        .join(
+            latest_per_decision,
+            (Contradiction.reference_decision_id == latest_per_decision.c.reference_decision_id)
+            & (Contradiction.detected_at == latest_per_decision.c.latest_detected_at),
+        )
+        .filter(
+            Contradiction.session_meeting_id == meeting_id,
+            Contradiction.reference_type == "decision",
+            Contradiction.status == "unresolved",
+        )
+        .all()
+    )

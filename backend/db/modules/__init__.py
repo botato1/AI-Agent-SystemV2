@@ -11,30 +11,32 @@ SQLAlchemy가 문자열 테이블명으로 lazy resolve하기 때문에, 이 파
 
 from backend.db.base import Base  # noqa: F401
 
-from .auth import RefreshToken, User
+from .auth import RefreshToken, User, UserVoiceProfile
 from .workspace import Workspace, WorkspaceMember
 from .room import Category, Room, RoomMessage
 from .file import RoomFileLink, Worktree, WorkspaceFile
-from .document import DocumentAnalysis
+from .document import DocumentAnalysis, DocumentFigure
+from .history import RelatedHistoryMatch
 from .code import CodeAnalysis, CodeFact, CodeSymbol
 from .content_chunk import ContentChunk
 from .similarity import FileSimilarity
-from .meeting import Task, Decision, Meeting, MeetingSegment, MeetingSummary
+from .meeting import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary
 from .contradiction import ChangeSummaryDraft, Contradiction, ContradictionResolution
 from .ai_chat import AiChatMessage, AiChatSession, AiMessageSource
 from .notification import Notification
 
 __all__ = [
     "Base",
-    "User", "RefreshToken",
+    "User", "RefreshToken", "UserVoiceProfile",
     "Workspace", "WorkspaceMember",
     "Category", "Room", "RoomMessage",
     "Worktree", "WorkspaceFile", "RoomFileLink",
-    "DocumentAnalysis",
+    "DocumentAnalysis", "DocumentFigure",
+    "RelatedHistoryMatch",
     "CodeAnalysis", "CodeSymbol", "CodeFact",
     "ContentChunk",
     "FileSimilarity",
-    "Meeting", "MeetingSegment", "MeetingSummary", "Decision", "Task",
+    "Meeting", "MeetingAttendee", "MeetingSegment", "MeetingSummary", "Decision", "Task",
     "Contradiction", "ContradictionResolution", "ChangeSummaryDraft",
     "AiChatSession", "AiChatMessage", "AiMessageSource",
     "Notification",

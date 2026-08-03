@@ -1,5 +1,20 @@
 services:
 
+  # 프론트엔드 (Vite 빌드 -> nginx 정적 서빙). 학교 서버 내부망(같은 와이파이)에서만
+  # 접속 가능 - 외부 공개 전이라 별도 도메인/HTTPS 없이 IP:포트로 접속한다.
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: http://61.81.98.82:8000
+    container_name: ai-agent-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - fastapi
+    restart: always
+
   # FastAPI 백엔드
   fastapi:
     build: .
@@ -15,11 +30,27 @@ services:
       - /mnt/nas_2026_spring/dobby/shared/data/uploads:/app/storage/uploads
     depends_on:
       - chromadb
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: always
+
+  # PostgreSQL
+  postgres:
+    image: postgres:16
+    container_name: ai-agent-postgres
+    environment:
+      POSTGRES_USER: recall
+      POSTGRES_PASSWORD: recall
+      POSTGRES_DB: recall
+    volumes:
+      # postgres가 initdb 시 데이터 디렉토리를 chmod 0700으로 강제 변경하는데
+      # NAS 마운트가 chmod 자체를 막아서 시작이 안 됨 (Operation not permitted) -
+      # ollama_models와 동일한 이유로 NAS 대신 서버 로컬 디스크 사용.
+      - /srv/dobby/postgres_data:/var/lib/postgresql/data
     restart: always
 
   # ChromaDB 벡터DB

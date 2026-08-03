@@ -97,6 +97,10 @@ class WorkspaceMemberAddRequest(BaseModel):
     email: str = Field(..., min_length=1, max_length=255)
     role: WorkspaceRole = "member"
 
+class WorkspaceMemberInviteRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+    role: WorkspaceRole = "member"
+
 
 class WorkspaceMemberRoleUpdateRequest(BaseModel):
     role: WorkspaceRole
@@ -107,6 +111,7 @@ class WorkspaceMemberResponse(BaseModel):
     user_id: UUID
     username: str
     display_name: str
+    profile_image_url: Optional[str] = None
     role: WorkspaceRole
     joined_at: datetime
 

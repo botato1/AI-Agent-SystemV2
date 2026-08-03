@@ -56,5 +56,6 @@ def clean_tables(tables: list[TableBlock]) -> list[TableBlock]:
             data=rows,
             markdown=markdown,
             bbox=table.bbox,
+            image_path=table.image_path,
         ))
     return cleaned

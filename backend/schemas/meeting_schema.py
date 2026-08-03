@@ -29,7 +29,7 @@ TODO:
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -82,6 +82,9 @@ class MeetingSchema(TimestampSchema, SoftDeleteSchema):
         min_length=1,
         max_length=200,
     )
+    title_is_auto: bool = False
+    location: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
     input_type: MeetingInputType
     status: MeetingStatus
 
@@ -190,6 +193,7 @@ class MeetingSummarySchema(TimestampSchema):
 
     full_summary: Optional[str] = None
     short_summary: Optional[str] = None
+    filtered_transcript: Optional[str] = None
     discussion_points: Optional[Any] = None
     full_transcript: Optional[str] = None
 
@@ -254,8 +258,11 @@ class DecisionSchema(TimestampSchema, SoftDeleteSchema):
 # =============================================================================
 
 class MeetingStartRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
     related_room_id: Optional[UUID] = None
+    location: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    recording_mode: Literal["single_device", "individual"] = "single_device"
 
 
 class MeetingResponse(TimestampSchema):
@@ -266,11 +273,16 @@ class MeetingResponse(TimestampSchema):
     source_file_id: Optional[UUID] = None
 
     title: str
+    title_is_auto: bool = False
+    location: Optional[str] = None
+    topic: Optional[str] = None
+    recording_mode: str = "single_device"
     input_type: MeetingInputType
     status: MeetingStatus
 
     started_by: UUID
     started_at: Optional[datetime] = None
+    scheduled_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
 
@@ -278,6 +290,22 @@ class MeetingResponse(TimestampSchema):
 class MeetingStartResponse(MeetingResponse):
     ws_ticket: str
 
+class AgendaReminderItem(BaseModel):
+    id: UUID
+    title: str
+    decision_text: str
+    reason: Optional[str] = None
+
+
+class AgendaReminderPopup(BaseModel):
+    type: str
+    message: str
+    items: list[AgendaReminderItem] = Field(default_factory=list)
+
+
+class MeetingStartResponse(MeetingResponse):
+    ws_ticket: str
+    agenda_reminder: AgendaReminderPopup
 
 class MeetingListResponse(BaseModel):
     meetings: list[MeetingResponse] = Field(default_factory=list)
@@ -305,10 +333,10 @@ class MeetingSummaryResponse(TimestampSchema):
     meeting_id: UUID
     full_summary: Optional[str] = None
     short_summary: Optional[str] = None
+    filtered_transcript: Optional[str] = None
     discussion_points: Optional[Any] = None
     generation_status: GenerationStatus
     generated_at: Optional[datetime] = None
-
 
 class DecisionResponse(TimestampSchema):
     id: UUID
@@ -323,3 +351,96 @@ class DecisionResponse(TimestampSchema):
 
 class DecisionListResponse(BaseModel):
     decisions: list[DecisionResponse] = Field(default_factory=list)
+
+class DecisionHistoryEntry(BaseModel):
+    value: str
+    reason: Optional[str] = None
+    decided_at: datetime
+    status: DecisionStatus
+
+
+class DecisionWithHistoryResponse(TimestampSchema):
+    id: UUID
+    workspace_id: UUID
+    meeting_id: UUID
+    title: str
+    decision_text: str
+    reason: Optional[str] = None
+    status: DecisionStatus
+    decided_at: datetime
+    history: list[DecisionHistoryEntry] = Field(default_factory=list)
+
+
+class DecisionWithHistoryListResponse(BaseModel):
+    decisions: list[DecisionWithHistoryResponse] = Field(default_factory=list)
+
+class SpeakerLabelMappingRequest(BaseModel):
+    mapping: dict[str, str] = Field(
+        ...,
+        description="원본 화자 라벨(예: SPEAKER_00) → 실명 매핑",
+    )
+
+class MeetingTitleUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    location: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
+
+class MeetingAttendeeResponse(BaseModel):
+    user_id: UUID
+    display_name: Optional[str] = None
+
+
+class MeetingAttendeeListResponse(BaseModel):
+    attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+
+
+class AttendeeMappingRequest(BaseModel):
+    user_ids: list[UUID] = Field(default_factory=list)
+
+class MeetingExportResponse(BaseModel):
+    meeting_id: UUID
+    title: str
+    topic: Optional[str] = None
+    location: Optional[str] = None
+    started_at: Optional[datetime] = None
+    attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+    short_summary: Optional[str] = None
+    filtered_transcript: Optional[str] = None
+    segments: list[MeetingSegmentResponse] = Field(default_factory=list)
+
+class MeetingRecentItem(BaseModel):
+    id: UUID
+    title: str
+    started_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+    attendee_count: int
+    preview: Optional[str] = None
+    contradiction_count: int
+
+
+class MeetingRecentListResponse(BaseModel):
+    meetings: list[MeetingRecentItem] = Field(default_factory=list)
+    total_count: int
+
+class MeetingScheduleRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    location: Optional[str] = Field(default=None, max_length=200)
+    scheduled_at: datetime
+    attendee_ids: list[UUID] = Field(default_factory=list)
+
+
+class UpcomingMeetingItem(BaseModel):
+    id: UUID
+    title: str
+    topic: Optional[str] = None
+    location: Optional[str] = None
+    scheduled_at: datetime
+    attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+
+
+class UpcomingMeetingListResponse(BaseModel):
+    meetings: list[UpcomingMeetingItem] = Field(default_factory=list)
+
+class MeetingJoinResponse(BaseModel):
+    ws_ticket: str
