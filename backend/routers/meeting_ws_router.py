@@ -346,11 +346,20 @@ async def meeting_stream_ws(
         user = auth_crud.get_user_by_id(db, uuid.UUID(payload["sub"]))
         participant_name = user.display_name if user else payload["sub"]
     else:
-        # single_device(한 공간에서): 등록된 목소리를 가진 참석자만 "닫힌 집합"으로
-        # 넘긴다 - 없으면 attendee_names가 None이라 자동감지(auto) 모드로 폴백된다.
+        # single_device(한 공간에서): 참석자가 별도로 설정돼 있으면 그 사람들만,
+        # 아니면(설정 안 했으면) 워크스페이스 멤버 전체를 후보로 삼아 그중
+        # 목소리 등록된 사람만 "닫힌 집합"으로 넘긴다. 아무도 없으면 자동감지(auto) 폴백.
+        attendee_rows = meeting_crud.get_attendees(db, meeting_id)
+        if attendee_rows:
+            candidate_user_ids = [user.id for _, user in attendee_rows]
+        else:
+            candidate_user_ids = [
+                member.user_id for member, _ in workspace_crud.list_members(db, meeting.workspace_id)
+            ]
+
         names = []
-        for attendee, user in meeting_crud.get_attendees(db, meeting_id):
-            profile = auth_crud.get_voice_profile(db, user.id)
+        for user_id in candidate_user_ids:
+            profile = auth_crud.get_voice_profile(db, user_id)
             if profile:
                 names.append(profile.speaker_name)
         attendee_names = names or None
