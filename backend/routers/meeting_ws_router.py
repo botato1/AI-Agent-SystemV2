@@ -341,11 +341,23 @@ async def meeting_stream_ws(
     await websocket.accept()
 
     participant_name = None
+    attendee_names: list[str] | None = None
     if meeting.recording_mode == "individual":
         user = auth_crud.get_user_by_id(db, uuid.UUID(payload["sub"]))
         participant_name = user.display_name if user else payload["sub"]
+    else:
+        # single_device(한 공간에서): 등록된 목소리를 가진 참석자만 "닫힌 집합"으로
+        # 넘긴다 - 없으면 attendee_names가 None이라 자동감지(auto) 모드로 폴백된다.
+        names = []
+        for attendee, user in meeting_crud.get_attendees(db, meeting_id):
+            profile = auth_crud.get_voice_profile(db, user.id)
+            if profile:
+                names.append(profile.speaker_name)
+        attendee_names = names or None
 
-    stt_client = SttStreamClient(session_id=str(meeting_id), participant_name=participant_name)
+    stt_client = SttStreamClient(
+        session_id=str(meeting_id), participant_name=participant_name, attendees=attendee_names,
+    )
     try:
         await stt_client.connect()
     except Exception:
