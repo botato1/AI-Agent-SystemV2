@@ -140,11 +140,11 @@ export default function MeetingSearchModal({
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     {m.contradiction_count === 0 ? (
                       <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
-                        ✨ 깨끗함
+                        깨끗함
                       </span>
                     ) : (
                       <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
-                        ⚠️ 모순 {m.contradiction_count}
+                        모순 {m.contradiction_count}
                       </span>
                     )}
                     <span className="text-xs text-recall-textMuted">

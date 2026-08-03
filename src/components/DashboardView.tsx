@@ -143,8 +143,8 @@ export default function DashboardView({
   const [createInitialStatus, setCreateInitialStatus] = useState<TaskStatus | null>(null);
 
   const tabs: { id: DashboardTab; label: string }[] = [
-    { id: "tasks", label: t.dashboard_tab_tasks },
     { id: "decisions", label: t.dashboard_tab_decisions },
+    { id: "tasks", label: t.dashboard_tab_tasks },
   ];
 
   return (
