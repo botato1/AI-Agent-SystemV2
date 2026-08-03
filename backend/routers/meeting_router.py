@@ -41,7 +41,7 @@ from backend.schemas.meeting_schema import (
     MeetingScheduleRequest,
     UpcomingMeetingItem,
     UpcomingMeetingListResponse,
-    MeetingJoinResponse,        
+    MeetingJoinResponse,
     MeetingSegmentUpdateRequest,
     MeetingSummaryUpdateRequest,
 )
