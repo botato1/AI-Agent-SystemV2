@@ -25,6 +25,7 @@ from backend.schemas.auth_schema import (
     AccountDeleteRequest,
     AccountDeleteResponse,
     VoiceProfileResponse,
+    RegisteredVoiceProfileListResponse,
 )
 from backend.services.auth_service import (
     signup,
@@ -40,6 +41,7 @@ from backend.services.auth_service import (
     confirm_password_reset,
     delete_account,
     get_voice_profile_script,
+    list_registered_voice_profiles,
     register_voice_profile,
     get_voice_profile_status,
     rename_voice_profile,
@@ -127,6 +129,10 @@ async def update_profile_image_api(
 @router.get("/voice-profile/script")
 def get_voice_profile_script_api():
     return {"script": get_voice_profile_script()}
+
+@router.get("/voice-profile/list", response_model=RegisteredVoiceProfileListResponse)
+def list_registered_voice_profiles_api():
+    return RegisteredVoiceProfileListResponse(names=list_registered_voice_profiles())
 
 
 # 목소리 등록 (raw PCM16LE 16kHz mono bytes)
