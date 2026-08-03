@@ -54,6 +54,15 @@ def get_segments(db: Session, meeting_id: uuid.UUID) -> list[MeetingSegment]:
         .all()
     )
 
+def update_segment_content(db: Session, segment_id: uuid.UUID, content: str) -> Optional[MeetingSegment]:
+    segment = db.get(MeetingSegment, segment_id)
+    if not segment:
+        return None
+    segment.content = content
+    segment.is_edited = True
+    db.commit()
+    db.refresh(segment)
+    return segment
 
 def upsert_summary(db: Session, meeting_id: uuid.UUID, commit: bool = True, **fields) -> MeetingSummary:
     """
