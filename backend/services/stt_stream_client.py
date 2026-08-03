@@ -29,3 +29,18 @@ class SttStreamClient:
         if params:
             url += "?" + "&".join(params)
         self._ws = await websockets.connect(url, max_size=None)
+
+    async def send_audio(self, chunk: bytes) -> None:
+        await self._ws.send(chunk)
+
+    async def send_end(self) -> None:
+        await self._ws.send("end")
+
+    async def receive(self) -> AsyncIterator[dict]:
+        async for raw_message in self._ws:
+            yield json.loads(raw_message)
+
+    async def close(self) -> None:
+        if self._ws is not None:
+            await self._ws.close()
+            self._ws = None
