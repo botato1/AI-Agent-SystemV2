@@ -41,7 +41,9 @@ from backend.schemas.meeting_schema import (
     MeetingScheduleRequest,
     UpcomingMeetingItem,
     UpcomingMeetingListResponse,
-    MeetingJoinResponse,
+    MeetingJoinResponse,        
+    MeetingSegmentUpdateRequest,
+    MeetingSummaryUpdateRequest,
 )
 
 
@@ -546,6 +548,29 @@ def get_meeting_segments_api(
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments]
     )
 
+# 발화 세그먼트 내용 수정
+@router.patch("/{meeting_id}/segments/{segment_id}", response_model=MeetingSegmentResponse)
+def update_meeting_segment_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    request: MeetingSegmentUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    segment = meeting_crud.get_segment(db, segment_id)
+    if not segment or segment.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="발화 세그먼트를 찾을 수 없습니다.",
+        )
+
+    updated = meeting_crud.update_segment_content(db, segment_id, request.content)
+    return MeetingSegmentResponse.model_validate(updated)
+
 
 # 회의 요약 조회
 @router.get("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
@@ -565,6 +590,28 @@ def get_meeting_summary_api(
             detail="회의 요약을 찾을 수 없습니다.",
         )
     return MeetingSummaryResponse.model_validate(summary)
+
+# 회의 요약 수정
+@router.patch("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
+def update_meeting_summary_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: MeetingSummaryUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    existing = meeting_crud.get_meeting_summary(db, meeting_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의 요약을 찾을 수 없습니다.",
+        )
+
+    updated = meeting_crud.upsert_summary(db, meeting_id, short_summary=request.short_summary)
+    return MeetingSummaryResponse.model_validate(updated)
 
 # 회의록 내보내기용 데이터 일괄 조회 — 문서 조립은 프론트에서 처리
 @router.get("/{meeting_id}/export", response_model=MeetingExportResponse)
