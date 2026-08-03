@@ -70,6 +70,12 @@ export default function App() {
     return new URLSearchParams(window.location.search).get("token");
   });
 
+  // 워크스페이스 초대 메일 링크(?invite_token=...)로 들어온 경우 - 회원가입 시
+  // 같이 넘겨서 가입과 동시에 해당 워크스페이스에 자동으로 합류시킨다.
+  const [inviteToken] = useState<string | null>(() => {
+    return new URLSearchParams(window.location.search).get("invite_token");
+  });
+
   // 💡 워크스페이스 목록 상태 (목업 중복 방지를 위해 빈 배열로 시작)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
@@ -77,6 +83,8 @@ export default function App() {
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string>(() => {
     return localStorage.getItem("last_workspace_id") || "";
   });
+  // 백엔드 워크스페이스 목록 조회가 최소 1회 완료됐는지 (완료 전엔 "워크스페이스 없음" 화면을 보여주지 않음)
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
 
   // 워크스페이스 멤버 id → 표시 이름 매핑 (채팅 메시지 발신자 이름 표시용)
   const [memberNameById, setMemberNameById] = useState<Record<string, string>>({});
@@ -137,16 +145,24 @@ export default function App() {
 
       const res = await getWorkspaceListApi();
 
-      if (res.status === "success" && res.workspaces.length > 0) {
-        setWorkspaces(res.workspaces);
+      if (res.status !== "success") return;
 
-        const savedWsId = localStorage.getItem("last_workspace_id");
-        const exists = res.workspaces.find((w) => w.id === savedWsId);
+      setWorkspaces(res.workspaces);
 
-        const targetWsId = exists && savedWsId ? savedWsId : res.workspaces[0].id;
-        setCurrentWorkspaceId(targetWsId);
-        localStorage.setItem("last_workspace_id", targetWsId);
+      if (res.workspaces.length === 0) {
+        setCurrentWorkspaceId("");
+        localStorage.removeItem("last_workspace_id");
+        setWorkspacesLoaded(true);
+        return;
       }
+
+      const savedWsId = localStorage.getItem("last_workspace_id");
+      const exists = res.workspaces.find((w) => w.id === savedWsId);
+
+      const targetWsId = exists && savedWsId ? savedWsId : res.workspaces[0].id;
+      setCurrentWorkspaceId(targetWsId);
+      localStorage.setItem("last_workspace_id", targetWsId);
+      setWorkspacesLoaded(true);
     }
 
     loadRealWorkspaces();
@@ -437,7 +453,31 @@ export default function App() {
         registeredAccounts={registeredAccounts}
         onSignUp={handleSignUp}
         onLogIn={handleLogIn}
+        inviteToken={inviteToken}
       />
+    );
+  }
+
+  if (!workspacesLoaded) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
+        워크스페이스 정보를 불러오는 중입니다...
+      </div>
+    );
+  }
+
+  if (!currentWorkspaceId) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-recall-bg text-recall-text">
+        <p className="text-base text-recall-textMuted">아직 소속된 워크스페이스가 없습니다.</p>
+        <button
+          type="button"
+          onClick={handleCreateWorkspace}
+          className="rounded-xl bg-recall-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 transition"
+        >
+          워크스페이스 만들기
+        </button>
+      </div>
     );
   }
 
@@ -507,7 +547,9 @@ export default function App() {
           partial={liveMeeting.partial}
           contradictionAlerts={liveMeeting.contradictionAlerts}
           errorMessage={liveMeeting.errorMessage}
+          joinableMeeting={liveMeeting.joinableMeeting}
           onStart={liveMeeting.start}
+          onJoin={liveMeeting.join}
           onPause={liveMeeting.pause}
           onResume={liveMeeting.resume}
           onStop={liveMeeting.stop}

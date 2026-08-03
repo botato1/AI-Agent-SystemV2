@@ -5,6 +5,7 @@ import { DocumentDetail, DocumentFigure } from "../services/document";
 import WorktreePanel from "./WorktreePanel";
 import DocumentDetailPanel from "./DocumentDetailPanel";
 import DocumentOriginalViewer from "./DocumentOriginalViewer";
+import { RepeatIcon, TrashIcon } from "./icons";
 
 type AnalysisTab = "document" | "worktree";
 type DetailContentTab = "summary" | "original";
@@ -44,13 +45,11 @@ export default function DocumentAnalysisView({
   const [detailContentTab, setDetailContentTab] = useState<DetailContentTab>("summary");
 
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadingFileName, setUploadingFileName] = useState("");
 
   const handleFileChange = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
 
     setIsUploading(true);
-    setUploadingFileName(fileList[0].name);
 
     try {
       await uploadDocument(fileList);
@@ -58,7 +57,6 @@ export default function DocumentAnalysisView({
       console.error("파일 업로드 오류:", error);
     } finally {
       setIsUploading(false);
-      setUploadingFileName("");
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -140,33 +138,19 @@ export default function DocumentAnalysisView({
           </div>
 
           <div className="flex-1 space-y-1.5 overflow-y-auto custom-scrollbar">
-            {isUploading && (
-              <div className="flex w-full flex-col gap-1 rounded-lg border border-recall-accent/50 bg-recall-accent/5 p-2.5 animate-pulse">
-                <div className="flex items-center gap-2">
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-recall-accent border-t-transparent shrink-0" />
-                  <span className="truncate text-sm font-medium text-recall-accent">
-                    {uploadingFileName || "파일 업로드 중..."}
-                  </span>
-                </div>
-                <span className="text-[11px] text-recall-textMuted pl-5">
-                  서버로 전송하는 중입니다...
-                </span>
-              </div>
-            )}
-
             {documents.map((doc) => {
               const isSelected = doc.id === activeDocId;
               return (
-                <button
+                <div
                   key={doc.id}
                   onClick={() => selectDocument(doc.id)}
-                  className={`flex w-full flex-col gap-0.5 rounded-lg border px-2.5 py-2 text-left transition ${
+                  className={`group relative flex w-full flex-col gap-0.5 rounded-lg border px-2.5 py-2 text-left transition cursor-pointer ${
                     isSelected
                       ? "border-recall-accent bg-recall-accent/10"
                       : "border-recall-border hover:bg-white/5"
                   }`}
                 >
-                  <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <span className="flex items-center gap-1.5 pr-12 text-sm font-medium">
                     {doc.status === "analyzing" && (
                       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-recall-accent" />
                     )}
@@ -182,7 +166,34 @@ export default function DocumentAnalysisView({
                       ? "분석 실패"
                       : "DOCUMENT"}
                   </span>
-                </button>
+
+                  <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    {doc.status === "failed" && retryDocument && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          retryDocument(doc.id);
+                        }}
+                        title="재분석"
+                        className="rounded p-1 text-recall-textMuted hover:text-recall-accent transition"
+                      >
+                        <RepeatIcon size={12} />
+                      </button>
+                    )}
+                    {deleteDocument && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteDocument(doc.id);
+                        }}
+                        title="삭제"
+                        className="rounded p-1 text-recall-textMuted hover:text-recall-danger transition"
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
