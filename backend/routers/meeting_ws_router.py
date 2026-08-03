@@ -263,6 +263,7 @@ async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
     meeting_id: uuid.UUID, workspace_id: uuid.UUID, category_id: uuid.UUID,
     meeting_started_by: uuid.UUID, send_lock: asyncio.Lock, processing_lock: asyncio.Lock,
+    speaker_name_to_user_id: dict[str, uuid.UUID],
 ) -> None:
     async for data in stt_client.receive():
         msg_type = data.get("type")
@@ -275,6 +276,8 @@ async def _relay_stt_to_frontend(
             for seg in data.get("final", {}).get("segments", []):
                 resolved_speaker = _resolve_speaker_label(db, meeting_id, seg.get("speaker"))
                 seg["speaker"] = resolved_speaker
+                speaker_user_id = speaker_name_to_user_id.get(resolved_speaker) if resolved_speaker else None
+                seg["speaker_user_id"] = str(speaker_user_id) if speaker_user_id else None
                 try:
                     segment_row = meeting_crud.add_segment_safe(
                         db,
@@ -283,6 +286,7 @@ async def _relay_stt_to_frontend(
                         start_ms=int(seg["start"] * 1000),
                         end_ms=int(seg["end"] * 1000),
                         speaker_label=resolved_speaker,
+                        speaker_user_id=speaker_user_id,
                         stt_confidence=_extract_stt_confidence(seg),
                     )
                 except Exception as e:
@@ -341,9 +345,12 @@ async def meeting_stream_ws(
 
     participant_name = None
     attendee_names: list[str] | None = None
+    speaker_name_to_user_id: dict[str, uuid.UUID] = {}
     if meeting.recording_mode == "individual":
         user = auth_crud.get_user_by_id(db, uuid.UUID(payload["sub"]))
         participant_name = user.display_name if user else payload["sub"]
+        if user and participant_name:
+            speaker_name_to_user_id[participant_name] = user.id
     else:
         # single_device(한 공간에서): 참석자가 별도로 설정돼 있으면 그 사람들만,
         # 아니면(설정 안 했으면) 워크스페이스 멤버 전체를 후보로 삼아 그중
@@ -361,6 +368,7 @@ async def meeting_stream_ws(
             profile = auth_crud.get_voice_profile(db, user_id)
             if profile:
                 names.append(profile.speaker_name)
+                speaker_name_to_user_id[profile.speaker_name] = user_id
         attendee_names = names or None
 
     stt_client = SttStreamClient(
@@ -395,9 +403,9 @@ async def meeting_stream_ws(
             websocket, stt_client, db, meeting_id,
             meeting.workspace_id, meeting.category_id,
             meeting.started_by, send_lock, processing_lock,
+            speaker_name_to_user_id,
         )
     )
-
     try:
         done, pending = await asyncio.wait(
             {frontend_task, stt_task}, return_when=asyncio.FIRST_COMPLETED
