@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
+import io
+import wave
 from sqlalchemy.orm import Session
 
 from backend.core.security import create_ws_ticket
@@ -545,6 +548,55 @@ def get_meeting_segments_api(
     segments = meeting_crud.get_segments(db, meeting_id)
     return MeetingSegmentListResponse(
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments]
+    )
+
+# 회의 원본 음성 듣기/다운로드 (실시간 녹음은 raw PCM이라 WAV 헤더를 씌워서 반환)
+@router.get("/{meeting_id}/audio")
+def get_meeting_audio_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if not meeting.source_file_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일이 아직 없습니다.",
+        )
+
+    workspace_file = file_crud.get_file(db, meeting.source_file_id)
+    if not workspace_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일을 찾을 수 없습니다.",
+        )
+
+    file_path = Path(workspace_file.storage_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일이 존재하지 않습니다.",
+        )
+
+    if workspace_file.mime_type == "audio/L16":
+        # 실시간 녹음 - raw PCM16LE 16kHz mono라 브라우저가 바로 못 읽음. WAV 헤더를 씌워서 반환.
+        pcm_bytes = file_path.read_bytes()
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(pcm_bytes)
+        buffer.seek(0)
+        return StreamingResponse(buffer, media_type="audio/wav")
+
+    return FileResponse(
+        path=file_path,
+        media_type=workspace_file.mime_type or "application/octet-stream",
+        filename=workspace_file.original_filename,
     )
 
 # 발화 세그먼트 내용 수정
