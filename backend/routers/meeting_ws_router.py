@@ -20,8 +20,7 @@ from backend.services import judgment_service, meeting_service
 
 router = APIRouter(tags=["Meetings (Realtime)"])
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
-MEETING_RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
+MEETING_RECORDING_STORAGE_DIR = Path("storage/uploads/recordings")
 
 # asyncio 이벤트 루프는 진행 중인 태스크를 약한 참조로만 들고 있어서, 반환값을 아무 데도
 # 저장하지 않으면 참조가 없어져 완료 전에 GC될 수 있다(asyncio 공식 문서 경고).

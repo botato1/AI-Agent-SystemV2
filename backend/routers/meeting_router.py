@@ -50,8 +50,7 @@ from backend.schemas.meeting_schema import (
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/meetings", tags=["Meetings"])
 decisions_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Decisions"])
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (document_service.py와 동일한 임시 조치)
-MEETING_AUDIO_STORAGE_DIR = Path("data/uploads/audio")
+MEETING_AUDIO_STORAGE_DIR = Path("storage/uploads/audio")
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
 

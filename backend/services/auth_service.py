@@ -500,7 +500,7 @@ def delete_account(db: Session, access_token: str, request: AccountDeleteRequest
         error=None,
     )
 
-PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
+PROFILE_IMAGE_STORAGE_DIR = Path("storage/uploads/profile_images")
 ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MAX_PROFILE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
 

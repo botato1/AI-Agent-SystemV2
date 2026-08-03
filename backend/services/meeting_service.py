@@ -16,8 +16,7 @@ from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
-MEETING_SUMMARY_STORAGE_DIR = Path("data/uploads/summaries")
+MEETING_SUMMARY_STORAGE_DIR = Path("storage/uploads/summaries")
 
 # 완성된 오디오 파일 STT+화자분리 REST 엔드포인트.
 # 실시간 녹음(WS, /api/ws/stt/{session_id})과는 별도 경로 — 파일이 이미 통째로 있으므로

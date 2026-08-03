@@ -17,7 +17,7 @@ from backend.graphs.states.meeting_postprocess_state import MeetingPostprocessSt
 from backend.modules.post_meeting import decision_transition, indexer, llm_extractor
 from backend.modules.rag.document_loader import load_document
 
-RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
+RECORDING_STORAGE_DIR = Path("storage/uploads/recordings")
 
 
 class _PostprocessFailure(Exception):

@@ -21,8 +21,7 @@ from backend.schemas.worktree_schema import (
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/worktrees", tags=["Worktrees"])
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
-WORKTREE_STORAGE_DIR = Path("data/uploads/worktree_files")
+WORKTREE_STORAGE_DIR = Path("storage/uploads/worktree_files")
 
 CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".rb", ".php", ".swift", ".kt"}
 CONFIG_EXTENSIONS = {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".xml"}

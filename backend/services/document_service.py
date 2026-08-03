@@ -24,8 +24,7 @@ DOCUMENT_PROCESS_BASE_URL = DOCUMENT_PROCESS_URL.rsplit("/api/document", 1)[0]
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".png", ".jpg", ".jpeg"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (stt_upload_service.py와 동일한 임시 조치)
-LOCAL_STORAGE_DIR = Path("data/uploads/files")
+LOCAL_STORAGE_DIR = Path("storage/uploads/files")
 
 
 # 검증 함수
