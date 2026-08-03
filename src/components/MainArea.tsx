@@ -225,7 +225,9 @@ function ComposerBar({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            // 한글 등 조합 입력(IME) 중 Enter는 조합 확정용 키 입력이라 무시 - 안 그러면
+            // Enter 한 번에 keydown이 두 번 발생해서 마지막 글자가 별도 메시지로 중복 전송됨
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               handleSend();
             }

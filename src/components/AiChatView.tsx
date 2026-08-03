@@ -159,7 +159,7 @@ export default function AiChatView({ workspaceId, t }: { workspaceId: string; t:
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && handleSend()}
           placeholder="워크스페이스 내용에 대해 질문하세요..."
           className="flex-1 bg-transparent px-3 py-2 text-sm text-recall-text placeholder:text-recall-textMuted outline-none"
         />
