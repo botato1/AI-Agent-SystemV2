@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
-import { Meeting, MeetingStatus, MeetingAttendee } from "../services/meeting";
+import { Meeting, MeetingStatus, MeetingAttendee, RecordingMode } from "../services/meeting";
 import { ContradictionSeverity } from "../services/contradiction";
 import {
   UploadIcon,
@@ -249,7 +249,15 @@ interface MeetingsPanelProps {
   livePartial: { confirmed: string; tentative: string };
   liveContradictionAlerts: ContradictionAlert[];
   liveError: string | null;
-  onStartLive: (title: string, relatedRoomId?: string, attendeeIds?: string[]) => void;
+  joinableMeeting: Meeting | null;
+  onStartLive: (
+    title: string,
+    relatedRoomId?: string,
+    attendeeIds?: string[],
+    location?: string,
+    recordingMode?: RecordingMode
+  ) => void;
+  onJoinLive: (meetingId: string) => void;
   onPauseLive: () => void;
   onResumeLive: () => void;
   onStopLive: () => void;
@@ -345,7 +353,9 @@ export default function MeetingsPanel({
   livePartial,
   liveContradictionAlerts,
   liveError,
+  joinableMeeting,
   onStartLive,
+  onJoinLive,
   onPauseLive,
   onResumeLive,
   onStopLive,
@@ -690,6 +700,20 @@ export default function MeetingsPanel({
             <p className="text-sm font-medium text-recall-textMuted">
               왼쪽 목록에서 회의를 선택하거나 <span className="text-recall-accent font-semibold">새 회의</span>를 시작하세요.
             </p>
+
+            {joinableMeeting && (
+              <div className="mt-2 flex flex-col items-center gap-2 rounded-2xl border border-recall-accent/40 bg-recall-accent/5 px-5 py-4">
+                <p className="text-sm font-semibold text-recall-text">
+                  "{joinableMeeting.title}" 회의가 각자 PC 모드로 진행 중이에요
+                </p>
+                <button
+                  onClick={() => onJoinLive(joinableMeeting.id)}
+                  className="rounded-xl bg-recall-accent px-4 py-2 text-xs font-semibold text-white hover:opacity-90 transition"
+                >
+                  참가하기
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <>
@@ -1085,9 +1109,9 @@ export default function MeetingsPanel({
           workspaceId={workspaceId}
           defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
-          onStart={(title, attendeeIds) => {
+          onStart={(title, attendeeIds, location, recordingMode) => {
             setShowStartModal(false);
-            onStartLive(title, undefined, attendeeIds);
+            onStartLive(title, undefined, attendeeIds, location, recordingMode);
           }}
         />
       )}
