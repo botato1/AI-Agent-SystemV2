@@ -37,18 +37,43 @@ _FRAME_SEC = 0.1   # 프론트가 보내는 단위와 비슷하게 잘게 나눠
 
 
 def load_pcm16(path: str) -> bytes:
-    audio, sample_rate = sf.read(path, dtype="float32")
+    """
+    어떤 오디오 파일이든 16kHz mono PCM16으로 만든다.
+
+    서버에 ffmpeg가 없어서(diarize_service가 메모리 오디오를 받도록 만든 이유와 같음)
+    변환을 파이썬에서 처리한다. WAV/FLAC는 soundfile로, mp3/m4a 등은 torchaudio로 읽는다.
+    """
+    try:
+        audio, sample_rate = sf.read(path, dtype="float32")
+    except Exception:
+        import torch
+        import torchaudio
+        waveform, sample_rate = torchaudio.load(path)
+        audio = waveform.mean(dim=0).numpy()
+
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
+
     if sample_rate != REALTIME_SAMPLE_RATE:
-        raise SystemExit(f"❌ 샘플레이트 {sample_rate}Hz — {REALTIME_SAMPLE_RATE}Hz 파일이어야 함")
+        # 실시간 경로는 16kHz를 전제로 한다(VAD·모델 모두). 리샘플링 없이 넣으면
+        # 재생 속도와 음높이가 어긋나 전사가 통째로 망가진다.
+        import torch
+        import torchaudio
+        tensor = torch.from_numpy(np.ascontiguousarray(audio)).unsqueeze(0)
+        audio = torchaudio.functional.resample(
+            tensor, sample_rate, REALTIME_SAMPLE_RATE
+        ).squeeze(0).numpy()
+        print(f"  리샘플링: {sample_rate}Hz → {REALTIME_SAMPLE_RATE}Hz")
+
     return (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
 
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--meeting", required=True, help="재생할 회의 폴더명")
-    parser.add_argument("--audio", default="audio.wav")
+    parser.add_argument("--meeting", default=None, help="재생할 회의 폴더명 (meetings/ 아래)")
+    parser.add_argument("--audio", default="audio.wav", help="--meeting 안의 파일명")
+    parser.add_argument("--file", default=None,
+                        help="임의 오디오 파일 경로. 형식·샘플레이트 무관(자동 변환)")
     parser.add_argument("--server", default="ws://127.0.0.1:8002")
     parser.add_argument("--session-id", default=None, help="미지정 시 회의 폴더명에서 유추")
     parser.add_argument("--attendees", nargs="*", default=None, help="닫힌 집합 참석자 이름")
@@ -62,13 +87,18 @@ async def main():
     except ImportError:
         raise SystemExit("❌ websockets 미설치 — pip install websockets")
 
-    path = os.path.join(MEETINGS_DIR, args.meeting, args.audio)
+    if args.file:
+        path = os.path.expanduser(args.file)
+    elif args.meeting:
+        path = os.path.join(MEETINGS_DIR, args.meeting, args.audio)
+    else:
+        raise SystemExit("❌ --meeting 또는 --file 중 하나는 필요")
     if not os.path.isfile(path):
         raise SystemExit(f"❌ 오디오 없음: {path}")
 
     pcm = load_pcm16(path)
     duration = len(pcm) / 2 / REALTIME_SAMPLE_RATE
-    session_id = args.session_id or args.meeting.rsplit("_", 1)[0]
+    session_id = args.session_id or (args.meeting.rsplit("_", 1)[0] if args.meeting else "replay")
 
     query = {}
     if args.participant_name:
@@ -79,7 +109,7 @@ async def main():
     if query:
         url += "?" + urllib.parse.urlencode(query, encoding="utf-8")
 
-    print(f"오디오   : {args.meeting}/{args.audio} ({duration:.1f}초)")
+    print(f"오디오   : {os.path.basename(path)} ({duration:.1f}초)")
     print(f"접속     : {url}")
     print(f"속도     : {args.speed}x\n")
 
