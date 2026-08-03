@@ -283,3 +283,6 @@ class VoiceProfileResponse(BaseModel):
     speaker_name: Optional[str] = None
     name_extraction_failed: bool = False
     detected_text: Optional[str] = None
+
+class RegisteredVoiceProfileListResponse(BaseModel):
+    names: list[str]
