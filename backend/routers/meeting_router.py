@@ -612,6 +612,12 @@ def update_meeting_segment_api(
     require_workspace_member(db, workspace_id, current_user_id)
     _get_meeting_or_404(db, meeting_id, workspace_id)
 
+    if request.content is None and request.speaker_label is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+    
     segment = meeting_crud.get_segment(db, segment_id)
     if not segment or segment.meeting_id != meeting_id:
         raise HTTPException(
@@ -619,7 +625,9 @@ def update_meeting_segment_api(
             detail="발화 세그먼트를 찾을 수 없습니다.",
         )
 
-    updated = meeting_crud.update_segment_content(db, segment_id, request.content)
+    updated = meeting_crud.update_segment_content(
+        db, segment_id, content=request.content, speaker_label=request.speaker_label,
+    )    
     return MeetingSegmentResponse.model_validate(updated)
 
 
