@@ -529,6 +529,10 @@ export default function App() {
           workspaceId={currentWorkspaceId}
           userId={currentUser.id}
           userName={currentUser.name}
+          tasks={realTasks.tasks}
+          onCreateTask={realTasks.createTask}
+          onUpdateTask={realTasks.updateTask}
+          onDeleteTask={realTasks.removeTask}
           onNavigate={(key) => setSelection({ type: "placeholder", key })}
           onBeginScheduledMeeting={(meetingId) => {
             liveMeeting.beginScheduled(meetingId);

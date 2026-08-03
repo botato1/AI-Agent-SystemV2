@@ -13,7 +13,7 @@ import {
   updateMeetingInfoApi,
   deleteMeetingApi,
 } from "../services/meeting";
-import { PlaceholderKey } from "../types";
+import { PlaceholderKey, Task } from "../types";
 import { MicIcon, WarningIcon, CloseIcon, TrashIcon, PencilIcon, CheckIcon, PersonIcon, PlayIcon } from "./icons";
 import WelcomeOnboarding from "./WelcomeOnboarding";
 import MeetingSearchModal from "./MeetingSearchModal";
@@ -26,6 +26,10 @@ interface HomeViewProps {
   workspaceId: string;
   userId: string;
   userName: string;
+  tasks: Task[];
+  onCreateTask: (input: Omit<Task, "id">) => void;
+  onUpdateTask: (task: Task) => void;
+  onDeleteTask: (id: string) => void;
   onNavigate: (key: PlaceholderKey) => void;
   onBeginScheduledMeeting: (meetingId: string) => void;
   t: any;
@@ -40,37 +44,13 @@ interface UpcomingFormData {
   attendeeIds: string[];
 }
 
-interface LocalEvent {
-  id: string;
-  title: string;
-  date: string;
-  time: string;
-}
-
-type UpcomingKind = "meeting" | "memo";
+type UpcomingKind = "meeting" | "task";
 type UpcomingListItem =
   | { kind: "meeting"; sortKey: string; data: UpcomingMeeting }
-  | { kind: "memo"; sortKey: string; data: LocalEvent };
+  | { kind: "task"; sortKey: string; data: Task };
 
 function onboardingStorageKey(userId: string): string {
   return `onboarding_seen_${userId}`;
-}
-
-function localEventsStorageKey(workspaceId: string): string {
-  return `home_local_events_${workspaceId}`;
-}
-
-function loadLocalEvents(workspaceId: string): LocalEvent[] {
-  try {
-    const raw = localStorage.getItem(localEventsStorageKey(workspaceId));
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalEvents(workspaceId: string, items: LocalEvent[]) {
-  localStorage.setItem(localEventsStorageKey(workspaceId), JSON.stringify(items));
 }
 
 function formatShortDate(iso: string): string {
@@ -244,20 +224,21 @@ function UpcomingModal({
   onSave,
 }: {
   workspaceId: string;
-  editingItem?: { kind: "meeting"; data: UpcomingMeeting } | { kind: "memo"; data: LocalEvent } | null;
+  editingItem?: { kind: "meeting"; data: UpcomingMeeting } | { kind: "task"; data: Task } | null;
   onClose: () => void;
   onSave: (kind: UpcomingKind, data: UpcomingFormData) => void;
 }) {
   const isEditing = !!editingItem;
   const editingMeeting = editingItem?.kind === "meeting" ? editingItem.data : null;
-  const editingMemo = editingItem?.kind === "memo" ? editingItem.data : null;
+  const editingTask = editingItem?.kind === "task" ? editingItem.data : null;
+  const editingTaskDeadline = editingTask?.deadline ? editingTask.deadline.split("T") : null;
 
   const [kind, setKind] = useState<UpcomingKind>(editingItem?.kind || "meeting");
-  const [title, setTitle] = useState(editingItem?.data.title || "");
+  const [title, setTitle] = useState(editingMeeting?.title || editingTask?.task || "");
   const [topic, setTopic] = useState(editingMeeting?.topic || "");
   const [location, setLocation] = useState(editingMeeting?.location || "");
-  const [date, setDate] = useState(editingMemo?.date || new Date().toISOString().slice(0, 10));
-  const [time, setTime] = useState(editingMemo?.time || "15:00");
+  const [date, setDate] = useState(editingTaskDeadline?.[0] || new Date().toISOString().slice(0, 10));
+  const [time, setTime] = useState(editingTaskDeadline?.[1] || "15:00");
 
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedAttendeeIds, setSelectedAttendeeIds] = useState<Set<string>>(new Set());
@@ -288,7 +269,7 @@ function UpcomingModal({
 
   function handleFormSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const needsDateTime = kind === "memo" || !isEditing;
+    const needsDateTime = kind === "task" || !isEditing;
     if (!title.trim() || (needsDateTime && (!date || !time))) return;
     onSave(kind, {
       title: title.trim(),
@@ -328,12 +309,12 @@ function UpcomingModal({
             </button>
             <button
               type="button"
-              onClick={() => setKind("memo")}
+              onClick={() => setKind("task")}
               className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
-                kind === "memo" ? "bg-recall-accent text-white" : "text-recall-textMuted hover:text-recall-text"
+                kind === "task" ? "bg-recall-accent text-white" : "text-recall-textMuted hover:text-recall-text"
               }`}
             >
-              일반 일정
+              할 일 등록
             </button>
           </div>
         )}
@@ -519,6 +500,10 @@ export default function HomeView({
   workspaceId,
   userId,
   userName,
+  tasks,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
   onNavigate,
   onBeginScheduledMeeting,
   t,
@@ -533,10 +518,9 @@ export default function HomeView({
   const { contradictions: unresolvedContradictions } = useContradictions(workspaceId);
 
   const [upcoming, setUpcoming] = useState<UpcomingMeeting[]>([]);
-  const [localEvents, setLocalEvents] = useState<LocalEvent[]>(() => loadLocalEvents(workspaceId));
   const [showUpcomingModal, setShowUpcomingModal] = useState(false);
   const [editingItem, setEditingItem] = useState<
-    { kind: "meeting"; data: UpcomingMeeting } | { kind: "memo"; data: LocalEvent } | null
+    { kind: "meeting"; data: UpcomingMeeting } | { kind: "task"; data: Task } | null
   >(null);
 
   const [showSearchModal, setShowSearchModal] = useState(false);
@@ -552,7 +536,6 @@ export default function HomeView({
 
   useEffect(() => {
     loadUpcoming();
-    setLocalEvents(loadLocalEvents(workspaceId));
   }, [workspaceId]);
 
   if (!hasSeenOnboarding) {
@@ -569,17 +552,20 @@ export default function HomeView({
   }
 
   async function handleSaveUpcoming(kind: UpcomingKind, data: UpcomingFormData) {
-    if (kind === "memo") {
-      let next: LocalEvent[];
-      if (editingItem?.kind === "memo") {
-        next = localEvents.map((e) =>
-          e.id === editingItem.data.id ? { ...e, title: data.title, date: data.date, time: data.time } : e
-        );
+    if (kind === "task") {
+      const deadline = `${data.date}T${data.time}`;
+      if (editingItem?.kind === "task") {
+        onUpdateTask({ ...editingItem.data, task: data.title, deadline });
       } else {
-        next = [...localEvents, { id: crypto.randomUUID(), title: data.title, date: data.date, time: data.time }];
+        onCreateTask({
+          task: data.title,
+          description: null,
+          assignee: null,
+          deadline,
+          status: "todo",
+          priority: "medium",
+        });
       }
-      setLocalEvents(next);
-      saveLocalEvents(workspaceId, next);
     } else if (editingItem?.kind === "meeting") {
       const res = await updateMeetingInfoApi(workspaceId, editingItem.data.id, {
         title: data.title,
@@ -612,10 +598,8 @@ export default function HomeView({
   }
 
   async function handleRemoveUpcoming(item: UpcomingListItem) {
-    if (item.kind === "memo") {
-      const next = localEvents.filter((e) => e.id !== item.data.id);
-      setLocalEvents(next);
-      saveLocalEvents(workspaceId, next);
+    if (item.kind === "task") {
+      onDeleteTask(item.data.id);
       return;
     }
     const res = await deleteMeetingApi(workspaceId, item.data.id);
@@ -631,9 +615,12 @@ export default function HomeView({
     onBeginScheduledMeeting(id);
   }
 
+  // 마감일이 지정돼 있고 아직 완료 안 된 할 일만 "예정된 회의" 목록에 같이 보여준다
+  const upcomingTasks = tasks.filter((t) => t.deadline && t.status !== "done");
+
   const upcomingListItems: UpcomingListItem[] = [
     ...upcoming.map((m): UpcomingListItem => ({ kind: "meeting", sortKey: m.scheduled_at, data: m })),
-    ...localEvents.map((e): UpcomingListItem => ({ kind: "memo", sortKey: `${e.date}T${e.time}`, data: e })),
+    ...upcomingTasks.map((t): UpcomingListItem => ({ kind: "task", sortKey: t.deadline as string, data: t })),
   ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
 
   const now = new Date();
@@ -718,7 +705,7 @@ export default function HomeView({
             {/* 예정된 회의 */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between border-b border-recall-border/60 pb-2">
-                <p className="text-base font-bold text-recall-text">예정된 회의</p>
+                <p className="text-base font-bold text-recall-text">예정된 일정</p>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-recall-textMuted">
                     {now.getFullYear()}년 {now.getMonth() + 1}월
@@ -741,11 +728,12 @@ export default function HomeView({
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
                   {upcomingListItems.map((item) => {
                     const isMeeting = item.kind === "meeting";
-                    const iso = isMeeting ? item.data.scheduled_at : `${item.data.date}T${item.data.time}`;
+                    const iso = isMeeting ? item.data.scheduled_at : (item.data.deadline as string);
                     const dayInfo = getUpcomingDayLabel(iso);
+                    const itemTitle = isMeeting ? item.data.title : item.data.task;
                     const subLabel = isMeeting
                       ? item.data.attendees.map((a) => a.display_name).join(", ") || "참석자 미정"
-                      : "일정";
+                      : "할 일";
                     return (
                       <div
                         key={`${item.kind}-${item.data.id}`}
@@ -759,8 +747,8 @@ export default function HomeView({
                         </div>
 
                         <div className="min-w-0 flex-1 pl-2">
-                          <p className="truncate text-xs font-bold text-recall-text" title={item.data.title}>
-                            {item.data.title}
+                          <p className="truncate text-xs font-bold text-recall-text" title={itemTitle}>
+                            {itemTitle}
                           </p>
                           <p className="truncate text-[10px] text-recall-textMuted mt-0.5" title={subLabel}>
                             {subLabel}

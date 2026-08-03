@@ -21,13 +21,22 @@ function toLocalStatus(status: BackendTaskStatus): TaskStatus {
   return status === "open" ? "todo" : status;
 }
 
+// 서버가 주는 due_at(UTC ISO)을 로컬 시간 기준 "YYYY-MM-DDTHH:mm" 문자열로 바꾼다.
+// <input type="date">/<input type="time"> 값이랑 그대로 맞물리게 하기 위함 - 여기서
+// 잘라서 날짜만 남기면 시간 정보가 없어지므로, 항상 날짜+시간을 함께 보존한다.
+function toLocalDateTimeInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function toLocalTask(bt: BackendTask, memberNameById: Record<string, string>): Task {
   return {
     id: bt.id,
     task: bt.title,
     description: bt.description || null,
     assignee: bt.assignee_label || (bt.assignee_id ? memberNameById[bt.assignee_id] : null) || null,
-    deadline: bt.due_at ? bt.due_at.slice(0, 10) : null,
+    deadline: bt.due_at ? toLocalDateTimeInput(bt.due_at) : null,
     status: toLocalStatus(bt.status),
     priority: bt.priority ?? "medium",
   };
