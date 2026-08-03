@@ -35,7 +35,7 @@ async def register_global_profile(request: Request, speaker_name: Optional[str] 
     추출하고 목소리 지문을 영구 저장한다. 이후 회의에선 재녹음 없이
     참석자 선택만으로 이 프로필이 사용됨 (WebSocket의 attendees 파라미터).
 
-    - 이름 자동 추출 실패 시 speaker_name 쿼리 파라미터로 직접 지정 (폴백 UI용)
+    - speaker_name을 주면 그 이름으로 저장한다(자동 추출보다 우선). 안 주면 발화에서 추출
     - 같은 이름으로 다시 등록하면 덮어씀 = 재등록 (감기/마이크 변경 등으로
       목소리가 달라졌을 때 갱신하는 용도라 의도된 동작)
     """
@@ -47,7 +47,11 @@ async def register_global_profile(request: Request, speaker_name: Optional[str] 
 
     extracted_name = extract_name_from_greeting(detected_text)
     name_extraction_failed = extracted_name is None
-    final_name = extracted_name or speaker_name
+    # 호출자가 이름을 명시했으면 그게 우선이다. 자동 추출은 편의 기능이지 지시를
+    # 뒤집을 권한이 없다 — 예전엔 추출값이 우선이라, 오디오에 다른 이름이 섞여 있으면
+    # 엉뚱한 이름으로 저장됐다(실측: speaker_name=이승주로 요청했는데 오디오 속
+    # "승주님 DB는..."에서 뽑힌 '승주'로 저장돼 이승주 프로필이 사라짐).
+    final_name = speaker_name or extracted_name
 
     if not final_name:
         return {

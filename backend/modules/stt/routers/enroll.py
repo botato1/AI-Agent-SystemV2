@@ -53,7 +53,9 @@ async def enroll_speaker(session_id: str, request: Request, speaker_name: Option
     # 텍스트에서 이름 자동 추출, 실패하면 수동 입력값으로 폴백
     extracted_name = extract_name_from_greeting(detected_text)
     name_extraction_failed = extracted_name is None
-    final_name = extracted_name or speaker_name
+    # 호출자가 명시한 이름이 우선 — 자동 추출은 편의 기능이지 지시를 뒤집으면 안 된다
+    # (routers/profiles.py의 같은 주석 참고: 실측 사고 사례 있음)
+    final_name = speaker_name or extracted_name
 
     if not final_name:
         return {
