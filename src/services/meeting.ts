@@ -14,6 +14,7 @@ export type MeetingStatus =
   | "cancelled";
 export type GenerationStatus = "pending" | "processing" | "completed" | "failed";
 export type DecisionStatus = "active" | "superseded" | "cancelled";
+export type RecordingMode = "single_device" | "individual";
 
 export interface Meeting {
   id: string;
@@ -25,6 +26,7 @@ export interface Meeting {
   topic?: string | null;
   input_type: MeetingInputType;
   status: MeetingStatus;
+  recording_mode?: RecordingMode;
   started_by: string;
   started_at?: string | null;
   scheduled_at?: string | null;
@@ -465,6 +467,79 @@ export async function getMeetingSegmentsApi(
 }
 
 /**
+ * 4-1. 발화 세그먼트 내용 수정 API (STT 오인식 정정용)
+ * (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/segments/{segment_id})
+ * 백엔드 미구현 — 엔드포인트 추가되면 바로 동작하도록 미리 연결해둠.
+ */
+export interface UpdateMeetingSegmentResponse {
+  status: "success" | "error";
+  segment: MeetingSegment | null;
+  message: string;
+  error: string | null;
+}
+
+export async function updateMeetingSegmentApi(
+  workspaceId: string,
+  meetingId: string,
+  segmentId: string,
+  content: string
+): Promise<UpdateMeetingSegmentResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      segment: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/segments/${segmentId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "발화 내용 수정에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 발화 세그먼트입니다.";
+
+      return {
+        status: "error",
+        segment: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      segment: data.segment || data,
+      message: data.message || "발화 내용이 수정되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("updateMeetingSegmentApi error:", error);
+    return {
+      status: "error",
+      segment: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
  * 5. 회의 요약 조회 API (GET /api/workspaces/{workspace_id}/meetings/{meeting_id}/summary)
  */
 export async function getMeetingSummaryApi(
@@ -513,6 +588,70 @@ export async function getMeetingSummaryApi(
     };
   } catch (error) {
     console.error("getMeetingSummaryApi error:", error);
+    return {
+      status: "error",
+      summary: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 5-1. 회의 요약 수정 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/summary)
+ * 백엔드 미구현 — 엔드포인트 추가되면 바로 동작하도록 미리 연결해둠.
+ */
+export async function updateMeetingSummaryApi(
+  workspaceId: string,
+  meetingId: string,
+  shortSummary: string
+): Promise<GetMeetingSummaryResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      summary: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/summary`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ short_summary: shortSummary }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "회의 요약 수정에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+
+      return {
+        status: "error",
+        summary: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      summary: data.summary || data,
+      message: data.message || "회의 요약이 수정되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("updateMeetingSummaryApi error:", error);
     return {
       status: "error",
       summary: null,
@@ -664,7 +803,8 @@ export async function uploadMeetingAudioApi(
 export async function startMeetingApi(
   workspaceId: string,
   title: string,
-  relatedRoomId?: string
+  relatedRoomId?: string,
+  recordingMode?: RecordingMode
 ): Promise<StartMeetingResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -684,7 +824,11 @@ export async function startMeetingApi(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ title, related_room_id: relatedRoomId || null }),
+      body: JSON.stringify({
+        title,
+        related_room_id: relatedRoomId || null,
+        recording_mode: recordingMode || "single_device",
+      }),
     });
 
     const data = await response.json();
@@ -715,6 +859,71 @@ export async function startMeetingApi(
     return {
       status: "error",
       meeting: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 8-1. 각자 PC 모드(recording_mode="individual") 회의에 참가 - 본인 몫의 ws_ticket 발급
+ * (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/join)
+ */
+export interface JoinMeetingResponse {
+  status: "success" | "error";
+  wsTicket: string | null;
+  message: string;
+  error: string | null;
+}
+
+export async function joinMeetingApi(workspaceId: string, meetingId: string): Promise<JoinMeetingResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      wsTicket: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/join`,
+      { method: "POST" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "회의 참가에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 참가할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      else if (response.status === 400) defaultMsg = "각자 PC 모드로 시작된 회의가 아닙니다.";
+      else if (response.status === 409) defaultMsg = "지금은 참가할 수 없는 회의 상태입니다.";
+
+      return {
+        status: "error",
+        wsTicket: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      wsTicket: data.ws_ticket,
+      message: "회의에 참가했습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("joinMeetingApi error:", error);
+    return {
+      status: "error",
+      wsTicket: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

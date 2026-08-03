@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
+import { RecordingMode } from "../services/meeting";
 import { CloseIcon, ChevronDownIcon, CheckIcon } from "./icons";
 
 interface MeetingStartModalProps {
   workspaceId: string;
   defaultTitle: string;
   onClose: () => void;
-  onStart: (title: string, attendeeIds: string[]) => void;
+  onStart: (title: string, attendeeIds: string[], location?: string, recordingMode?: RecordingMode) => void;
 }
 
 function generatePrettyDefaultTitle(): string {
@@ -30,6 +31,8 @@ export default function MeetingStartModal({
   onStart,
 }: MeetingStartModalProps) {
   const [title, setTitle] = useState(generatePrettyDefaultTitle);
+  const [location, setLocation] = useState("");
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>("single_device");
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -70,7 +73,7 @@ export default function MeetingStartModal({
 
   function handleSubmit() {
     if (!title.trim()) return;
-    onStart(title.trim(), Array.from(selectedIds));
+    onStart(title.trim(), Array.from(selectedIds), location.trim() || undefined, recordingMode);
   }
 
   // 검색어 필터링
@@ -98,7 +101,7 @@ export default function MeetingStartModal({
         {/* 1. 회의 제목 입력 */}
         <div className="mb-5">
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-            회의 제목
+            회의 제목 <span className="text-recall-danger">*</span>
           </label>
           <input
             autoFocus
@@ -108,6 +111,64 @@ export default function MeetingStartModal({
             placeholder="회의 제목을 입력하세요"
             className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text font-medium outline-none focus:border-recall-accent transition"
           />
+        </div>
+
+        {/* 1-1. 회의 장소 입력 (선택 항목이라 마커 없음, 필수 항목만 * 표시) */}
+        <div className="mb-5">
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
+            장소
+          </label>
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+            placeholder="예: 3층 회의실, 온라인 등"
+            className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text font-medium outline-none focus:border-recall-accent transition"
+          />
+        </div>
+
+        {/* 1-2. 녹음 방식 선택 */}
+        <div className="mb-5">
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
+            녹음 방식
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setRecordingMode("single_device")}
+              className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                recordingMode === "single_device"
+                  ? "border-recall-accent bg-recall-accent/10"
+                  : "border-recall-border hover:bg-white/5"
+              }`}
+            >
+              <p className="text-sm font-semibold text-recall-text">한 공간에서</p>
+              <p className="mt-0.5 text-[11px] text-recall-textMuted leading-relaxed">
+                노트북 한 대로 녹음합니다. 목소리를 구분해 누가 말했는지 자동으로 나눠요.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setRecordingMode("individual")}
+              className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                recordingMode === "individual"
+                  ? "border-recall-accent bg-recall-accent/10"
+                  : "border-recall-border hover:bg-white/5"
+              }`}
+            >
+              <p className="text-sm font-semibold text-recall-text">각자 PC에서</p>
+              <p className="mt-0.5 text-[11px] text-recall-textMuted leading-relaxed">
+                각자 PC에서 접속해 통화하듯 진행합니다. 이름이 이미 정해져 있어 화자가 섞이지 않아요.
+              </p>
+            </button>
+          </div>
+
+          {recordingMode === "single_device" && (
+            <p className="mt-2 rounded-lg bg-white/5 px-3 py-2 text-[11px] leading-relaxed text-recall-textMuted">
+              프로필에서 <span className="font-medium text-recall-text">목소리를 등록해둔 워크스페이스 멤버</span>는
+              화자가 자동으로 실제 이름으로 표시돼요. (아래에서 참석 팀원을 지정하면 그 사람들 위주로 먼저 찾아요)
+            </p>
+          )}
         </div>
 
         {/* 2. 팀원 선택 영역 (아코디언 방식 - 버튼들을 아래로 밀어냄) */}

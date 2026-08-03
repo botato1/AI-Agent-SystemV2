@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { getMeetingExportApi, MeetingExportData } from "../services/meeting";
+import {
+  getMeetingExportApi,
+  updateMeetingSummaryApi,
+  updateMeetingSegmentApi,
+  MeetingExportData,
+} from "../services/meeting";
 import { CloseIcon } from "./icons";
 
 interface MeetingExportModalProps {
@@ -37,6 +42,18 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
   const [isLoading, setIsLoading] = useState(true);
   const [sections, setSections] = useState<SectionFlags>({ summary: true, attendees: true, script: true });
 
+  // 요약 인라인 수정 상태
+  const [isEditingSummary, setIsEditingSummary] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState("");
+  const [isSavingSummary, setIsSavingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // 스크립트(발화 세그먼트) 인라인 수정 상태 - STT 오인식 정정용
+  const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
+  const [segmentDraft, setSegmentDraft] = useState("");
+  const [isSavingSegment, setIsSavingSegment] = useState(false);
+  const [segmentError, setSegmentError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -57,6 +74,64 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
 
   function toggleSection(key: keyof SectionFlags) {
     setSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  function startEditSummary() {
+    if (!data) return;
+    setSummaryError(null);
+    setSummaryDraft(data.short_summary || "");
+    setIsEditingSummary(true);
+  }
+
+  async function saveSummary() {
+    if (!data) return;
+    setIsSavingSummary(true);
+    setSummaryError(null);
+
+    const res = await updateMeetingSummaryApi(workspaceId, meetingId, summaryDraft.trim());
+
+    setIsSavingSummary(false);
+
+    if (res.status === "error") {
+      setSummaryError(res.message);
+      return;
+    }
+
+    setData((prev) => (prev ? { ...prev, short_summary: summaryDraft.trim() } : prev));
+    setIsEditingSummary(false);
+  }
+
+  function startEditSegment(segmentId: string, currentContent: string) {
+    setSegmentError(null);
+    setEditingSegmentId(segmentId);
+    setSegmentDraft(currentContent);
+  }
+
+  async function saveSegment(segmentId: string) {
+    if (!data) return;
+    setIsSavingSegment(true);
+    setSegmentError(null);
+
+    const res = await updateMeetingSegmentApi(workspaceId, meetingId, segmentId, segmentDraft.trim());
+
+    setIsSavingSegment(false);
+
+    if (res.status === "error") {
+      setSegmentError(res.message);
+      return;
+    }
+
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            segments: prev.segments.map((s) =>
+              s.id === segmentId ? { ...s, content: segmentDraft.trim(), is_edited: true } : s
+            ),
+          }
+        : prev
+    );
+    setEditingSegmentId(null);
   }
 
   const sortedSegments = data ? [...data.segments].sort((a, b) => a.segment_index - b.segment_index) : [];
@@ -130,12 +205,54 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
 
                 {sections.summary && (
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                      요약
-                    </p>
-                    <p className="whitespace-pre-line text-sm text-recall-text">
-                      {data.short_summary || "아직 요약이 생성되지 않았습니다."}
-                    </p>
+                    <div className="mb-1 flex items-center justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                        요약
+                      </p>
+                      {!isEditingSummary && (
+                        <button
+                          type="button"
+                          onClick={startEditSummary}
+                          className="print:hidden text-[11px] text-recall-textMuted underline hover:text-recall-text"
+                        >
+                          수정
+                        </button>
+                      )}
+                    </div>
+
+                    {isEditingSummary ? (
+                      <div className="print:hidden flex flex-col gap-2">
+                        <textarea
+                          value={summaryDraft}
+                          onChange={(e) => setSummaryDraft(e.target.value)}
+                          rows={4}
+                          className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
+                        />
+                        {summaryError && <p className="text-xs text-recall-danger">{summaryError}</p>}
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingSummary(false)}
+                            disabled={isSavingSummary}
+                            className="rounded-lg border border-recall-border px-3 py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
+                          >
+                            취소
+                          </button>
+                          <button
+                            type="button"
+                            onClick={saveSummary}
+                            disabled={isSavingSummary}
+                            className="rounded-lg bg-recall-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                          >
+                            {isSavingSummary ? "저장 중..." : "저장"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-line text-sm text-recall-text">
+                        {data.short_summary || "아직 요약이 생성되지 않았습니다."}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -148,12 +265,55 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
                       <p className="text-sm text-recall-textMuted">발화 스크립트가 없습니다.</p>
                     ) : (
                       <div className="space-y-1.5">
-                        {sortedSegments.map((s) => (
-                          <p key={s.id} className="text-sm text-recall-text">
-                            <span className="font-medium">{s.speaker_label || "화자 미상"}</span>
-                            <span className="text-recall-textMuted"> · {s.content}</span>
-                          </p>
-                        ))}
+                        {segmentError && <p className="print:hidden text-xs text-recall-danger">{segmentError}</p>}
+                        {sortedSegments.map((s) =>
+                          editingSegmentId === s.id ? (
+                            <div key={s.id} className="print:hidden flex flex-col gap-1.5">
+                              <span className="text-xs font-medium text-recall-text">
+                                {s.speaker_label || "화자 미상"}
+                              </span>
+                              <textarea
+                                value={segmentDraft}
+                                onChange={(e) => setSegmentDraft(e.target.value)}
+                                rows={2}
+                                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
+                              />
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingSegmentId(null)}
+                                  disabled={isSavingSegment}
+                                  className="rounded-lg border border-recall-border px-2.5 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
+                                >
+                                  취소
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => saveSegment(s.id)}
+                                  disabled={isSavingSegment}
+                                  className="rounded-lg bg-recall-accent px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                                >
+                                  {isSavingSegment ? "저장 중..." : "저장"}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p key={s.id} className="group text-sm text-recall-text">
+                              <span className="font-medium">{s.speaker_label || "화자 미상"}</span>
+                              <span className="text-recall-textMuted"> · {s.content}</span>
+                              {s.is_edited && (
+                                <span className="ml-1.5 text-[10px] text-amber-400">(수정됨)</span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => startEditSegment(s.id, s.content)}
+                                className="print:hidden ml-1.5 text-[11px] text-recall-textMuted underline opacity-0 group-hover:opacity-100 hover:text-recall-text"
+                              >
+                                수정
+                              </button>
+                            </p>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
