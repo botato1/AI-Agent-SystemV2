@@ -131,7 +131,11 @@ def _validate_password_format(password: str) -> None:
 
 
 def _has_profile_update_fields(request: ProfileUpdateRequest) -> bool:
-    return request.display_name is not None or request.new_password is not None
+    return (
+        request.display_name is not None
+        or request.avatar_color is not None
+        or request.new_password is not None
+    )
 
 
 # 아이디 중복 확인
@@ -346,6 +350,9 @@ def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest
             status_code=status.HTTP_404_NOT_FOUND,
             detail="사용자를 찾을 수 없습니다.",
         )
+
+    if request.avatar_color is not None:
+        auth_crud.update_user_profile(db, user.id, avatar_color=request.avatar_color)
 
     if request.display_name is not None:
         display_name = request.display_name.strip()
