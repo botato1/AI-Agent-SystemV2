@@ -10,6 +10,9 @@ import {
   retryDocumentApi,
 } from "../services/document";
 import DocumentDetailPanel from "./DocumentDetailPanel";
+import DocumentOriginalViewer from "./DocumentOriginalViewer";
+
+type PreviewContentTab = "summary" | "original";
 
 function formatDate(iso?: string | null): string {
   if (!iso) return "-";
@@ -78,6 +81,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
   const [previewFigures, setPreviewFigures] = useState<DocumentFigure[]>([]);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [previewContentTab, setPreviewContentTab] = useState<PreviewContentTab>("summary");
 
   // webkitdirectory는 표준 React 타입에 없어서 ref로 직접 설정
   useEffect(() => {
@@ -88,6 +92,8 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
   }, []);
 
   useEffect(() => {
+    setPreviewContentTab("summary");
+
     if (!previewFile) {
       setPreviewDetail(null);
       setPreviewFigures([]);
@@ -184,16 +190,26 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
               const isSelected = w.id === selectedWorktreeId;
               const badge = statusBadge(w.status);
               return (
-                <button
+                <div
                   key={w.id}
                   onClick={() => setSelectedWorktreeId(w.id)}
-                  className={`flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left ${
+                  className={`group relative flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left cursor-pointer ${
                     isSelected
                       ? "border-recall-accent bg-recall-accent/10"
                       : "border-recall-border hover:bg-white/5"
                   }`}
                 >
-                  <span className="truncate text-sm font-medium text-recall-text">{w.root_folder_name}</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteWorktree(w.id);
+                    }}
+                    title="삭제"
+                    className="absolute right-2 top-2 rounded p-1 text-recall-textMuted opacity-0 transition-opacity hover:text-recall-danger group-hover:opacity-100"
+                  >
+                    <TrashIcon size={12} />
+                  </button>
+                  <span className="truncate pr-6 text-sm font-medium text-recall-text">{w.root_folder_name}</span>
                   <span className="flex items-center gap-1.5">
                     <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${badge.className}`}>
                       {badge.label}
@@ -204,7 +220,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                     파일 {w.completed_file_count}/{w.total_file_count}
                     {w.failed_file_count > 0 ? ` · 실패 ${w.failed_file_count}` : ""}
                   </span>
-                </button>
+                </div>
               );
             })
           )}
@@ -242,7 +258,41 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
               <p className="text-base font-medium text-recall-text">{previewFile.name}</p>
               <p className="text-sm text-recall-textMuted">CODE FOLDER · {selectedWorktree.root_folder_name}</p>
             </div>
-            <DocumentDetailPanel detail={previewDetail} figures={previewFigures} isLoading={isPreviewLoading} t={t} />
+
+            <div className="mb-3 flex gap-1 rounded-xl border border-recall-border bg-recall-bgSoft p-1 w-fit">
+              <button
+                onClick={() => setPreviewContentTab("summary")}
+                className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
+                  previewContentTab === "summary"
+                    ? "bg-recall-accent text-white shadow-sm"
+                    : "text-recall-textMuted hover:text-recall-text"
+                }`}
+              >
+                정리된 내용
+              </button>
+              <button
+                onClick={() => setPreviewContentTab("original")}
+                className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
+                  previewContentTab === "original"
+                    ? "bg-recall-accent text-white shadow-sm"
+                    : "text-recall-textMuted hover:text-recall-text"
+                }`}
+              >
+                원본 파일
+              </button>
+            </div>
+
+            {previewContentTab === "summary" ? (
+              <DocumentDetailPanel detail={previewDetail} figures={previewFigures} isLoading={isPreviewLoading} t={t} />
+            ) : (
+              <div className="flex-1 overflow-hidden">
+                <DocumentOriginalViewer
+                  workspaceId={workspaceId}
+                  documentId={previewFile.id}
+                  documentName={previewFile.name}
+                />
+              </div>
+            )}
           </>
         ) : (
           <>

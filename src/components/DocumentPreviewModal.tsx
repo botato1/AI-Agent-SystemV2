@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { DocumentDetail, DocumentFigure, getDocumentApi, getDocumentFiguresApi } from "../services/document";
 import { CloseIcon, DocumentIcon } from "./icons";
 import { cleanExtractedText } from "./DocumentContentBlocks";
-import DocumentOriginalPages from "./DocumentOriginalPages";
+import DocumentOriginalViewer from "./DocumentOriginalViewer";
 
 interface DocumentPreviewModalProps {
   workspaceId: string;
@@ -153,15 +153,12 @@ export default function DocumentPreviewModal({
                 </div>
               )}
 
-              {visibleTab === "original" && hasOriginal && (
-                <div className="rounded-xl border border-recall-border bg-recall-bgMain p-4">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                    원문
-                  </p>
-                  <DocumentOriginalPages
-                    chunks={detail.raw.chunks}
-                    originalText={detail.raw.original_text}
-                    figures={figures}
+              {visibleTab === "original" && (
+                <div className="h-[500px] rounded-xl border border-recall-border bg-recall-bgMain p-2">
+                  <DocumentOriginalViewer
+                    workspaceId={workspaceId}
+                    documentId={documentId}
+                    documentName={documentName}
                   />
                 </div>
               )}

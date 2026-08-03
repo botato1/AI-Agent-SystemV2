@@ -1,3 +1,4 @@
+// 지금 안쓰고 있음
 import { DocumentChunk, DocumentFigure } from "../services/document";
 import ContentBlocks from "./DocumentContentBlocks";
 import FigureGallery from "./FigureGallery";

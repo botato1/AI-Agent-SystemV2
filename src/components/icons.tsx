@@ -33,4 +33,10 @@ export {
   User as PersonIcon,
   Link as LinkIcon,
   Bell as BellIcon,
+  Menu as MenuIcon,
+  Minus as MinusIcon,
+  Download as DownloadIcon,
+  LayoutGrid as GridIcon,
+  Search as SearchIcon,
+  Calendar as CalendarIcon,
 } from "lucide-react";

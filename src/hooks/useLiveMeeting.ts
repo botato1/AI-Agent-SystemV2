@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Meeting,
+  MeetingStart,
+  RecordingMode,
   startMeetingApi,
+  joinMeetingApi,
+  beginScheduledMeetingApi,
   pauseMeetingApi,
   resumeMeetingApi,
   mapSpeakerNamesApi,
   renameMeetingApi,
+  setMeetingAttendeesApi,
+  updateMeetingInfoApi,
+  getMeetingApi,
+  getMeetingListApi,
 } from "../services/meeting";
 
 export type LiveMeetingStatus =
@@ -112,6 +120,37 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   const [contradictionAlerts, setContradictionAlerts] = useState<ContradictionAlert[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // 다른 사람이 "각자 PC에서" 모드로 이미 시작해둔, 지금 참가할 수 있는 회의가 있는지
+  const [joinableMeeting, setJoinableMeeting] = useState<Meeting | null>(null);
+
+  // 아무것도 안 하고 있을 때만(idle) 참가 가능한 회의가 있는지 주기적으로 확인
+  useEffect(() => {
+    if (!workspaceId || status !== "idle") {
+      setJoinableMeeting(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function poll() {
+      const res = await getMeetingListApi(workspaceId);
+      if (cancelled) return;
+      if (res.status === "success") {
+        const found = res.meetings.find(
+          (m) => m.status === "recording" && m.recording_mode === "individual"
+        );
+        setJoinableMeeting(found || null);
+      }
+    }
+
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [workspaceId, status]);
+
   const statusRef = useRef<LiveMeetingStatus>(status);
   useEffect(() => {
     statusRef.current = status;
@@ -190,28 +229,9 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     silentGain.connect(audioContext.destination);
   }
 
-  async function start(title: string, relatedRoomId?: string) {
-    if (status === "recording" || status === "connecting") return;
-
-    setErrorMessage(null);
-    setStatus("connecting");
-    setSegments([]);
-    setPartial({ confirmed: "", tentative: "" });
-    setContradictionAlerts([]);
-    isIntentionalCloseRef.current = false;
-    reconnectDeadlineRef.current = null;
-    clearReconnectTimer();
-
-    const res = await startMeetingApi(workspaceId, title, relatedRoomId);
-    if (res.status !== "success" || !res.meeting) {
-      setStatus("error");
-      setErrorMessage(res.message);
-      return;
-    }
-
-    // 재연결 시에도 그대로 재사용할 값 — React state(meeting)는 비동기라 클로저에서
-    // 참조하면 오래된 값을 읽을 위험이 있어, 여기 지역 변수로 직접 들고 있는다.
-    const meetingData = res.meeting;
+  // 회의 생성(신규 시작이든, 예약된 회의를 시작하든)이 끝난 뒤 실제로 WS를 붙이고 마이크를
+  // 켜는 부분 - start()와 beginScheduled() 둘 다 이 지점부터 완전히 동일하게 동작한다.
+  function beginSession(meetingData: MeetingStart) {
     setMeeting(meetingData);
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || window.location.origin;
@@ -336,6 +356,83 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     connect();
   }
 
+  function resetSessionState() {
+    setErrorMessage(null);
+    setStatus("connecting");
+    setSegments([]);
+    setPartial({ confirmed: "", tentative: "" });
+    setContradictionAlerts([]);
+    isIntentionalCloseRef.current = false;
+    reconnectDeadlineRef.current = null;
+    clearReconnectTimer();
+  }
+
+  async function start(
+    title: string,
+    relatedRoomId?: string,
+    attendeeIds?: string[],
+    location?: string,
+    recordingMode?: RecordingMode
+  ) {
+    if (status === "recording" || status === "connecting") return;
+    resetSessionState();
+
+    const res = await startMeetingApi(workspaceId, title, relatedRoomId, recordingMode);
+    if (res.status !== "success" || !res.meeting) {
+      setStatus("error");
+      setErrorMessage(res.message);
+      return;
+    }
+
+    // 시작 전 미리 고른 참석자가 있으면 회의 생성 직후 바로 지정 - 녹음 자체를
+    // 막을 필요는 없으니 결과를 기다리지 않는다 (실패해도 회의 상세에서 나중에 다시 지정 가능)
+    if (attendeeIds && attendeeIds.length > 0) {
+      setMeetingAttendeesApi(workspaceId, res.meeting.id, attendeeIds);
+    }
+
+    // 장소도 마찬가지 - start API엔 없는 필드라, 생성 직후 기존 "회의 정보 수정" API로 반영한다
+    if (location) {
+      updateMeetingInfoApi(workspaceId, res.meeting.id, { title, location });
+    }
+
+    beginSession(res.meeting);
+  }
+
+  // 다른 사람이 "각자 PC에서" 모드로 시작해둔 회의에 내 몫의 티켓을 받아서 합류한다.
+  // 진행 방식은 start()랑 동일 - 회의 자체를 새로 만드는 대신 이미 있는 회의 정보 + 내 티켓으로 세션을 연다.
+  async function join(meetingId: string) {
+    if (status === "recording" || status === "connecting") return;
+    resetSessionState();
+
+    const [meetingRes, joinRes] = await Promise.all([
+      getMeetingApi(workspaceId, meetingId),
+      joinMeetingApi(workspaceId, meetingId),
+    ]);
+
+    if (meetingRes.status !== "success" || !meetingRes.meeting || joinRes.status !== "success" || !joinRes.wsTicket) {
+      setStatus("error");
+      setErrorMessage(joinRes.message || meetingRes.message);
+      return;
+    }
+
+    beginSession({ ...meetingRes.meeting, ws_ticket: joinRes.wsTicket });
+  }
+
+  // 예약해둔 회의를 실제 녹음으로 전환한다 - 참석자는 예약 시점에 이미 지정돼 있으므로 다시 넘길 필요 없음
+  async function beginScheduled(meetingId: string) {
+    if (status === "recording" || status === "connecting") return;
+    resetSessionState();
+
+    const res = await beginScheduledMeetingApi(workspaceId, meetingId);
+    if (res.status !== "success" || !res.meeting) {
+      setStatus("error");
+      setErrorMessage(res.message);
+      return;
+    }
+
+    beginSession(res.meeting);
+  }
+
   async function pause() {
     if (status !== "recording" || !meeting) return;
     const res = await pauseMeetingApi(workspaceId, meeting.id);
@@ -435,7 +532,10 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     partial,
     contradictionAlerts,
     errorMessage,
+    joinableMeeting,
     start,
+    join,
+    beginScheduled,
     pause,
     resume,
     stop,

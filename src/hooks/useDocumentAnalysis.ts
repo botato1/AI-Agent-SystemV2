@@ -62,9 +62,14 @@ export function useDocumentAnalysis(workspaceId: string) {
     return () => clearInterval(timer);
   }, [documents, workspaceId]);
 
+  const activeDocStatus = documents.find((d) => d.id === activeDocId)?.status ?? null;
+
   useEffect(() => {
     async function loadDetail() {
-      if (!workspaceId || !activeDocId) {
+      // 분석이 아직 안 끝났거나(임시 업로드 ID 포함) 실패한 문서는 상세/figures 데이터를
+      // 화면에서 쓰지 않으므로 조회하지 않는다 - 임시 ID로 조회를 시도하면 서버에 없는
+      // ID라 404만 남긴다.
+      if (!workspaceId || !activeDocId || activeDocStatus !== "analyzed") {
         setActiveDocDetail(null);
         setActiveDocFigures([]);
         return;
@@ -80,7 +85,7 @@ export function useDocumentAnalysis(workspaceId: string) {
     }
 
     loadDetail();
-  }, [workspaceId, activeDocId]);
+  }, [workspaceId, activeDocId, activeDocStatus]);
 
   async function uploadDocument(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
