@@ -35,6 +35,14 @@ _MIN_PARTIAL_SPEAKER_SAMPLES = REALTIME_SAMPLE_RATE
 # 임베딩 하한(1초)보다 넉넉히 잡는다 — 딱 1초짜리 오디오로는 판정이 흔들린다.
 _MIN_SPLIT_TURN_SAMPLES = int(1.5 * REALTIME_SAMPLE_RATE)
 
+# "판정했는데 등록된 누구와도 안 닮음"을 나타내는 내부 표식.
+#
+# None과 반드시 구분해야 한다. None은 "구간이 짧아 판정 자체가 불가"라는 뜻이고
+# 이웃 화자를 승계하는데, 미상을 None으로 뭉뚱그리면 그 구간이 이웃 라벨을 물려받아
+# **화자 경계가 지워진다** — 실측에서 분할이 6회→3회로 줄고 세 사람이 28초짜리 한
+# 덩어리로 묶인 원인이 이것이었다. 미상은 승계 대상이 아니라 그 자체로 경계다.
+_UNKNOWN_SPEAKER = "\x00unknown"
+
 
 def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
     """두 단어 리스트에서 앞에서부터 일치하는 부분만 뽑음 (Local Agreement 핵심 로직)."""
@@ -266,9 +274,12 @@ class RealtimeSTTSession:
         for span in spans:
             piece = audio[span["start"]:span["end"]]
             if len(piece) < _MIN_PARTIAL_SPEAKER_SAMPLES:
-                labels.append(None)
+                labels.append(None)          # 짧아서 판정 불가 → 아래에서 이웃 승계
             else:
-                labels.append(self.speaker_identifier.identify(piece, update_profile=False))
+                # 판정은 됐지만 누구와도 안 닮은 경우(하한 미달)는 이웃을 승계하면 안 된다.
+                # 그 자체로 화자 경계이므로 별도 표식을 둔다.
+                labels.append(self.speaker_identifier.identify(piece, update_profile=False)
+                              or _UNKNOWN_SPEAKER)
 
         # 판정 못 한 구간을 앞쪽 이웃으로, 앞이 없으면 뒤쪽 이웃으로 채운다
         for i, label in enumerate(labels):
@@ -287,6 +298,8 @@ class RealtimeSTTSession:
             turns.append((turn_start, spans[i]["start"], labels[i - 1]))
             turn_start = spans[i]["start"]
         turns.append((turn_start, len(audio), labels[-1]))
+        # 내부 표식은 밖으로 내보내지 않는다 — 호출부는 None(미상)으로 받는다
+        turns = [(a, b, None if c == _UNKNOWN_SPEAKER else c) for a, b, c in turns]
 
         # 너무 짧은 턴은 앞 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
         # 라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
