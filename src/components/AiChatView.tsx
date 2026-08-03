@@ -13,14 +13,6 @@ function ThinkingDots() {
   );
 }
 
-// 💡 첨부 이미지 디자인 형태의 추천 질문 4개 (2열 배치)
-const QUICK_PROMPTS = [
-  "이 문서 요약해줘",
-  "주요 할 일 정리해줘",
-  "담당자별 업무 알려줘",
-  "중요한 내용 알려줘",
-];
-
 export default function AiChatView({ workspaceId, t }: { workspaceId: string; t: any }) {
   const { messages, isLoading, isSending, sendMessage, fetchSources } = useAiChat(workspaceId);
   const [input, setInput] = useState("");
@@ -57,7 +49,6 @@ export default function AiChatView({ workspaceId, t }: { workspaceId: string; t:
         {isLoading ? (
           <p className="text-sm text-recall-textMuted">{t.common_loading}</p>
         ) : messages.length === 0 ? (
-          /* 이미지와 동일한 레이아웃 (대제목 + 소제목 + 2열 둥근 버튼 카드) */
           <div className="flex h-full flex-col items-center justify-center gap-4 text-center py-8">
             <div>
               <h1 className="text-2xl font-bold text-recall-text tracking-tight">
@@ -66,19 +57,6 @@ export default function AiChatView({ workspaceId, t }: { workspaceId: string; t:
               <p className="text-xs text-recall-textMuted mt-1.5">
                 회의록 분석, 업무 정리, 일정 관리 등 무엇이든 물어보세요
               </p>
-            </div>
-
-            {/* 2x2 깔끔한 알약 형태 버튼 그리드 */}
-            <div className="grid grid-cols-2 gap-3 max-w-lg w-full mt-4">
-              {QUICK_PROMPTS.map((prompt, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleSend(prompt)}
-                  className="flex items-center justify-start rounded-xl border border-recall-border bg-recall-bgSoft px-4 py-3 text-xs font-medium text-recall-text transition hover:border-recall-accent/60 hover:bg-white/5 shadow-sm text-left"
-                >
-                  <span>{prompt}</span>
-                </button>
-              ))}
             </div>
           </div>
         ) : (

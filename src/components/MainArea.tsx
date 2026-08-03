@@ -400,6 +400,21 @@ function MessageTab({
   const dragCounter = useRef(0);
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const shouldScrollToBottomRef = useRef(false);
+
+  function scrollToBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // 메시지 전송은 서버 응답을 기다린 뒤에야 목록에 반영되므로(낙관적 업데이트 아님),
+  // 전송 시점엔 스크롤 예약만 해두고 실제 스크롤은 messages가 갱신된 뒤 useEffect에서 실행한다.
+  useEffect(() => {
+    if (shouldScrollToBottomRef.current) {
+      shouldScrollToBottomRef.current = false;
+      scrollToBottom();
+    }
+  }, [messages]);
 
   const memberActivities: MemberActivity[] = t.mock_member_activities || [];
 
@@ -431,7 +446,11 @@ function MessageTab({
   }
 
   function handleSend(text: string) {
-    if (text) onSend(text);
+    if (text) {
+      // 위로 스크롤해서 옛날 메시지 보다가 새로 채팅 치면, 방금 보낸 메시지를 바로 볼 수 있게 맨 아래로 이동
+      shouldScrollToBottomRef.current = true;
+      onSend(text);
+    }
 
     if (pendingFiles.length > 0) {
       const voiceFiles = pendingFiles.filter((f) => f.type.startsWith("audio/"));
@@ -534,6 +553,7 @@ function MessageTab({
               </div>
             </div>
           ))}
+          <div ref={bottomRef} />
         </div>
 
         {contextMenu && (
