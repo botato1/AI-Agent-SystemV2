@@ -25,12 +25,13 @@ interface AuthViewProps {
   registeredAccounts: RegisteredAccount[];
   onSignUp: (account: RegisteredAccount) => void;
   onLogIn: (user: User) => void;
+  inviteToken?: string | null;
 }
 
 type Mode = "login" | "signup";
 
-export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: AuthViewProps) {
-  const [mode, setMode] = useState<Mode>("login");
+export default function AuthView({ registeredAccounts, onSignUp, onLogIn, inviteToken }: AuthViewProps) {
+  const [mode, setMode] = useState<Mode>(inviteToken ? "signup" : "login");
 
   // 폼 입력 상태
   const [name, setName] = useState("");
@@ -207,6 +208,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
       email: fullEmail,
       password: password.trim(),
       displayName: name.trim(),
+      inviteToken,
     });
 
     if (signUpResult.status !== "success") {
@@ -216,6 +218,16 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
     }
 
     saveAvatarColor(username.trim(), avatarColor);
+
+    if (inviteToken) {
+      window.history.replaceState(null, "", window.location.pathname);
+
+      if (signUpResult.inviteStatus === "invite_expired") {
+        alert("초대 링크가 만료됐어요. 워크스페이스 관리자에게 다시 초대를 요청해 주세요.");
+      } else if (signUpResult.inviteStatus === "invite_invalid") {
+        alert("초대 링크가 유효하지 않아요. 워크스페이스 관리자에게 다시 초대를 요청해 주세요.");
+      }
+    }
 
     onSignUp({
       username: username.trim(),
@@ -319,6 +331,12 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn }: Auth
         <p className="mb-5 text-base text-recall-textMuted">
           {mode === "login" ? "다시 오셨네요! 로그인해주세요." : "회원가입하고 팀과 함께 시작해보세요."}
         </p>
+
+        {mode === "signup" && inviteToken && (
+          <p className="mb-5 rounded-xl border border-recall-accent/40 bg-recall-accent/10 px-3.5 py-2.5 text-sm text-recall-text">
+            워크스페이스 초대 링크로 오셨네요! 가입을 완료하면 자동으로 참여됩니다.
+          </p>
+        )}
 
         {/* 회원가입 모드일 때만 아바타 노출 */}
         {mode === "signup" && (

@@ -20,6 +20,7 @@ import MeetingSearchModal from "./MeetingSearchModal";
 import MeetingAttendeesModal from "./MeetingAttendeesModal";
 import MeetingExportModal from "./MeetingExportModal";
 import ManageMembersModal from "./ManageMembersModal";
+import InviteMemberModal from "./InviteMemberModal";
 
 interface HomeViewProps {
   workspaceId: string;
@@ -540,6 +541,7 @@ export default function HomeView({
 
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showManageMembersModal, setShowManageMembersModal] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
   const [showSelectExportModal, setShowSelectExportModal] = useState(false);
   const [selectedExportMeetingId, setSelectedExportMeetingId] = useState<string | null>(null);
 
@@ -757,8 +759,12 @@ export default function HomeView({
                         </div>
 
                         <div className="min-w-0 flex-1 pl-2">
-                          <p className="truncate text-xs font-bold text-recall-text">{item.data.title}</p>
-                          <p className="truncate text-[10px] text-recall-textMuted mt-0.5">{subLabel}</p>
+                          <p className="truncate text-xs font-bold text-recall-text" title={item.data.title}>
+                            {item.data.title}
+                          </p>
+                          <p className="truncate text-[10px] text-recall-textMuted mt-0.5" title={subLabel}>
+                            {subLabel}
+                          </p>
                         </div>
 
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 ml-1 flex-shrink-0">
@@ -1022,6 +1028,15 @@ export default function HomeView({
           workspaceName="현재 워크스페이스"
           currentUserId={userId}
           onClose={() => setShowManageMembersModal(false)}
+          onOpenInviteModal={() => setShowInviteModal(true)}
+        />
+      )}
+
+      {showInviteModal && (
+        <InviteMemberModal
+          workspaceId={workspaceId}
+          workspaceName="현재 워크스페이스"
+          onClose={() => setShowInviteModal(false)}
         />
       )}
 
