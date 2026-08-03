@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
+import { getVoiceProfileListApi } from "../services/voice";
 import { RecordingMode } from "../services/meeting";
-import { CloseIcon, ChevronDownIcon, CheckIcon } from "./icons";
+import { CloseIcon, ChevronDownIcon, CheckIcon, MicIcon } from "./icons";
 
 interface MeetingStartModalProps {
   workspaceId: string;
@@ -35,7 +36,8 @@ export default function MeetingStartModal({
   const [recordingMode, setRecordingMode] = useState<RecordingMode>("single_device");
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  
+  const [voiceRegisteredNames, setVoiceRegisteredNames] = useState<Set<string>>(new Set());
+
   // 드롭다운 및 검색 상태
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -53,6 +55,27 @@ export default function MeetingStartModal({
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // 목소리 등록된 사람 표시용 - STT 서버에 등록된 화자 이름 전체 목록을 받아서,
+  // 워크스페이스 멤버 이름과 매칭되는 사람 옆에 마이크 아이콘을 붙여준다.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadVoiceNames() {
+      const res = await getVoiceProfileListApi();
+      if (!cancelled && res.status === "success") {
+        setVoiceRegisteredNames(new Set(res.names.map((n) => n.trim())));
+      }
+    }
+    loadVoiceNames();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function isVoiceRegistered(member: WorkspaceMemberInfo): boolean {
+    const name = (member.display_name || member.username).trim();
+    return voiceRegisteredNames.has(name);
+  }
 
   function toggleMember(userId: string) {
     setSelectedIds((prev) => {
@@ -219,7 +242,12 @@ export default function MeetingStartModal({
                         onClick={() => toggleMember(m.user_id)}
                         className="flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-sm hover:bg-white/5 transition"
                       >
-                        <span className="font-medium text-recall-text">{name}</span>
+                        <span className="flex items-center gap-1.5 font-medium text-recall-text">
+                          {name}
+                          {isVoiceRegistered(m) && (
+                            <MicIcon size={12} className="flex-shrink-0 text-recall-accent" />
+                          )}
+                        </span>
                         {isSelected && (
                           <CheckIcon size={16} className="text-recall-accent flex-shrink-0" />
                         )}
@@ -242,6 +270,11 @@ export default function MeetingStartModal({
                     className="inline-flex items-center gap-1.5 rounded-full border border-recall-border bg-recall-accent/10 px-2.5 py-1 text-xs font-medium text-recall-text"
                   >
                     <span>{name}</span>
+                    {isVoiceRegistered(m) && (
+                      <span title="목소리 등록됨">
+                        <MicIcon size={11} className="flex-shrink-0 text-recall-accent" />
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeMember(m.user_id)}

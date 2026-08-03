@@ -51,6 +51,8 @@ export interface MeetingSegment {
   start_ms: number;
   end_ms: number;
   segment_index: number;
+  stt_confidence?: number | null;
+  language_code?: string | null;
   is_edited: boolean;
   created_at: string;
   updated_at: string;
@@ -61,8 +63,12 @@ export interface MeetingSummary {
   meeting_id: string;
   full_summary?: string | null;
   short_summary?: string | null;
+  filtered_transcript?: string | null;
+  full_transcript?: string | null;
   discussion_points?: unknown;
   generation_status: GenerationStatus;
+  generation_error?: string | null;
+  model_name?: string | null;
   generated_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -467,9 +473,8 @@ export async function getMeetingSegmentsApi(
 }
 
 /**
- * 4-1. 발화 세그먼트 내용 수정 API (STT 오인식 정정용)
+ * 4-1. 발화 세그먼트 내용 수정 API (STT 오인식 정정용) - 수정하면 is_edited가 true로 바뀜
  * (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/segments/{segment_id})
- * 백엔드 미구현 — 엔드포인트 추가되면 바로 동작하도록 미리 연결해둠.
  */
 export interface UpdateMeetingSegmentResponse {
   status: "success" | "error";
@@ -599,7 +604,7 @@ export async function getMeetingSummaryApi(
 
 /**
  * 5-1. 회의 요약 수정 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/summary)
- * 백엔드 미구현 — 엔드포인트 추가되면 바로 동작하도록 미리 연결해둠.
+ * 요약이 아직 생성되지 않은 회의는 404 - 생성이 아니라 기존 요약을 고치는 용도.
  */
 export async function updateMeetingSummaryApi(
   workspaceId: string,
@@ -634,7 +639,7 @@ export async function updateMeetingSummaryApi(
       let defaultMsg = "회의 요약 수정에 실패했습니다.";
       if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
       else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 수정할 수 있습니다.";
-      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 회의이거나, 아직 요약이 생성되지 않았습니다.";
 
       return {
         status: "error",

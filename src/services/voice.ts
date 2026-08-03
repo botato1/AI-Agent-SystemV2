@@ -299,3 +299,64 @@ export async function deleteVoiceProfileApi(): Promise<VoiceProfileResponse> {
     };
   }
 }
+
+/**
+ * 6. STT 서버에 등록된 전체 화자 이름 목록 조회 (GET /api/auth/voice-profile/list)
+ * - 회의 시작 화면에서 참석자 중 누가 목소리를 등록해뒀는지 표시하는 데 사용
+ */
+export interface VoiceProfileListResponse {
+  status: "success" | "error";
+  names: string[];
+  message: string;
+  error: string | null;
+}
+
+export async function getVoiceProfileListApi(): Promise<VoiceProfileListResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      names: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(`${API_BASE_URL}/api/auth/voice-profile/list`, {
+      method: "GET",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      let defaultMsg = "등록된 목소리 목록을 불러오지 못했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 502) defaultMsg = "음성 서버와 통신에 실패했습니다.";
+
+      return {
+        status: "error",
+        names: [],
+        message: defaultMsg,
+        error: `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      names: data.names || [],
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getVoiceProfileListApi error:", error);
+    return {
+      status: "error",
+      names: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
