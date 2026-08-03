@@ -28,6 +28,10 @@ services:
       - /mnt/nas_2026_spring/dobby/shared/data/sqlite:/app/storage/sqlite
       # 업로드 파일 NAS 마운트
       - /mnt/nas_2026_spring/dobby/shared/data/uploads:/app/storage/uploads
+      # 리랭커(BAAI/bge-reranker-v2-m3, ~1-2GB) HuggingFace 캐시 -
+      # 재배포(--build)마다 캐시가 날아가 매번 재다운로드되던 문제.
+      # postgres/ollama와 동일하게 NAS 대신 서버 로컬 디스크 사용.
+      - /srv/dobby/hf_cache:/root/.cache/huggingface
     depends_on:
       - chromadb
       - postgres
