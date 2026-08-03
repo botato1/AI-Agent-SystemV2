@@ -444,3 +444,10 @@ class UpcomingMeetingListResponse(BaseModel):
 
 class MeetingJoinResponse(BaseModel):
     ws_ticket: str
+
+class MeetingSegmentUpdateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+
+
+class MeetingSummaryUpdateRequest(BaseModel):
+    short_summary: str
