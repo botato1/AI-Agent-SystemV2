@@ -80,19 +80,10 @@ class LogoutRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    display_name: Optional[str] = Field(
-        default=None,
-        description="변경할 표시 이름",
-    )
-    current_password: Optional[str] = Field(
-        default=None,
-        description="현재 비밀번호",
-    )
-    new_password: Optional[str] = Field(
-        default=None,
-        description="새 비밀번호",
-    )
-
+    display_name: Optional[str] = Field(default=None, description="변경할 표시 이름")
+    avatar_color: Optional[str] = Field(default=None, description="변경할 아바타 색상")
+    current_password: Optional[str] = Field(default=None, description="현재 비밀번호")
+    new_password: Optional[str] = Field(default=None, description="새 비밀번호")
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -273,6 +264,7 @@ class UserPublicSchema(ORMBaseSchema):
     email: str
     display_name: str
     profile_image_url: Optional[str] = None
+    avatar_color: Optional[str] = None
     account_status: AccountStatus
     last_login_at: Optional[datetime] = None
     created_at: datetime
