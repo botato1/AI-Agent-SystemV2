@@ -560,6 +560,17 @@ def get_voice_profile_script() -> str:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="음성 서버에서 문장을 가져오지 못했습니다.",
         )
+    
+def list_registered_voice_profiles() -> list[str]:
+    try:
+        response = httpx.get(f"{STT_SERVER_BASE_URL}/api/profiles", timeout=10.0)
+        response.raise_for_status()
+        return response.json().get("names", [])
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에서 등록된 화자 목록을 가져오지 못했습니다.",
+        )
 
 
 def register_voice_profile(
