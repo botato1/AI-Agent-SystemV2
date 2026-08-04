@@ -344,6 +344,53 @@ REFINE_WEBHOOK_SECRET_HEADER = os.getenv("REFINE_WEBHOOK_SECRET_HEADER", "X-Webh
 REFINE_WEBHOOK_RETRIES = int(os.getenv("REFINE_WEBHOOK_RETRIES", "3"))
 REFINE_WEBHOOK_RETRY_DELAY_SEC = float(os.getenv("REFINE_WEBHOOK_RETRY_DELAY_SEC", "2"))
 
+# ──────────────────────────────────────────
+# 회의록 LLM 문맥 교정 (services/transcript_correction.py)
+# ──────────────────────────────────────────
+# 용어 목록(terms_context.txt)은 "틀린 단어를 발견할 때마다 사람이 추가"하는 방식이라
+# 목록에 없는 단어는 계속 틀린다. 이해가 아니라 암기다.
+# LLM은 문맥으로 유추한다 — "이전 결정 반복하고"가 어색하다는 걸 알아서 "번복"으로
+# 고친다. 목록에 그 단어가 있어서가 아니다.
+#
+# 재분석(백그라운드)에서만 돈다. 실시간 자막에 물리면 응답성이 무너진다.
+# 미설정이면 꺼져 있다 — LLM 서버가 없는 환경에서도 재분석은 그대로 동작해야 한다.
+REFINE_LLM_ENABLED = os.getenv("REFINE_LLM_ENABLED", "0").strip().lower() not in ("0", "false", "no")
+REFINE_LLM_URL = os.getenv("REFINE_LLM_URL", "http://127.0.0.1:11434")
+REFINE_LLM_MODEL = os.getenv("REFINE_LLM_MODEL", "qwen2.5:14b")
+REFINE_LLM_TIMEOUT = float(os.getenv("REFINE_LLM_TIMEOUT", "120"))
+# 한 번에 고칠 줄 수. 너무 크면 모델이 뒤쪽 줄을 대충 보고, 너무 작으면 호출이 잦아진다.
+REFINE_LLM_BATCH = int(os.getenv("REFINE_LLM_BATCH", "20"))
+# 고칠 구간 앞뒤로 같이 보여줄 줄 수. **문맥으로 판단하게 하는 것이 이 기능의 전부**라
+# 0으로 두면 쓸 이유가 없다.
+REFINE_LLM_CONTEXT_LINES = int(os.getenv("REFINE_LLM_CONTEXT_LINES", "5"))
+# 글자 변경 비율이 이보다 크면 교정을 거부한다 — 오인식 단어 교정은 보통 한두 글자다.
+# 이 한도가 "문장을 통째로 다시 쓰는" 사고를 막는 마지막 방어선이다.
+# 전사가 조금 틀린 것보다 내용이 바뀌는 쪽이 훨씬 나쁘다(모순 감지가 없던 모순을 만든다).
+REFINE_LLM_MAX_EDIT_RATIO = float(os.getenv("REFINE_LLM_MAX_EDIT_RATIO", "0.25"))
+
+# ──────────────────────────────────────────
+# 겹쳐 말한 구간 처리 (services/overlap_detect.py, speech_separation.py)
+# ──────────────────────────────────────────
+# 겹친 목소리에서 한 명을 고르는 것은 **정답이 "여러 명"인 질문에 한 명으로 답하는 것**
+# 이라 무조건 틀린다. 실측: 대본상 전원이 동시에 말한 "네 좋습니다"에 이승주 이름이 붙었다.
+#
+# 겹침으로 볼 최소 길이. 이보다 짧으면 화자분리 경계의 오차일 뿐 실제로 겹쳐 말한 게 아니다.
+OVERLAP_MIN_SEC = float(os.getenv("OVERLAP_MIN_SEC", "0.3"))
+# 세그먼트의 이 비율 이상이 겹침이면 화자를 정하지 않는다(overlapped=True, speaker=null).
+# 부분 겹침(긴 발언 중 누가 "네" 하고 끼어드는 것)은 화자가 여전히 명확하므로 건드리지 않는다.
+OVERLAP_SEGMENT_RATIO = float(os.getenv("OVERLAP_SEGMENT_RATIO", "0.6"))
+
+# 겹친 구간을 화자별 음원으로 분리해 각각 전사한다(포기하는 대신 둘 다 살린다).
+# ⚠️ 기본 꺼짐 — 무겁고, 모델을 서버에서 쓸 수 있는지 확인이 필요하다.
+#    finetune/stt/probe_separation.py로 확인한 뒤 켤 것.
+#    두 명 겹침은 쓸 만하지만 세 명 이상이면 급격히 나빠진다.
+SEPARATION_ENABLED = os.getenv("SEPARATION_ENABLED", "0").strip().lower() not in ("0", "false", "no")
+SEPARATION_MODEL = os.getenv("SEPARATION_MODEL", "pyannote/speech-separation-ami-1.0")
+# 분리 모델은 화자 수만큼 채널을 항상 만들므로, 그 사람이 말하지 않은 구간에도 잔향이 남는다.
+# 이 세기(RMS) 미만인 채널은 그 구간에서 말하지 않은 것으로 보고 전사하지 않는다 —
+# 안 그러면 무음을 전사해 헛것이 나온다.
+SEPARATION_MIN_ENERGY = float(os.getenv("SEPARATION_MIN_ENERGY", "0.01"))
+
 MIN_SPEAKERS = 2
 MAX_SPEAKERS = 6  # 팀 인원(6명)에 맞춤
 

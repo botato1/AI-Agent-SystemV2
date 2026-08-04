@@ -16,10 +16,16 @@ from ..core.config import (
     is_confident,
     MIN_SPEAKERS,
     build_context_hint,
+    REFINE_LLM_ENABLED,
+    SEPARATION_ENABLED,
+    OVERLAP_SEGMENT_RATIO,
 )
 from .diarize_service import run_diarization
+from .overlap_detect import find_overlap_spans, mark_overlapped_segments, overlap_ratio
 from .refine_webhook import notify_refine_done
 from .speaker_timeline import build_speaker_timeline
+from .speech_separation import active_channels, separate_sources
+from .transcript_correction import correct_transcript
 
 # 정밀 재분석은 전체 회의 오디오를 다시 돌리는 무거운 GPU 작업이라 동시에 하나만 수행
 # (진행 중인 다른 회의의 실시간 처리와 executor 스레드를 나눠 쓰므로 과부하 방지)
@@ -309,6 +315,29 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
             app_state.speaker_embedding_inference,
         )
 
+    # 4. 겹쳐 말한 구간 처리.
+    #    화자분리 결과에 이미 답이 들어 있다 — 서로 다른 화자의 구간이 시간상 겹치면
+    #    그게 겹쳐 말한 구간이다(겹침 전용 모델을 따로 로드할 이유가 없다).
+    overlap_spans = find_overlap_spans(diarization_tracks)
+    if overlap_spans:
+        # 4-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
+        refined_segments = await _split_overlaps(
+            app_state, meeting_id, refined_segments, overlap_spans,
+            audio, sample_rate, profiles_path, enrolled_names, meta,
+        )
+        # 4-b. 그래도 남은 겹침은 화자를 정하지 않는다. 겹친 목소리에서 한 명을 고르는
+        #      것은 정답이 "여러 명"인 질문에 한 명으로 답하는 것이라 무조건 틀린다.
+        mark_overlapped_segments(refined_segments, overlap_spans)
+
+    # 5. LLM이 문맥으로 읽고 오인식 단어를 고친다.
+    #    용어 목록은 "사람이 미리 겪은 단어"만 커버한다. 여기서는 문장의 뜻으로 유추한다.
+    #    실패해도 원문이 그대로 남으므로 회의록을 잃지 않는다.
+    if REFINE_LLM_ENABLED:
+        await loop.run_in_executor(
+            None, correct_transcript, refined_segments,
+            build_context_hint(enrolled_names, session_id=meta.get("session_id")),
+        )
+
     # 실시간 결과는 비교/디버깅용으로 보존하고 segments를 정밀본으로 교체
     meta["realtime_segments"] = meta.get("segments", [])
     meta["segments"] = refined_segments
@@ -319,6 +348,103 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
 
     logger.info(f"✅ [{meeting_id}] 정밀 재분석 완료 (segments={len(refined_segments)})")
     return meta
+
+
+async def _split_overlaps(
+    app_state, meeting_id: str, segments: list[dict], spans: list[tuple[float, float]],
+    audio, sample_rate: int, profiles_path: str, enrolled_names: list[str], meta: dict,
+) -> list[dict]:
+    """
+    겹친 구간을 화자별 음원으로 분리해 각각 전사한 세그먼트로 교체한다.
+
+    overlap_detect가 "누구인지 정하지 않겠다"고 포기하는 것과 달리, 여기서는 겹친
+    소리를 실제로 갈라서 **두 발언을 모두 살린다.** 분리가 꺼져 있거나 모델을 못 쓰면
+    원래 세그먼트를 그대로 돌려주고, 그러면 4-b가 '여러 명'으로 표시한다.
+
+    분리 음성은 인공적인 왜곡이 남아 원본보다 전사가 나쁠 수 있으므로 **겹친 구간에만**
+    쓴다. 안 겹친 구간은 원본 오디오로 이미 전사돼 있고 그쪽이 더 정확하다.
+    """
+    if not SEPARATION_ENABLED:
+        return segments
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, separate_sources, audio, sample_rate)
+    if result is None:
+        return segments
+    channels, _tracks = result
+
+    # 어느 (겹침 구간 × 채널)을 전사할지 목록화. 그 사람이 말하지 않은 채널은
+    # 잔향만 남아 있어 전사하면 헛것이 나오므로 세기로 걸러낸다.
+    turns = []
+    for start, end in spans:
+        for label in active_channels(channels, start, end, sample_rate):
+            turns.append({"start": start, "end": end, "speaker": None, "_channel": label})
+    if not turns:
+        return segments
+
+    logger.info(f"🔀 [{meeting_id}] 겹침 {len(spans)}구간 → 분리 전사 {len(turns)}건")
+    separated = await _transcribe_turns(
+        app_state, meeting_id, turns,
+        audio_of=lambda turn: (channels[turn["_channel"]], sample_rate),
+        initial_prompt=build_context_hint(enrolled_names, session_id=meta.get("session_id")),
+    )
+    if not separated:
+        return segments
+
+    # 분리된 채널에도 이름을 붙인다 — 분리 모델의 라벨은 익명(SPEAKER_00)이라
+    # 등록 프로필과 대조해야 실제 이름이 된다.
+    if enrolled_names:
+        await loop.run_in_executor(
+            None, _name_separated_segments,
+            separated, turns, channels, sample_rate, profiles_path,
+            app_state.speaker_embedding_inference,
+        )
+
+    # 겹침 구간에 대부분 걸쳐 있던 원래 세그먼트를 분리본으로 교체
+    kept = [
+        seg for seg in segments
+        if overlap_ratio(seg["start"], seg["end"], spans) < OVERLAP_SEGMENT_RATIO
+    ]
+    merged = sorted(kept + separated, key=lambda seg: (seg["start"], seg["end"]))
+    logger.info(
+        f"🔀 [{meeting_id}] 겹침 세그먼트 {len(segments) - len(kept)}개 → 분리본 {len(separated)}개로 교체"
+    )
+    return merged
+
+
+def _name_separated_segments(
+    separated: list[dict], turns: list[dict], channels: dict, sample_rate: int,
+    profiles_path: str, inference,
+) -> None:
+    """분리된 각 채널 구간의 목소리를 등록 프로필과 대조해 이름을 붙인다."""
+    from .speaker_id_service import LiveSpeakerIdentifier
+
+    data = np.load(profiles_path)
+    profiles = {name: data[name] for name in data.files}
+    if not profiles:
+        return
+    identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
+
+    # _transcribe_turns는 텍스트가 빈 턴을 버리므로 turns와 개수가 다를 수 있다.
+    # 시간·채널로 되짚어 찾는다.
+    by_span = {}
+    for turn in turns:
+        by_span.setdefault((turn["start"], turn["end"]), []).append(turn["_channel"])
+
+    for seg in separated:
+        labels = by_span.get((seg["start"], seg["end"]), [])
+        best_name, best_score = None, -1.0
+        for label in labels:
+            clip = channels[label][int(seg["start"] * sample_rate): int(seg["end"] * sample_rate)]
+            if len(clip) < sample_rate:
+                continue
+            name, _nearest, score, _margin = identifier.match_closed_set(
+                identifier.extract_embedding(clip)
+            )
+            if name and score > best_score:
+                best_name, best_score = name, score
+        seg["speaker"] = best_name
+        seg["separated"] = True
 
 
 def _identify_turn_speakers(
