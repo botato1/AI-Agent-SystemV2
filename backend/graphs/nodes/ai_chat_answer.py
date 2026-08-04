@@ -8,7 +8,6 @@
 # 답변 생성이 성공한 뒤 라우터가 ai_chat_crud.add_ai_exchange()로
 # 한 번에 처리한다 (실패 시 "답변 없는 질문"만 남는 것을 방지하기 위함).
 
-import os
 import uuid
 
 import httpx
@@ -17,6 +16,7 @@ from backend.db.crud import content_chunk_crud
 from backend.db.modules import Decision
 from backend.db.session import SessionLocal
 from backend.graphs.states.ai_chat_state import AIChatState
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
 from backend.modules.rag.chroma_client import (
     DECISION_COLLECTION,
     DOCUMENT_COLLECTION,
@@ -24,8 +24,12 @@ from backend.modules.rag.chroma_client import (
     search_hybrid,
 )
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+# [수정] 자체 OLLAMA_MODEL/httpx 직접 호출을 걷어내고 공용 ollama_client를 쓴다.
+# - 모델: 문서/회의/결정을 종합해서 근거 기반 답변을 만드는 작업이라 Model1(가벼움)보다
+#   Model2(qwen3:8b, post-meeting 요약에 쓰는 것과 동일)가 적합하다고 판단.
+# - _call_ollama()를 거치면 다른 노드들과 동일하게 중국어 감지 자동 재시도가 적용된다
+#   (기존엔 httpx.post 직접 호출이라 이 안전장치가 빠져있었음).
+CHAT_ANSWER_MODEL = OLLAMA_MODEL_HEAVY
 
 TOP_K_PER_COLLECTION = 5
 TOP_K_FINAL = 5
@@ -109,15 +113,12 @@ def build_answer_prompt(context_texts: list[str], chat_history: list[dict] | Non
 
 
 def _call_llm_answer(prompt: str) -> str | None:
-    """Ollama에 일반 텍스트 답변 생성을 요청한다. 실패 시 None (다른 노드처럼 JSON 강제 안 함 — 채팅 답변은 텍스트 그대로 노출)."""
+    """Ollama에 일반 텍스트 답변 생성을 요청한다. 실패 시 None (다른 노드처럼 JSON 강제 안 함 — 채팅 답변은 텍스트 그대로 노출).
+
+    공용 _call_ollama()를 거치므로 중국어 감지 시 자동 재시도(최대 2회)가 적용된다.
+    """
     try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        answer = response.json().get("response", "").strip()
+        answer = _call_ollama(prompt, timeout=120.0, model=CHAT_ANSWER_MODEL).strip()
         return answer or None
     except (httpx.HTTPError, ValueError, KeyError, AttributeError) as e:
         print(f"[ai_chat_answer] LLM 호출 실패: {repr(e)}")
@@ -264,7 +265,7 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
 
     return {
         "answer": answer,
-        "answer_model_name": OLLAMA_MODEL,
+        "answer_model_name": CHAT_ANSWER_MODEL,
         "chunk_search_results": candidates,
         "retrieved_sources": sources,
     }
