@@ -247,11 +247,8 @@ class RoomFileListResponse(BaseModel):
 
 class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
     """
-    채팅방 안에서 사용자별로 생성되는 개인 AI Chat 세션을 표현한다.
-
-    AI Chat 기록은 사용자별 비공개이며 다음 조합으로 조회한다.
-
-        workspace_id + room_id + user_id
+    채팅방 안에서 사용자별로 여러 개 생성 가능한 개인 AI Chat 세션(대화)을 표현한다.
+    같은 (workspace_id, room_id, user_id) 조합으로 여러 세션이 존재할 수 있다.
     """
 
     id: UUID
@@ -263,6 +260,9 @@ class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
         default=None,
         max_length=200,
     )
+
+class AIChatSessionListResponse(BaseModel):
+    sessions: list[AIChatSessionSchema] = Field(default_factory=list)
 
 
 # =============================================================================
