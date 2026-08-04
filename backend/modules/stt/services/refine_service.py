@@ -388,8 +388,10 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     #    모델에 직접 묻는다. 화자분리 결과에서 역산하던 방식은 오탐이 많아 폐기했다 —
     #    그 방식이 겹침이라고 한 11개 구간이 실제로는 하나도 겹침이 아니었고,
     #    멀쩡한 발언까지 "겹쳤다"고 표시하고 있었다(overlap_detect 상단 참고).
+    # load_overlap_inference()를 인자 자리에서 부르면 **이벤트 루프에서** 모델을 로드한다
+    # (인자가 먼저 평가되므로). 첫 회의에서 수 초간 서버 전체가 멈추므로 실행기 안에서 부른다.
     overlap_spans = await loop.run_in_executor(
-        None, find_overlap_spans_from_audio, audio, load_overlap_inference(), sample_rate,
+        None, lambda: find_overlap_spans_from_audio(audio, load_overlap_inference(), sample_rate),
     )
     if overlap_spans:
         # 4-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
@@ -397,9 +399,13 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
             app_state, meeting_id, refined_segments, overlap_spans,
             audio, sample_rate, profiles_path, enrolled_names, meta,
         )
-        # 4-b. 남은 겹침에는 표시만 단다(이름은 그대로). 지울 근거가 실측에서 안 나왔다 —
-        #      overlap_detect.mark_overlapped_segments의 설명 참고.
-        mark_overlapped_segments(refined_segments, overlap_spans)
+        # 4-b. **아직 안 풀린** 겹침에만 표시를 단다(이름은 그대로). 지울 근거가 실측에서
+        #      안 나왔다 — overlap_detect.mark_overlapped_segments의 설명 참고.
+        #      분리로 이미 갈라낸 세그먼트는 대상이 아니다 — 해결해놓고 "안 풀렸다"고
+        #      표시하면 소비자가 그 발언을 불필요하게 걸러낸다.
+        mark_overlapped_segments(
+            [seg for seg in refined_segments if not seg.get("separated")], overlap_spans,
+        )
 
     # 5. LLM이 문맥으로 읽고 오인식 단어를 고친다.
     #    용어 목록은 "사람이 미리 겪은 단어"만 커버한다. 여기서는 문장의 뜻으로 유추한다.
@@ -498,10 +504,13 @@ def _name_separated_segments(
     identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
 
     # _transcribe_turns는 텍스트가 빈 턴을 버리므로 turns와 개수가 다를 수 있다.
-    # 시간·채널로 되짚어 찾는다.
+    # 시간·채널로 되짚어 찾는데, **반올림을 맞춰야 한다** — _transcribe_turns가
+    # start/end를 소수 둘째 자리로 반올림해서 담기 때문에, 원본 float(예: 27.700000000000003)를
+    # 키로 쓰면 조회가 전부 빗나가 이름이 하나도 안 붙는다.
     by_span = {}
     for turn in turns:
-        by_span.setdefault((turn["start"], turn["end"]), []).append(turn["_channel"])
+        key = (round(turn["start"], 2), round(turn["end"], 2))
+        by_span.setdefault(key, []).append(turn["_channel"])
 
     for seg in separated:
         labels = by_span.get((seg["start"], seg["end"]), [])

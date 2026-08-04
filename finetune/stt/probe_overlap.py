@@ -144,7 +144,9 @@ def main():
 
     channels, _tracks = result
     print(f"   ✅ 채널 {len(channels)}개: {', '.join(channels)}")
-    for start, end in spans[:5]:
+    # model_spans를 쓴다 — 위 반복문의 마지막 값(4명 기준, 항상 비어 있음)이 아니라
+    # 운영 경로가 실제로 쓰는 겹침 구간이어야 의미가 있다
+    for start, end in model_spans[:5]:
         active = active_channels(channels, start, end, sr)
         print(f"     {start:6.1f}s ~ {end:6.1f}s → 소리 있는 채널 {len(active)}개: {', '.join(active)}")
     print("\n   채널 수가 참석자 수와 맞고, 겹침 구간에서 2개 이상 활성이면 정상이다.")

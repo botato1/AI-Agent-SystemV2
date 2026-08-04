@@ -218,23 +218,28 @@ class LiveSpeakerIdentifier:
             # 참석자를 아는 회의 — 절대 점수가 아니라 순위+margin으로 판정한다.
             # (근거는 match_closed_set 참고. 절대 문턱은 정답까지 걷어냈다.)
             name, nearest, best_score, margin = self.match_closed_set(embedding)
+            # 로그는 확정 경로에서만 남긴다. 잠정 자막은 1초마다 이 함수를 부르므로
+            # 여기서 로그를 찍으면 회의당 수백 줄이 쌓여 정작 필요한 기록이 묻힌다.
             if name is None:
-                reason = (
-                    f"유사도 {best_score:.2f} < 바닥 {SPEAKER_ABSOLUTE_FLOOR} (명단 밖으로 판단)"
-                    if best_score < SPEAKER_ABSOLUTE_FLOOR
-                    else f"1·2등 차이 {margin:.3f} < 하한 {SPEAKER_MIN_MARGIN}"
-                )
-                logger.info(f"🤷 화자 미상 — {reason} (최근접: {nearest})")
+                if update_profile:
+                    reason = (
+                        f"유사도 {best_score:.2f} < 바닥 {SPEAKER_ABSOLUTE_FLOOR} (명단 밖으로 판단)"
+                        if best_score < SPEAKER_ABSOLUTE_FLOOR
+                        else f"1·2등 차이 {margin:.3f} < 하한 {SPEAKER_MIN_MARGIN}"
+                    )
+                    logger.info(f"🤷 화자 미상 — {reason} (최근접: {nearest})")
                 return None
             # 프로필 갱신(이동 평균)은 유사도가 충분히 높을 때만 — 겹쳐 말한 구간 등이
             # 잘못 배정됐을 때 엉뚱한 사람의 목소리 지문을 조금씩 오염시키는 걸 방지.
             # 여기는 절대 점수가 맞는 기준이다: "이 오디오를 지문에 섞어도 되나"를 묻는 것이라
             # 순위와 무관하게 충분히 닮았어야 한다.
-            if update_profile and best_score >= self.similarity_threshold:
-                self._profiles[name] = 0.9 * self._profiles[name] + 0.1 * embedding
-            logger.info(
-                f"🗣️ 화자 매칭(사전등록): {name} (유사도 {best_score:.2f}, 2등과 {margin:.3f} 차이)"
-            )
+            if update_profile:
+                if best_score >= self.similarity_threshold:
+                    self._profiles[name] = 0.9 * self._profiles[name] + 0.1 * embedding
+                logger.info(
+                    f"🗣️ 화자 매칭(사전등록): {name} "
+                    f"(유사도 {best_score:.2f}, 2등과 {margin:.3f} 차이)"
+                )
             return name
 
         best_label, best_score = self._find_best_match(embedding)
