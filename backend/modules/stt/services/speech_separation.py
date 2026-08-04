@@ -25,6 +25,7 @@ overlap_detect와 무엇이 다른가:
 import numpy as np
 import torch
 
+from .diarize_service import to_annotation, tracks_of
 from ..core.config import (
     logger,
     HF_TOKEN,
@@ -87,8 +88,11 @@ def separate_sources(
         logger.exception("⚠️ 음원 분리 실패 — 겹침 분리 없이 진행")
         return None
 
-    # sources.data 는 (샘플수, 화자수). 열 순서가 diarization의 화자 라벨 순서와 같다.
-    labels = list(diarization.labels())
+    # 파이프라인 버전에 따라 Annotation을 래퍼로 감싸 주기도 한다 (diarize_service 참고)
+    annotation = to_annotation(diarization)
+
+    # sources.data 는 (샘플수, 화자수). 열 순서가 화자 라벨 순서와 같다.
+    labels = list(annotation.labels())
     data = np.asarray(sources.data)
     if data.ndim != 2 or data.shape[1] != len(labels):
         logger.warning(
@@ -97,10 +101,7 @@ def separate_sources(
         return None
 
     channels = {label: data[:, i].astype(np.float32) for i, label in enumerate(labels)}
-    tracks = [
-        {"start": round(turn.start, 2), "end": round(turn.end, 2), "speaker": speaker}
-        for turn, _, speaker in diarization.itertracks(yield_label=True)
-    ]
+    tracks = tracks_of(annotation)
     logger.info(f"🔀 음원 분리 완료: {len(channels)}개 채널")
     return channels, tracks
 

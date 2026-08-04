@@ -27,6 +27,7 @@ from stt.core.config import (  # noqa: E402
     MEETINGS_DIR, MIN_SPEAKERS, HF_TOKEN, SEPARATION_MODEL, OVERLAP_MIN_SEC,
     OVERLAP_SEGMENT_RATIO, DIARIZATION_MODEL,
 )
+from stt.services.diarize_service import tracks_of  # noqa: E402
 from stt.services.overlap_detect import find_overlap_spans, overlap_ratio  # noqa: E402
 
 
@@ -51,15 +52,13 @@ def main():
     pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, token=HF_TOKEN)
     if torch.cuda.is_available():
         pipeline.to(torch.device("cuda"))
-    annotation = pipeline(
+    # tracks_of를 쓴다 — 파이프라인이 결과를 래퍼로 감싸 주는 버전이 있어서,
+    # 직접 itertracks를 부르면 터진다(앱과 같은 경로를 타야 한다)
+    tracks = tracks_of(pipeline(
         {"waveform": torch.from_numpy(audio.reshape(1, -1)), "sample_rate": sr},
         min_speakers=MIN_SPEAKERS,
         max_speakers=enrolled if enrolled >= MIN_SPEAKERS else None,
-    )
-    tracks = [
-        {"start": round(t.start, 2), "end": round(t.end, 2), "speaker": s}
-        for t, _, s in annotation.itertracks(yield_label=True)
-    ]
+    ))
 
     spans = find_overlap_spans(tracks)
     total = sum(end - start for start, end in spans)

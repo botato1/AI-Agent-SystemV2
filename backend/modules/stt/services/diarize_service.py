@@ -3,6 +3,28 @@ from pyannote.audio import Pipeline
 from ..core.config import logger, MIN_SPEAKERS, MAX_SPEAKERS
 
 
+def to_annotation(output):
+    """
+    pyannote 파이프라인 결과에서 Annotation을 꺼낸다.
+
+    버전에 따라 Annotation을 그대로 주기도 하고 래퍼 객체(DiarizeOutput 등)로 감싸서
+    주기도 한다. 감싼 걸 그대로 쓰면 itertracks가 없다고 터진다 — 실제로 검증 도구에서
+    한 번 물렸다. 그래서 이 판단을 한 곳에 모아두고 호출부는 전부 이걸 쓴다.
+    """
+    for attr in ("speaker_diarization", "annotation"):
+        if hasattr(output, attr):
+            return getattr(output, attr)
+    return output
+
+
+def tracks_of(output) -> list[dict]:
+    """파이프라인 결과를 [{start, end, speaker}] 리스트로."""
+    return [
+        {"start": round(turn.start, 2), "end": round(turn.end, 2), "speaker": speaker}
+        for turn, _, speaker in to_annotation(output).itertracks(yield_label=True)
+    ]
+
+
 async def run_diarization(
     pipeline: Pipeline,
     audio_input,
@@ -27,23 +49,7 @@ async def run_diarization(
     max_spk = max(max_spk, min_spk)
 
     def _diarize():
-        diarization = pipeline(audio_input, min_speakers=min_spk, max_speakers=max_spk)
-
-        if hasattr(diarization, "speaker_diarization"):
-            annotation = diarization.speaker_diarization
-        elif hasattr(diarization, "annotation"):
-            annotation = diarization.annotation
-        else:
-            annotation = diarization
-
-        results = []
-        for turn, _, speaker in annotation.itertracks(yield_label=True):
-            results.append({
-                "start": round(turn.start, 2),
-                "end": round(turn.end, 2),
-                "speaker": speaker,
-            })
-        return results
+        return tracks_of(pipeline(audio_input, min_speakers=min_spk, max_speakers=max_spk))
 
     logger.info(f"🚀 화자 분리(pyannote) 분석 시작... (화자 수 {min_spk}~{max_spk}명 가정)")
     loop = asyncio.get_event_loop()
