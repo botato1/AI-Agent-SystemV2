@@ -275,9 +275,14 @@ async def _relay_stt_to_frontend(
                 await websocket.send_json(data)
 
         elif msg_type == "final":
+            is_remote = bool(data.get("remote"))
             for seg in data.get("final", {}).get("segments", []):
                 resolved_speaker = _resolve_speaker_label(db, meeting_id, seg.get("speaker"))
                 seg["speaker"] = resolved_speaker
+
+                if is_remote:
+                    continue  # 다른 참가자 연결에서 이미 저장·분석됨 — 화면 표시만 하고 저장은 스킵
+
                 speaker_user_id = speaker_name_to_user_id.get(resolved_speaker) if resolved_speaker else None
                 seg["speaker_user_id"] = str(speaker_user_id) if speaker_user_id else None
                 try:
