@@ -49,10 +49,13 @@ from backend.modules.rag import chroma_client
 # 좁은 판단용 모델로 넘어가게 됨 - 판단 파이프라인 전용 상수를 따로 둔다.
 JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v7")
 
-# [수정] 벡터 검색을 후보 축소용으로 재도입. top_k는 넉넉하게, threshold는 낮게
-# 잡아서 "필터"가 아니라 "후보 목록 좁히기"로만 동작하게 한다 (TBD - 실측 후 조정).
+# [수정 - 2026.08.03] threshold=0.3은 실회의록 스모크테스트(data/test_meetings/)에서
+# 결정 개수가 적은 워크스페이스일 때 "넵 알겠습니다" 같은 무관한 발화까지 거의 항상
+# 후보로 통과시키는 것을 확인함(dense count == final count로 사실상 무필터). 후보
+# narrowing이 안 되면 topic_match 잔여 오류율(홀드아웃 기준 8~10%)이 후보 개수만큼
+# 곱해져 노출됨 - 0.5로 올려 실제 필터 역할을 하게 함(TBD - 추후 대규모 실측 후 재조정).
 DECISION_CANDIDATE_TOP_K = int(os.getenv("DECISION_CANDIDATE_TOP_K", "15"))
-DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.3"))
+DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.5"))
 
 # [수정 - 리뷰 반영] 벡터 후보(top-15)를 전부 topic_match로 순회하면 무관한 발화 하나당
 # 최악의 경우 LLM 호출이 15번까지 순차로 늘어나 체감 지연이 커짐. 후보는 이미 벡터
