@@ -286,10 +286,6 @@ class MeetingResponse(TimestampSchema):
     ended_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
 
-
-class MeetingStartResponse(MeetingResponse):
-    ws_ticket: str
-
 class AgendaReminderItem(BaseModel):
     id: UUID
     title: str
@@ -408,6 +404,17 @@ class MeetingExportResponse(BaseModel):
     filtered_transcript: Optional[str] = None
     segments: list[MeetingSegmentResponse] = Field(default_factory=list)
 
+class MeetingExportFileResponse(BaseModel):
+    export_id: UUID
+    meeting_id: UUID
+    meeting_title: str
+    filename: str
+    created_at: datetime
+
+
+class MeetingExportFileListResponse(BaseModel):
+    exports: list[MeetingExportFileResponse] = Field(default_factory=list)
+
 class MeetingRecentItem(BaseModel):
     id: UUID
     title: str
@@ -451,4 +458,5 @@ class MeetingSegmentUpdateRequest(BaseModel):
 
 
 class MeetingSummaryUpdateRequest(BaseModel):
-    short_summary: str
+    short_summary: Optional[str] = None
+    full_summary: Optional[str] = None
