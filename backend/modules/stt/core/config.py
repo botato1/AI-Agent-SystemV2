@@ -235,6 +235,19 @@ REALTIME_SPEAKER_SPLIT_ENABLED = os.getenv("REALTIME_SPEAKER_SPLIT_ENABLED", "1"
 # 결과는 안전하고 비용만 조금 는다.
 REALTIME_SPEAKER_SPLIT_SILENCE_MS = int(os.getenv("REALTIME_SPEAKER_SPLIT_SILENCE_MS", "200"))
 
+# 침묵으로 못 나눌 때 **목소리 변화로** 한 번 더 나눌지.
+#
+# 침묵 기준만으로는 "쉼 없이 주고받는" 대화를 못 나눈다 — 나눌 침묵이 자체가 없다.
+# 실측(팀 제보): "네, 제가 이번 주 안으로 반영해 볼게요. 감사합니다. 오늘은 여기까지
+# 할게요."가 한 사람으로 묶였다(앞은 김나연, 뒤는 문지수). 회의 중 자막에 틀린 이름이
+# 뜨는 것이라 눈에 띈다.
+#
+# 비용은 창 수에 비례한다 = 곧 확정 자막의 지연이다. 그래서 재분석(0.5초 이동)보다
+# 성기게 훑고, 짧은 청크는 아예 건너뛴다(짧으면 화자가 바뀔 여지도 적다).
+REALTIME_SPEAKER_SCAN_ENABLED = os.getenv("REALTIME_SPEAKER_SCAN_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+REALTIME_SPEAKER_SCAN_MIN_SEC = float(os.getenv("REALTIME_SPEAKER_SCAN_MIN_SEC", "4.0"))
+REALTIME_SPEAKER_SCAN_HOP_SEC = float(os.getenv("REALTIME_SPEAKER_SCAN_HOP_SEC", "0.75"))
+
 # ──────────────────────────────────────────
 # 인식 힌트(initial_prompt) 설정
 # ──────────────────────────────────────────

@@ -241,3 +241,51 @@ def split_turns_by_timeline(
             f"(빠른 화자 교대가 한 세그먼트로 뭉치는 것 방지)"
         )
     return result
+
+
+def find_speaker_runs(
+    audio: np.ndarray, identifier, sample_rate: int,
+    window_sec: float, hop_sec: float, smooth_width: int,
+) -> list[tuple[int, int, str | None]]:
+    """
+    **침묵 없이 이어지는 오디오** 안에서 화자가 바뀌는 지점을 찾는다.
+    [(시작 샘플, 끝 샘플, 이름), ...] — 이름이 None이면 판정 못 한 구간.
+
+    build_speaker_timeline과 원리는 같지만 쓰임이 다르다:
+      - 저쪽은 회의 전체를 VAD 구간마다 훑어 타임라인을 만든다(재분석, 지연 제약 없음)
+      - 이쪽은 **이미 잘라놓은 오디오 하나**를 훑는다(실시간, 창 수가 곧 지연이다)
+
+    왜 필요한가: 실시간은 침묵을 찾아 청크를 나누는데, 두 사람이 쉼 없이 주고받으면
+    나눌 침묵이 없다. 그러면 질문과 답이 한 사람 발언으로 묶여 자막에 틀린 이름이 뜬다
+    (팀 제보: "네, 제가 이번 주 안으로 반영해 볼게요. 감사합니다. 오늘은 여기까지 할게요."가
+     한 사람으로 묶임 — 앞은 김나연, 뒤는 문지수였다).
+
+    ⚠️ 실시간은 미래를 못 본다. 말이 끝나기 전에는 한 사람인지 두 사람인지 알 수 없는
+       경우가 있어 재분석만큼 정확할 수 없다 — 재분석이 나중에 교정한다.
+    """
+    win, hop = int(window_sec * sample_rate), int(hop_sec * sample_rate)
+    if len(audio) < win * 2:
+        return [(0, len(audio), None)]      # 창 두 개도 안 나오면 나눌 근거가 없다
+
+    labels, centers = [], []
+    for off in range(0, len(audio) - win + 1, hop):
+        name, _nearest, _score, _margin = identifier.match_closed_set(
+            identifier.extract_embedding(audio[off:off + win])
+        )
+        labels.append(name)
+        centers.append(off + win // 2)
+
+    labels = _smooth(labels, smooth_width)
+
+    # 같은 이름이 이어지는 구간을 하나로 묶는다. 경계는 두 창 중심의 중간 —
+    # 창이 hop만큼 겹쳐 있어 정확한 전환 시점을 모르므로 중간이 오차가 가장 적다.
+    runs: list[tuple[int, int, str | None]] = []
+    start = 0
+    for i in range(1, len(labels)):
+        if labels[i] == labels[i - 1]:
+            continue
+        boundary = (centers[i - 1] + centers[i]) // 2
+        runs.append((start, boundary, labels[i - 1]))
+        start = boundary
+    runs.append((start, len(audio), labels[-1]))
+    return runs

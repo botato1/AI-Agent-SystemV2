@@ -20,11 +20,17 @@ from ..core.config import (
     REALTIME_PARTIAL_SPEAKER_TAIL_SEC,
     REALTIME_SPEAKER_SPLIT_ENABLED,
     REALTIME_SPEAKER_SPLIT_SILENCE_MS,
+    REALTIME_SPEAKER_SCAN_ENABLED,
+    REALTIME_SPEAKER_SCAN_MIN_SEC,
+    REALTIME_SPEAKER_SCAN_HOP_SEC,
+    SPEAKER_WINDOW_SEC,
+    SPEAKER_SMOOTH_WIDTH,
     FAST_BEAM_SIZE,
     PRECISE_BEAM_SIZE,
     REALTIME_FINAL_USES_FAST_MODEL,
     is_confident,
 )
+from .speaker_timeline import find_speaker_runs
 
 
 # 임베딩이 불안정해지는 하한 — speaker_id_service._MIN_EMBED_SEC(1.0초)와 맞춘 값.
@@ -265,7 +271,10 @@ class RealtimeSTTSession:
             sampling_rate=REALTIME_SAMPLE_RATE,
         )
         if len(spans) < 2:
-            return [(0, len(audio), None)]   # 나눌 근거 없음 — 호출부가 통째로 처리
+            # 침묵이 없다 = 쉼 없이 이어 말했다. 여기서 포기하면 두 사람 발화가
+            # 한 덩어리로 묶여 자막에 틀린 이름이 뜬다(팀 제보 사례).
+            # 목소리 변화로 한 번 더 찾아본다.
+            return self._scan_speaker_changes(audio)
 
         # 각 발화 구간의 화자 판정. 너무 짧은 구간은 임베딩이 불안정해 판정을 포기하고
         # (None) 아래에서 이웃 구간의 화자를 승계한다 — "네", "음" 같은 짧은 맞장구가
@@ -315,6 +324,37 @@ class RealtimeSTTSession:
             else:
                 merged.append((start, end, label))
         return merged
+
+    def _scan_speaker_changes(self, audio: np.ndarray) -> list[tuple[int, int, str | None]]:
+        """
+        침묵으로 못 나눈 오디오를 **목소리 변화**로 나눈다.
+
+        침묵 기준은 "쉼 없이 주고받는" 대화를 못 나눈다 — 나눌 침묵 자체가 없다.
+        실측(팀 제보): "네, 제가 이번 주 안으로 반영해 볼게요. 감사합니다. 오늘은
+        여기까지 할게요."가 한 사람으로 묶였다(앞은 김나연, 뒤는 문지수).
+
+        비용은 창 수에 비례하고 그게 곧 확정 자막의 지연이므로:
+          - 짧은 청크는 건너뛴다(짧으면 화자가 바뀔 여지도 적다)
+          - 재분석(0.5초)보다 성기게 훑는다
+          - 등록 프로필이 없으면 순위 판정 자체가 성립하지 않아 하지 않는다
+        """
+        if (
+            not REALTIME_SPEAKER_SCAN_ENABLED
+            or not self.speaker_identifier._closed_set
+            or len(audio) < REALTIME_SPEAKER_SCAN_MIN_SEC * REALTIME_SAMPLE_RATE
+        ):
+            return [(0, len(audio), None)]
+
+        runs = find_speaker_runs(
+            audio, self.speaker_identifier, REALTIME_SAMPLE_RATE,
+            window_sec=SPEAKER_WINDOW_SEC,
+            hop_sec=REALTIME_SPEAKER_SCAN_HOP_SEC,
+            smooth_width=SPEAKER_SMOOTH_WIDTH,
+        )
+        if len(runs) > 1:
+            names = " → ".join(name or "미상" for _s, _e, name in runs)
+            logger.info(f"🔍 목소리 변화로 화자 전환 감지(침묵 없음): {names}")
+        return runs
 
     async def _transcribe_with_speakers(self, audio, precise_task, final_model):
         """
