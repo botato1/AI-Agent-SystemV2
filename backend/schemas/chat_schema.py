@@ -302,18 +302,19 @@ class AIMessageSourceSchema(ORMBaseSchema):
     """
     AI 답변에 사용된 근거 자료 하나를 표현한다.
 
-    source_type에 따라 chunk_id 또는 code_fact_id 중
-    하나만 사용한다.
+    source_type에 따라 chunk_id/code_fact_id/decision_id 중 하나만 사용한다.
+    decision은 workspace_files에 속하지 않으므로 file_id가 NULL이다.
     """
 
     id: UUID
     ai_message_id: UUID
 
     source_type: AIMessageSourceType
-    file_id: UUID
+    file_id: Optional[UUID] = None
 
     chunk_id: Optional[UUID] = None
     code_fact_id: Optional[UUID] = None
+    decision_id: Optional[UUID] = None
 
     similarity_score: Optional[Decimal] = Field(
         default=None,
@@ -332,29 +333,42 @@ class AIMessageSourceSchema(ORMBaseSchema):
     @model_validator(mode="after")
     def _validate_source_consistency(self) -> "AIMessageSourceSchema":
         if self.source_type == "content_chunk":
-            if self.chunk_id is None:
+            if self.file_id is None or self.chunk_id is None:
                 raise ValueError(
                     "source_type이 content_chunk이면 "
-                    "chunk_id가 필수입니다."
+                    "file_id/chunk_id가 필수입니다."
                 )
 
-            if self.code_fact_id is not None:
+            if self.code_fact_id is not None or self.decision_id is not None:
                 raise ValueError(
                     "source_type이 content_chunk이면 "
-                    "code_fact_id는 NULL이어야 합니다."
+                    "code_fact_id/decision_id는 NULL이어야 합니다."
                 )
 
         elif self.source_type == "code_fact":
-            if self.code_fact_id is None:
+            if self.file_id is None or self.code_fact_id is None:
                 raise ValueError(
                     "source_type이 code_fact이면 "
-                    "code_fact_id가 필수입니다."
+                    "file_id/code_fact_id가 필수입니다."
                 )
 
-            if self.chunk_id is not None:
+            if self.chunk_id is not None or self.decision_id is not None:
                 raise ValueError(
                     "source_type이 code_fact이면 "
-                    "chunk_id는 NULL이어야 합니다."
+                    "chunk_id/decision_id는 NULL이어야 합니다."
+                )
+
+        elif self.source_type == "decision":
+            if self.decision_id is None:
+                raise ValueError(
+                    "source_type이 decision이면 "
+                    "decision_id가 필수입니다."
+                )
+
+            if self.file_id is not None or self.chunk_id is not None or self.code_fact_id is not None:
+                raise ValueError(
+                    "source_type이 decision이면 "
+                    "file_id/chunk_id/code_fact_id는 NULL이어야 합니다."
                 )
 
         return self
