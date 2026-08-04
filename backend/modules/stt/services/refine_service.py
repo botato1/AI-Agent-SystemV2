@@ -16,6 +16,7 @@ from ..core.config import (
     is_confident,
     MIN_SPEAKERS,
     build_context_hint,
+    SPEAKER_MIN_ASSIGN_SIMILARITY,
 )
 from .diarize_service import run_diarization
 from .refine_webhook import notify_refine_done
@@ -434,10 +435,24 @@ def _fill_unknown_from_clusters(
                     total += end - start
             if total < _CLUSTER_RETRY_MIN_SEC:
                 continue    # 모아도 짧으면 판정해봐야 흔들린다
-            name = identifier.identify(np.concatenate(clips), update_profile=False)
-            if name:
+
+            # identify()를 쓰면 안 된다 — 내부에서 "가장 긴 발화 구간 하나"만 골라
+            # 쓰기 때문에(_dominant_speech_region) 조각을 이어붙인 의미가 사라진다.
+            # 여기서는 합친 오디오 전체로 임베딩을 뽑는 게 목적이므로 직접 대조한다.
+            embedding = identifier.extract_embedding(np.concatenate(clips))
+            name, score = identifier._find_best_match(embedding)
+            if name and score >= SPEAKER_MIN_ASSIGN_SIMILARITY:
                 names_by_cluster[cluster] = {name}
-                logger.info(f"🔎 클러스터 재판정: {cluster} → {name} (오디오 {total:.1f}초 합산)")
+                logger.info(
+                    f"🔎 클러스터 재판정: {cluster} → {name} "
+                    f"(유사도 {score:.2f}, 오디오 {total:.1f}초 합산)"
+                )
+            else:
+                # 실패도 남긴다 — 시도조차 안 한 것과 구분이 돼야 원인을 좁힐 수 있다
+                logger.info(
+                    f"🔎 클러스터 재판정 실패: {cluster} — 최고 {name} {score:.2f} "
+                    f"< 하한 {SPEAKER_MIN_ASSIGN_SIMILARITY} (오디오 {total:.1f}초)"
+                )
 
     filled = 0
     for seg, cluster in zip(segments, clusters):
