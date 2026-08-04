@@ -24,7 +24,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 sys.path.insert(0, os.path.join(_REPO_ROOT, "backend", "modules"))
 
 from stt.core.config import (  # noqa: E402
-    MEETINGS_DIR, MIN_SPEAKERS, HF_TOKEN, SEPARATION_MODEL, OVERLAP_MIN_SEC,
+    MEETINGS_DIR, MIN_SPEAKERS, HF_TOKEN, SEPARATION_MODEL,
     OVERLAP_SEGMENT_RATIO, DIARIZATION_MODEL,
 )
 from stt.services.diarize_service import tracks_of  # noqa: E402

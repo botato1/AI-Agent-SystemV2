@@ -47,7 +47,7 @@ import soundfile as sf
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "backend", "modules"))
 
-from stt.core.config import MEETINGS_DIR, REALTIME_SAMPLE_RATE  # noqa: E402
+from stt.core.config import MEETINGS_DIR  # noqa: E402
 from stt.services.profile_store import GlobalProfileStore  # noqa: E402
 from stt.services.speaker_id_service import (  # noqa: E402
     LiveSpeakerIdentifier, load_speaker_embedding_inference,

@@ -3,7 +3,6 @@ import asyncio
 from fastapi import APIRouter, Request
 from typing import Optional
 
-from ..core.config import logger
 from ..services.voice_ingest import ingest_voice_sample
 from ..utils.name_extractor import extract_name_from_greeting
 

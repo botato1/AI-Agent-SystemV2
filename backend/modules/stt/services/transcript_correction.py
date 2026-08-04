@@ -133,7 +133,9 @@ def _build_prompt(segments: list[dict], start: int, end: int, terms: str | None)
 
     parts = []
     if terms:
-        parts.append(f"이 팀이 쓰는 용어(참고용, 억지로 끼워넣지 말 것):\n{terms}\n")
+        # build_context_hint가 주는 문자열이라 용어 외에 참석자 이름 등도 섞여 있다.
+        # "용어 목록"이라고 이름 붙이면 모델이 그 형식을 기대하므로 사실대로 쓴다.
+        parts.append(f"참고 정보(회의 맥락·용어. 억지로 끼워넣지 말 것):\n{terms}\n")
     parts.append("회의록:\n" + "\n".join(lines))
     parts.append(f"\n{start}번부터 {end - 1}번까지 중에서 잘못 인식된 단어만 고쳐라.")
     return "\n".join(parts)

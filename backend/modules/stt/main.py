@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pyannote.audio import Pipeline
 
 from .core.config import (
-    logger, UPLOAD_DIR, MEETINGS_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE, WHISPER_MODEL_SIZE,
+    logger, UPLOAD_DIR, MEETINGS_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE,
     WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN, LORA_ADAPTER_PATH,
     build_qwen_context
 )
