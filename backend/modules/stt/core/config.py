@@ -379,7 +379,10 @@ OVERLAP_MIN_SEC = float(os.getenv("OVERLAP_MIN_SEC", "0.3"))
 # 세그먼트의 이 비율 이상이 겹침이면 화자를 정하지 않는다(overlapped=True, speaker=null).
 # 부분 겹침(긴 발언 중 누가 "네" 하고 끼어드는 것)은 화자가 여전히 명확하므로 건드리지 않는다.
 OVERLAP_SEGMENT_RATIO = float(os.getenv("OVERLAP_SEGMENT_RATIO", "0.6"))
-OVERLAP_MIN_SPEAKERS = int(os.getenv("OVERLAP_MIN_SPEAKERS", "2"))
+# 겹침 감지에 쓰는 모델. 화자분리(diarization-3.1)가 내부적으로 의존하는 것과 같은
+# 모델이라 이미 받아져 있다. 화자분리 결과에서 겹침을 역산하던 방식은 오탐이 많아
+# 폐기했다 — 그 방식이 찾은 11개 구간을 이 모델로 재보니 하나도 겹침이 아니었다.
+OVERLAP_MODEL = os.getenv("OVERLAP_MODEL", "pyannote/segmentation-3.0")
 
 # 겹친 세그먼트의 화자 이름을 지울지.
 #

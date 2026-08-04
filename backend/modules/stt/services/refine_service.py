@@ -19,10 +19,12 @@ from ..core.config import (
     REFINE_LLM_ENABLED,
     SEPARATION_ENABLED,
     OVERLAP_SEGMENT_RATIO,
-    OVERLAP_MIN_SPEAKERS,
 )
 from .diarize_service import run_diarization
-from .overlap_detect import find_overlap_spans, mark_overlapped_segments, overlap_ratio
+from .overlap_detect import (
+    find_overlap_spans_from_audio, mark_overlapped_segments, overlap_ratio,
+)
+from .overlap_model import load_overlap_inference
 from .refine_webhook import notify_refine_done
 from .speaker_timeline import build_speaker_timeline
 from .speech_separation import active_channels, separate_sources
@@ -317,9 +319,12 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         )
 
     # 4. 겹쳐 말한 구간 처리.
-    #    화자분리 결과에 이미 답이 들어 있다 — 서로 다른 화자의 구간이 시간상 겹치면
-    #    그게 겹쳐 말한 구간이다(겹침 전용 모델을 따로 로드할 이유가 없다).
-    overlap_spans = find_overlap_spans(diarization_tracks, OVERLAP_MIN_SPEAKERS)
+    #    모델에 직접 묻는다. 화자분리 결과에서 역산하던 방식은 오탐이 많아 폐기했다 —
+    #    그 방식이 겹침이라고 한 11개 구간이 실제로는 하나도 겹침이 아니었고,
+    #    멀쩡한 발언까지 "겹쳤다"고 표시하고 있었다(overlap_detect 상단 참고).
+    overlap_spans = await loop.run_in_executor(
+        None, find_overlap_spans_from_audio, audio, load_overlap_inference(), sample_rate,
+    )
     if overlap_spans:
         # 4-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
         refined_segments = await _split_overlaps(

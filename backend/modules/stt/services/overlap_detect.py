@@ -12,27 +12,118 @@
   틀린 이름이 붙으면 모순 감지가 엉뚱한 사람의 발언으로 판단한다. 미상이나 '여러 명'은
   회의록에서 사람이 고칠 수 있다 — 우리가 계속 지켜온 기준과 같다.
 
-왜 새 모델을 안 쓰는가:
-  pyannote에 겹침 전용 감지 모델이 따로 있지만, **이미 돌린 화자분리 결과에 답이 들어
-  있다.** 화자분리는 구간마다 화자를 붙이는데, 서로 다른 화자의 구간이 시간상 겹치면
-  그게 곧 겹쳐 말한 구간이다. 모델을 하나 더 로드할 이유가 없다(메모리·시작 시간).
+화자분리 결과에서 역산하지 않는 이유 (2026-08-04 실측 — 처음엔 그렇게 만들었다가 뒤집음):
+  처음에는 "이미 돌린 화자분리 결과에서 구간이 겹치면 그게 겹침"이라고 봤다.
+  모델을 하나 더 로드할 필요가 없어 보였다.
+
+  **전부 오탐이었다.** 그 방식이 겹침이라고 표시한 11개 구간을 프레임 단위 모델로
+  다시 재보니 **하나도 겹침이 아니었다**(전 구간 최대 1명). 화자분리의 턴 경계가
+  살짝 겹친 것을 동시 발화로 읽고 있었던 것이다. 그 결과 이준오·가동현의 멀쩡한
+  발언까지 "겹쳤다"고 표시됐다.
+
+  화자분리는 클러스터링까지 끝난 결과라 "이 순간 몇 명이 말하는가"라는 정보가 이미
+  뭉개져 있다. segmentation-3.0은 화자분리가 **내부적으로 쓰는** 모델이고 프레임마다
+  동시 발화를 직접 예측한다. 클러스터링 전 단계라 그 정보가 살아 있다.
 """
+import numpy as np
+
 from ..core.config import (
     logger, OVERLAP_MIN_SEC, OVERLAP_SEGMENT_RATIO, OVERLAP_CLEAR_SPEAKER,
+    REALTIME_SAMPLE_RATE,
 )
+
+_TIME_BIN_SEC = 0.1
+
+
+def find_overlap_spans_from_audio(audio, inference, sample_rate: int = REALTIME_SAMPLE_RATE):
+    """
+    오디오를 segmentation 모델에 직접 물어 "2명 이상이 동시에 말한" 구간을 찾는다.
+
+    inference: services/overlap_model.load_overlap_inference()가 만든 Inference.
+               None이면 빈 목록(겹침 감지 없이 진행) — 모델을 못 써도 재분석은 돌아야 한다.
+
+    ⚠️ skip_aggregation으로 청크별 예측을 받아야 한다. 이 모델은 "화자 조합"을 클래스로
+       예측하는데 **조합 번호가 청크마다 다른 사람을 가리킨다.** 겹치는 청크의 확률을
+       평균내면(기본 동작) 서로 다른 사람을 가리키는 값이 섞여 의미가 사라진다 —
+       실측에서 사람이 말하는 구간이 '아무도 안 말함'으로 나왔다.
+       반면 **인원수는 조합 순서와 무관**하므로, 청크별로 먼저 인원수를 뽑고 합친다.
+    """
+    if inference is None:
+        return []
+
+    import torch
+    output = inference({
+        "waveform": torch.from_numpy(np.asarray(audio, dtype=np.float32).reshape(1, -1)),
+        "sample_rate": sample_rate,
+    })
+    data = np.asarray(output.data)
+    if data.ndim != 3:
+        logger.warning(f"⚠️ 겹침 모델 출력 형태가 예상과 다름 {data.shape} — 겹침 감지 생략")
+        return []
+
+    model = inference.model
+    sizes = _powerset_cardinality(
+        data.shape[-1], len(model.specifications.classes),
+        getattr(model.specifications, "powerset_max_classes", 2),
+    )
+    if sizes is None:
+        return []
+    counts = sizes[data.argmax(axis=-1)]        # (청크수, 프레임수)
+
+    chunks = output.sliding_window
+    frames = model.receptive_field
+    offsets = np.array([
+        frames.start + frames.step * i + frames.duration / 2 for i in range(data.shape[1])
+    ])
+
+    total_bins = int(len(audio) / sample_rate / _TIME_BIN_SEC) + 2
+    bin_max = np.zeros(total_bins)
+    for c in range(data.shape[0]):
+        idx = np.clip(((chunks[c].start + offsets) / _TIME_BIN_SEC).astype(int), 0, total_bins - 1)
+        np.maximum.at(bin_max, idx, counts[c])
+
+    # 2명 이상인 칸이 이어지는 구간을 뽑는다
+    spans, start = [], None
+    for i, value in enumerate(bin_max):
+        if value >= 2 and start is None:
+            start = i * _TIME_BIN_SEC
+        elif value < 2 and start is not None:
+            if i * _TIME_BIN_SEC - start >= OVERLAP_MIN_SEC:
+                spans.append((start, i * _TIME_BIN_SEC))
+            start = None
+    return _merge(spans)
+
+
+def _powerset_cardinality(num_classes: int, max_speakers: int, max_concurrent: int):
+    """powerset 클래스 번호 → 동시 발화자 수. 매핑을 못 만들면 None(겹침 감지 생략)."""
+    try:
+        from pyannote.audio.utils.powerset import Powerset
+        return np.asarray(Powerset(max_speakers, max_concurrent).mapping).sum(axis=1)
+    except Exception:
+        import itertools
+        sizes = [
+            len(combo)
+            for k in range(max_concurrent + 1)
+            for combo in itertools.combinations(range(max_speakers), k)
+        ]
+        if len(sizes) != num_classes:
+            logger.warning(
+                f"⚠️ powerset 클래스 수 불일치 (모델 {num_classes} vs 계산 {len(sizes)}) — 겹침 감지 생략"
+            )
+            return None
+        return np.asarray(sizes)
 
 
 def find_overlap_spans(tracks: list[dict], min_speakers: int = 2) -> list[tuple[float, float]]:
     """
-    화자분리 구간 목록에서 min_speakers명 이상이 동시에 말한 시간대를 뽑는다.
+    화자분리 구간 목록에서 min_speakers명 이상이 겹치는 시간대를 뽑는다.
 
-    스윕 라인: 모든 구간의 시작/끝을 시간순으로 훑으며 '지금 말하고 있는 화자 수'를 센다.
+    ⚠️ **운영 경로에서는 쓰지 않는다** — 오탐이 많다는 것이 실측으로 확인됐다.
+       이 방식이 찾아낸 11개 구간을 프레임 모델로 재보니 하나도 겹침이 아니었다.
+       화자분리의 턴 경계가 살짝 겹친 것을 동시 발화로 읽는다.
+       겹침 판정은 find_overlap_spans_from_audio(모델에 직접 질의)를 쓸 것.
 
-    **몇 명부터를 겹침으로 볼지가 중요하다** (2026-08-04 실측):
-      2명 기준으로 잡으면 "한 사람이 말하는 중에 누가 짧게 맞장구친" 구간까지 전부
-      걸린다. 그런 구간은 주된 화자가 명확해서 이름을 지우면 손해다 — 실측에서
-      오배정 1개를 고치려다 맞는 이름 6개를 잃었다(이준오 "시연 전에", 가동현 발언 등).
-      정말로 한 명을 고를 수 없는 것은 여러 명이 한꺼번에 말한 경우다.
+    두 방식을 비교하는 검증 도구(probe_overlap.py)를 위해 남겨둔다.
     """
     events: list[tuple[float, int, str]] = []
     for track in tracks:

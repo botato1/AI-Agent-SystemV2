@@ -29,8 +29,9 @@ from stt.core.config import (  # noqa: E402
 )
 from stt.services.diarize_service import tracks_of  # noqa: E402
 from stt.services.overlap_detect import (  # noqa: E402
-    find_overlap_spans, overlap_ratio, concurrent_speakers,
+    find_overlap_spans, find_overlap_spans_from_audio, overlap_ratio, concurrent_speakers,
 )
+from stt.services.overlap_model import load_overlap_inference  # noqa: E402
 
 
 def main():
@@ -95,7 +96,33 @@ def main():
             print(f"   [{seg['start']:6.1f}s] 겹침{ratio:3.0%} 동시{peak}명 "
                   f"{seg.get('speaker') or '미상':6s} {seg['text'][:40]}")
 
+    # 모델에 직접 물은 결과 — 운영 경로가 쓰는 방식이다.
     print(f"\n{'=' * 72}")
+    print("모델에 직접 질의 (segmentation-3.0, 운영 경로가 쓰는 방식)")
+    model_spans = find_overlap_spans_from_audio(audio, load_overlap_inference(), sr)
+    total = sum(end - start for start, end in model_spans)
+    print(f"겹침 구간 {len(model_spans)}개, 합계 {total:.1f}초 "
+          f"({total / (len(audio) / sr) * 100:.1f}%)")
+    for start, end in model_spans:
+        print(f"     {start:6.1f}s ~ {end:6.1f}s  ({end - start:.1f}초)")
+    if segments:
+        marked = [
+            (seg, overlap_ratio(seg["start"], seg["end"], model_spans))
+            for seg in segments
+            if overlap_ratio(seg["start"], seg["end"], model_spans) >= OVERLAP_SEGMENT_RATIO
+        ]
+        print(f"'겹침'으로 표시될 세그먼트 {len(marked)}개")
+        for seg, ratio in marked:
+            print(f"   [{seg['start']:6.1f}s] 겹침{ratio:3.0%} "
+                  f"{seg.get('speaker') or '미상':6s} {seg['text'][:40]}")
+
+    print(f"\n{'=' * 72}")
+    print("두 방식 비교:")
+    print("  화자분리 역산은 턴 경계가 살짝 겹친 것까지 동시 발화로 읽어 오탐이 많다")
+    print("  (실측: 그 방식이 찾은 11개가 모델 기준으로는 하나도 겹침이 아니었다).")
+    print("  모델 질의 쪽이 0개라면 이 회의에 진짜 겹침이 없다는 뜻이고,")
+    print("  그러면 겹침 기능은 이 녹음으로 검증할 수 없다 — 일부러 겹쳐 말한 녹음이 필요하다.")
+    print()
     print("고르는 법:")
     print("  이 목록의 각 줄이 **정말로 여러 명이 한꺼번에 말한 곳인지** 대본과 대조할 것.")
     print("  맞는 이름이 붙어 있던 줄이 목록에 있으면 그건 손해다 —")
