@@ -444,3 +444,11 @@ class UpcomingMeetingListResponse(BaseModel):
 
 class MeetingJoinResponse(BaseModel):
     ws_ticket: str
+
+class MeetingSegmentUpdateRequest(BaseModel):
+    content: Optional[str] = Field(default=None, min_length=1)
+    speaker_label: Optional[str] = Field(default=None, min_length=1, description="화자 이름 (화자 미상 세그먼트에 이름을 지정할 때 사용)")
+
+
+class MeetingSummaryUpdateRequest(BaseModel):
+    short_summary: str

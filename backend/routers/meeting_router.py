@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
+import io
+import wave
 from sqlalchemy.orm import Session
 
 from backend.core.security import create_ws_ticket
@@ -42,14 +45,15 @@ from backend.schemas.meeting_schema import (
     UpcomingMeetingItem,
     UpcomingMeetingListResponse,
     MeetingJoinResponse,
+    MeetingSegmentUpdateRequest,
+    MeetingSummaryUpdateRequest,
 )
 
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/meetings", tags=["Meetings"])
 decisions_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Decisions"])
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (document_service.py와 동일한 임시 조치)
-MEETING_AUDIO_STORAGE_DIR = Path("data/uploads/audio")
+MEETING_AUDIO_STORAGE_DIR = Path("storage/uploads/audio")
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
 
@@ -546,6 +550,86 @@ def get_meeting_segments_api(
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments]
     )
 
+# 회의 원본 음성 듣기/다운로드 (실시간 녹음은 raw PCM이라 WAV 헤더를 씌워서 반환)
+@router.get("/{meeting_id}/audio")
+def get_meeting_audio_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if not meeting.source_file_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일이 아직 없습니다.",
+        )
+
+    workspace_file = file_crud.get_file(db, meeting.source_file_id)
+    if not workspace_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일을 찾을 수 없습니다.",
+        )
+
+    file_path = Path(workspace_file.storage_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일이 존재하지 않습니다.",
+        )
+
+    if workspace_file.mime_type == "audio/L16":
+        # 실시간 녹음 - raw PCM16LE 16kHz mono라 브라우저가 바로 못 읽음. WAV 헤더를 씌워서 반환.
+        pcm_bytes = file_path.read_bytes()
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(pcm_bytes)
+        buffer.seek(0)
+        return StreamingResponse(buffer, media_type="audio/wav")
+
+    return FileResponse(
+        path=file_path,
+        media_type=workspace_file.mime_type or "application/octet-stream",
+        filename=workspace_file.original_filename,
+    )
+
+# 발화 세그먼트 내용 수정
+@router.patch("/{meeting_id}/segments/{segment_id}", response_model=MeetingSegmentResponse)
+def update_meeting_segment_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    request: MeetingSegmentUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if request.content is None and request.speaker_label is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+    
+    segment = meeting_crud.get_segment(db, segment_id)
+    if not segment or segment.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="발화 세그먼트를 찾을 수 없습니다.",
+        )
+
+    updated = meeting_crud.update_segment_content(
+        db, segment_id, content=request.content, speaker_label=request.speaker_label,
+    )    
+    return MeetingSegmentResponse.model_validate(updated)
+
 
 # 회의 요약 조회
 @router.get("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
@@ -565,6 +649,28 @@ def get_meeting_summary_api(
             detail="회의 요약을 찾을 수 없습니다.",
         )
     return MeetingSummaryResponse.model_validate(summary)
+
+# 회의 요약 수정
+@router.patch("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
+def update_meeting_summary_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: MeetingSummaryUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    existing = meeting_crud.get_meeting_summary(db, meeting_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의 요약을 찾을 수 없습니다.",
+        )
+
+    updated = meeting_crud.upsert_summary(db, meeting_id, short_summary=request.short_summary)
+    return MeetingSummaryResponse.model_validate(updated)
 
 # 회의록 내보내기용 데이터 일괄 조회 — 문서 조립은 프론트에서 처리
 @router.get("/{meeting_id}/export", response_model=MeetingExportResponse)

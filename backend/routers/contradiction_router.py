@@ -42,6 +42,15 @@ def _resolve_source_meeting(db: Session, contradiction):
             return meeting_crud.get_meeting(db, segment.meeting_id)
     return None
 
+def _check_meeting_not_recording(db: Session, contradiction) -> None:
+    """회의가 아직 진행 중(recording)이면 모순 처리(해결/무시)를 거부한다.
+    회의 종료 후 한 번에 일괄 정리하도록 유도하기 위함 (교수님 피드백 반영)."""
+    meeting = _resolve_source_meeting(db, contradiction)
+    if meeting and meeting.status == "recording":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="회의가 진행 중일 때는 모순을 처리할 수 없습니다. 회의 종료 후 처리해주세요.",
+        )
 
 def _resolve_reference_meeting(db: Session, contradiction):
     """reference_type이 decision일 때만 — 그 결정이 나온 회의."""
@@ -173,6 +182,7 @@ def resolve_contradiction_api(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 처리된 모순입니다.",
         )
+    _check_meeting_not_recording(db, contradiction)
 
     resolution = contradiction_crud.resolve_contradiction(
         db,
@@ -224,6 +234,7 @@ def dismiss_contradiction_api(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 처리된 모순입니다.",
         )
+    _check_meeting_not_recording(db, contradiction)
 
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
     return _to_contradiction_schema(db, updated)
