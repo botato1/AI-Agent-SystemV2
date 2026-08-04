@@ -353,6 +353,9 @@ def _identify_turn_speakers(
     # (유사도 하한 미달이면 None — SPEAKER_MIN_ASSIGN_SIMILARITY)
     identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
 
+    # 화자분리가 붙인 익명 라벨을 보관해둔다 — 아래에서 짧은 턴을 메우는 데 쓴다
+    clusters = [seg.get("speaker") for seg in segments]
+
     assigned: dict[str, int] = {}
     for seg in segments:
         clip = audio[int(seg["start"] * sample_rate): int(seg["end"] * sample_rate)]
@@ -366,9 +369,45 @@ def _identify_turn_speakers(
         if name:
             assigned[name] = assigned.get(name, 0) + 1
 
-    unknown = sum(1 for s in segments if not s.get("speaker"))
+    filled = _fill_unknown_from_clusters(segments, clusters)
+
+    unknown = sum(1 for seg in segments if not seg.get("speaker"))
     logger.info(
-        f"🔗 턴별 화자 판정: " + ", ".join(f"{k} {v}개" for k, v in sorted(assigned.items()))
+        "🔗 턴별 화자 판정: " + (", ".join(f"{k} {v}개" for k, v in sorted(assigned.items())) or "확정 없음")
+        + (f", 클러스터로 보완 {filled}개" if filled else "")
         + (f", 미상 {unknown}개" if unknown else "")
     )
     return segments
+
+
+def _fill_unknown_from_clusters(segments: list[dict], clusters: list) -> int:
+    """
+    판정 못 한 턴을, 같은 화자분리 클러스터의 확정된 이름으로 메운다.
+
+    왜 필요한가: 화자분리가 한 사람의 발언을 여러 조각으로 쪼개면(겹쳐 말한 "네" 하나가
+    끼는 것만으로도 그렇게 된다) 조각이 짧아 목소리 판정이 안 된다. 실측에서 이준오의
+    한 발언이 41.3 / 41.8 / 46.4초 세 조각으로 갈렸고, 긴 조각만 이름을 얻고 나머지는
+    미상이 됐다.
+
+    클러스터를 **주 근거로 쓰지 않는 이유**는 따로 있다 — 클러스터 하나에 이름 하나를
+    1:1로 매핑하던 예전 방식은 pyannote가 두 사람을 한 클러스터로 묶었을 때 그 발언
+    전부를 오배정했다. 그래서 판정은 턴별로 하고, 클러스터는 **빈칸을 메우는 보조**로만 쓴다.
+
+    한 클러스터에서 서로 다른 이름이 확정됐으면 그 클러스터는 믿을 수 없다는 뜻이므로
+    아무것도 메우지 않는다 — 잘못 묶인 클러스터가 오배정을 퍼뜨리는 걸 막는다.
+    """
+    names_by_cluster: dict = {}
+    for seg, cluster in zip(segments, clusters):
+        if cluster is None or not seg.get("speaker"):
+            continue
+        names_by_cluster.setdefault(cluster, set()).add(seg["speaker"])
+
+    filled = 0
+    for seg, cluster in zip(segments, clusters):
+        if seg.get("speaker") or cluster is None:
+            continue
+        names = names_by_cluster.get(cluster)
+        if names and len(names) == 1:   # 이름이 하나로 일치할 때만
+            seg["speaker"] = next(iter(names))
+            filled += 1
+    return filled
