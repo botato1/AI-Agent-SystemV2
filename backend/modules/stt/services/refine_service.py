@@ -41,6 +41,10 @@ MAX_TURN_GAP_SEC = 1.0       # 같은 화자의 인접 발화를 한 턴으로 �
 # 짧은(0.05초 미만, 배열 인덱싱만 방어) 것만 걸러내고 나머지는 실제로 전사를 시도해
 # VAD/빈 텍스트 여부로 판단한다(잡음이면 전사 결과가 비어서 자연스럽게 걸러짐).
 MIN_TURN_SEC = 0.05
+# 겹침을 걷어내고 남은 조각이 이보다 짧으면 버린다. 잘려나간 끄트머리는 말이 안 되는
+# 소리 조각이라 전사해봐야 헛것이 나온다(MIN_TURN_SEC은 "원래 짧은 발화"를 살리기 위한
+# 값이라 다르다 — 그건 온전한 턴이고, 이건 잘리고 남은 부스러기다).
+MIN_TRIMMED_TURN_SEC = 0.4
 
 
 
@@ -124,6 +128,65 @@ def _merge_adjacent_turns(tracks: list[dict]) -> list[dict]:
         else:
             merged.append(dict(track))
     return merged
+
+
+def _free_pieces(start: float, end: float, occupied: list) -> list:
+    """[start, end)에서 이미 차지된 구간을 뺀 나머지 조각들."""
+    pieces, cursor = [], start
+    for taken_start, taken_end in occupied:
+        if taken_end <= cursor:
+            continue
+        if taken_start >= end:
+            break
+        if taken_start > cursor:
+            pieces.append((cursor, taken_start))
+        cursor = max(cursor, taken_end)
+        if cursor >= end:
+            break
+    if cursor < end:
+        pieces.append((cursor, end))
+    return pieces
+
+
+def _resolve_overlapping_turns(turns: list[dict]) -> list[dict]:
+    """
+    시간이 겹치는 턴들을 **겹치지 않게** 정리한다. 긴 턴이 우선이다.
+
+    왜 필요한가 (2026-08-04 실측):
+      화자분리는 시간이 겹치는 턴을 내놓을 수 있다. 그런데 공용 마이크 회의는
+      **오디오가 하나뿐이라, 겹치는 두 턴이 같은 소리를 두 번 전사한다.**
+      회의록에 같은 말이 두 번 들어갔다:
+
+        [27.3~34.9] 문지수  "좋아요. 그럼 로그인 버튼 색상을..."
+        [27.3~27.9] 김나연  "좋아요."          ← 위 문장 앞부분의 중복
+        [38.4~40.8] 문지수  "감사합니다. 오늘은 여기까지 할게요."
+        [39.0~39.8] 김나연  "자 오늘은 여기까지."  ← 뒷부분의 중복
+
+      중복은 회의록 품질을 떨어뜨리고, 모순 감지가 같은 발언을 두 사람이 한 것으로
+      볼 수도 있다.
+
+    긴 턴을 우선하는 이유: 짧은 턴은 대개 화자분리가 잘못 끼워 넣은 조각이고, 설령
+    진짜 맞장구였더라도 **그 소리는 이미 긴 턴의 오디오 안에 들어 있어 거기서 전사된다.**
+    즉 내용을 잃는 게 아니라 중복을 없애는 것이다(화자 귀속은 잃을 수 있다 —
+    공용 마이크에서 겹친 소리를 갈라내지 못하는 한 피할 수 없는 대가다).
+    """
+    occupied: list = []
+    kept: list = []
+    # 긴 턴부터 자리를 차지한다
+    for turn in sorted(turns, key=lambda t: -(t["end"] - t["start"])):
+        pieces = _free_pieces(turn["start"], turn["end"], occupied)
+        if not pieces:
+            continue        # 통째로 다른 턴 안에 들어 있음 — 버린다
+        start, end = max(pieces, key=lambda p: p[1] - p[0])
+        if end - start < MIN_TRIMMED_TURN_SEC:
+            continue
+        kept.append({**turn, "start": round(start, 2), "end": round(end, 2)})
+        occupied = sorted(occupied + [(start, end)])
+
+    dropped = len(turns) - len(kept)
+    if dropped:
+        logger.info(f"✂️ 겹치는 화자 턴 정리: {len(turns)}개 → {len(kept)}개 (중복 전사 방지)")
+    return sorted(kept, key=lambda t: t["start"])
 
 
 async def _transcribe_turns(
@@ -297,8 +360,11 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         waveform,
         max_speakers=enrolled_count if enrolled_count >= MIN_SPEAKERS else None,
     )
-    turns = _merge_adjacent_turns(diarization_tracks)
-    logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 병합 후 {len(turns)}개, 턴별 전사 시작")
+    # 같은 화자의 인접 턴을 합치고 → 서로 겹치는 턴을 걷어낸다.
+    # 겹침을 안 걷어내면 공용 마이크(오디오 하나)에서 같은 소리를 두 번 전사해
+    # 회의록에 같은 말이 두 번 들어간다 (_resolve_overlapping_turns 참고).
+    turns = _resolve_overlapping_turns(_merge_adjacent_turns(diarization_tracks))
+    logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 정리 후 {len(turns)}개, 턴별 전사 시작")
 
     # 2. 턴별 정밀 전사 (각자 PC 모드와 같은 헬퍼를 씀 — 차이는 오디오 출처뿐)
     # 최종 회의록이 되는 경로라 인식 힌트를 여기에도 적용한다. 등록 프로필이 있으면
