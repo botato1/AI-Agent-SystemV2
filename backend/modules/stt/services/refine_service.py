@@ -326,8 +326,8 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
             app_state, meeting_id, refined_segments, overlap_spans,
             audio, sample_rate, profiles_path, enrolled_names, meta,
         )
-        # 4-b. 그래도 남은 겹침은 화자를 정하지 않는다. 겹친 목소리에서 한 명을 고르는
-        #      것은 정답이 "여러 명"인 질문에 한 명으로 답하는 것이라 무조건 틀린다.
+        # 4-b. 남은 겹침에는 표시만 단다(이름은 그대로). 지울 근거가 실측에서 안 나왔다 —
+        #      overlap_detect.mark_overlapped_segments의 설명 참고.
         mark_overlapped_segments(refined_segments, overlap_spans)
 
     # 5. LLM이 문맥으로 읽고 오인식 단어를 고친다.

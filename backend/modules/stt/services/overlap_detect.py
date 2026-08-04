@@ -18,7 +18,7 @@
   그게 곧 겹쳐 말한 구간이다. 모델을 하나 더 로드할 이유가 없다(메모리·시작 시간).
 """
 from ..core.config import (
-    logger, OVERLAP_MIN_SEC, OVERLAP_SEGMENT_RATIO, OVERLAP_MIN_SPEAKERS,
+    logger, OVERLAP_MIN_SEC, OVERLAP_SEGMENT_RATIO, OVERLAP_CLEAR_SPEAKER,
 )
 
 
@@ -109,14 +109,21 @@ def concurrent_speakers(tracks: list[dict], start: float, end: float) -> int:
 
 def mark_overlapped_segments(segments: list[dict], spans: list[tuple[float, float]]) -> int:
     """
-    발화 대부분이 겹침 구간인 세그먼트에 overlapped=True를 달고 speaker를 비운다.
+    발화 대부분이 겹침 구간인 세그먼트에 overlapped=True를 단다.
+
+    **이름은 지우지 않는다**(OVERLAP_CLEAR_SPEAKER로 켤 수 있음). 원래는 "전원이
+    동시에 말한 줄에서 한 명을 고르지 않게" 하려던 기능인데, 실측에서 지울 근거가
+    안 나왔다 — pyannote는 전원이 답한 구간도 2명으로만 잡아서 맞장구와 구분되지
+    않는다. 그 기준으로 지우면 오배정 1개를 고치고 맞는 이름 6개를 잃는다.
+
+    표시만 달면 잃는 것이 없고, 모순 감지가 이 표시를 보고 해당 발언을 걸러내면
+    틀린 이름이 실제로 해를 끼치는 지점은 막힌다.
 
     **부분적으로만 겹친 세그먼트는 건드리지 않는다.** 긴 발언 중간에 누가 "네" 하고
-    끼어드는 건 흔한 일이고, 그 발언의 화자는 여전히 명확하다. 세그먼트 대부분이
-    겹쳐 있을 때만 "누구 하나로 정할 수 없다"고 본다.
+    끼어드는 건 흔한 일이고, 그 발언의 화자는 여전히 명확하다.
 
-    스키마: speaker는 기존대로 문자열 또는 null이고, overlapped 필드가 추가된다.
-    이 필드를 모르는 소비자는 speaker=null(미상)로 읽게 되므로 안전하다.
+    스키마: overlapped 필드가 추가된다(기본적으로 speaker는 그대로).
+    이 필드를 모르는 소비자는 지금까지와 똑같이 동작한다.
     """
     if not spans:
         return 0
@@ -125,13 +132,14 @@ def mark_overlapped_segments(segments: list[dict], spans: list[tuple[float, floa
     for seg in segments:
         if overlap_ratio(seg["start"], seg["end"], spans) >= OVERLAP_SEGMENT_RATIO:
             seg["overlapped"] = True
-            seg["speaker"] = None
+            if OVERLAP_CLEAR_SPEAKER:
+                seg["speaker"] = None
             marked += 1
 
     if marked:
         total = sum(end - start for start, end in spans)
         logger.info(
-            f"🗣️🗣️ 겹쳐 말한 구간 {len(spans)}개({total:.0f}초) — "
-            f"세그먼트 {marked}개를 '여러 명'으로 표시"
+            f"🗣️🗣️ 겹쳐 말한 구간 {len(spans)}개({total:.0f}초) — 세그먼트 {marked}개에 표시"
+            + (" (화자 이름 제거)" if OVERLAP_CLEAR_SPEAKER else "")
         )
     return marked
