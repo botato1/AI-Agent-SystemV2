@@ -53,6 +53,46 @@ def get_or_create_session(
     db.refresh(row)
     return row
 
+def create_session(
+    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
+) -> AiChatSession:
+    row = AiChatSession(workspace_id=workspace_id, room_id=room_id, user_id=user_id)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_sessions(
+    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
+) -> list[AiChatSession]:
+    query = db.query(AiChatSession).filter(
+        AiChatSession.workspace_id == workspace_id,
+        AiChatSession.user_id == user_id,
+        AiChatSession.deleted_at.is_(None),
+    )
+    query = (
+        query.filter(AiChatSession.room_id == room_id)
+        if room_id is not None
+        else query.filter(AiChatSession.room_id.is_(None))
+    )
+    return query.order_by(AiChatSession.updated_at.desc()).all()
+
+
+def get_session(db: Session, session_id: uuid.UUID) -> Optional[AiChatSession]:
+    return (
+        db.query(AiChatSession)
+        .filter(AiChatSession.id == session_id, AiChatSession.deleted_at.is_(None))
+        .first()
+    )
+
+
+def delete_session(db: Session, session_id: uuid.UUID) -> None:
+    row = db.query(AiChatSession).filter(AiChatSession.id == session_id).first()
+    if row:
+        row.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+
 
 def add_message(
     db: Session,
@@ -104,6 +144,12 @@ def add_ai_exchange(
     """
 
     try:
+        session = db.query(AiChatSession).filter(AiChatSession.id == session_id).first()
+        if session and not session.title:
+            session.title = user_content.strip()[:40]
+        if session:
+            session.updated_at = datetime.now(timezone.utc)
+
         user_created_at = datetime.now(timezone.utc)
         assistant_created_at = user_created_at + timedelta(
             microseconds=1
