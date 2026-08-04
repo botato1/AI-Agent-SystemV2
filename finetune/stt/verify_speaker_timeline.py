@@ -31,6 +31,7 @@ from stt.core.config import (  # noqa: E402
     MEETINGS_DIR, SPEAKER_MIN_MARGIN, SPEAKER_WINDOW_SEC, SPEAKER_WINDOW_HOP_SEC,
     SPEAKER_SMOOTH_WIDTH,
 )
+from stt.services.profile_store import GlobalProfileStore  # noqa: E402
 from stt.services.speaker_id_service import load_speaker_embedding_inference  # noqa: E402
 from stt.services.speaker_timeline import build_speaker_timeline  # noqa: E402
 
@@ -40,6 +41,11 @@ def main():
     parser.add_argument("--meeting", required=True)
     parser.add_argument("--audio", default="audio.wav")
     parser.add_argument("--truth", nargs="*", default=[], help="정답 구간 '이름:시작-끝' (초)")
+    parser.add_argument(
+        "--global-profiles", action="store_true",
+        help="회의에 저장된 프로필 대신 현재 전역 등록 프로필 전체를 쓴다. "
+             "회의 당시 일부 참석자가 등록돼 있지 않았던 경우, 지금 기준으로 다시 재보려면 필요.",
+    )
     args = parser.parse_args()
 
     meeting_dir = os.path.join(MEETINGS_DIR, args.meeting)
@@ -48,14 +54,26 @@ def main():
         audio = audio.mean(axis=1)
 
     profiles_path = os.path.join(meeting_dir, "profiles.npz")
-    if not os.path.isfile(profiles_path):
-        raise SystemExit(f"❌ 등록 프로필 없음: {profiles_path} (공용 마이크 회의가 아님)")
-    data = np.load(profiles_path)
-    profiles = {name: data[name] for name in data.files}
+    stored = list(np.load(profiles_path).files) if os.path.isfile(profiles_path) else []
+
+    if args.global_profiles:
+        store = GlobalProfileStore()
+        profiles = store.load(store.list_names())
+        missing = [n for n in profiles if n not in stored]
+        if missing:
+            # 이걸 확인 안 하면 "알고리즘이 못 맞혔다"와 "후보에 없어서 못 맞혔다"를
+            # 구분하지 못한다. 실제로 그 둘을 혼동해 원인을 잘못 짚은 적이 있다.
+            print(f"⚠️ 회의 당시 등록돼 있지 않던 참석자: {', '.join(missing)}")
+    else:
+        if not stored:
+            raise SystemExit(f"❌ 등록 프로필 없음: {profiles_path} (공용 마이크 회의가 아님)")
+        data = np.load(profiles_path)
+        profiles = {name: data[name] for name in data.files}
 
     print(f"설정: 창 {SPEAKER_WINDOW_SEC}초 / 이동 {SPEAKER_WINDOW_HOP_SEC}초 / "
           f"margin 하한 {SPEAKER_MIN_MARGIN} / 평활화 {SPEAKER_SMOOTH_WIDTH}창")
-    print(f"참석자 {len(profiles)}명: {', '.join(profiles)}")
+    print(f"대조 대상 {len(profiles)}명: {', '.join(profiles)}"
+          + (" (전역 프로필)" if args.global_profiles else " (회의 저장본)"))
     print(f"오디오 {len(audio) / sr:.0f}초\n")
 
     timeline = build_speaker_timeline(audio, profiles, load_speaker_embedding_inference(), sr)
