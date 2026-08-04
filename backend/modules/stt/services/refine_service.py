@@ -35,6 +35,11 @@ MAX_TURN_GAP_SEC = 1.0       # 같은 화자의 인접 발화를 한 턴으로 �
 # VAD/빈 텍스트 여부로 판단한다(잡음이면 전사 결과가 비어서 자연스럽게 걸러짐).
 MIN_TURN_SEC = 0.05
 
+# 턴별 판정이 실패한 클러스터를 오디오를 합쳐 다시 판정할 때의 길이 범위.
+# 너무 짧으면 임베딩이 흔들리고, 너무 길면 그 안에 다른 화자가 섞일 위험이 커진다.
+_CLUSTER_RETRY_MIN_SEC = 3.0
+_CLUSTER_RETRY_MAX_SEC = 15.0
+
 
 async def refine_meeting(meeting_id: str, app_state) -> dict | None:
     """
@@ -369,7 +374,7 @@ def _identify_turn_speakers(
         if name:
             assigned[name] = assigned.get(name, 0) + 1
 
-    filled = _fill_unknown_from_clusters(segments, clusters)
+    filled = _fill_unknown_from_clusters(segments, clusters, audio, sample_rate, identifier)
 
     unknown = sum(1 for seg in segments if not seg.get("speaker"))
     logger.info(
@@ -380,7 +385,10 @@ def _identify_turn_speakers(
     return segments
 
 
-def _fill_unknown_from_clusters(segments: list[dict], clusters: list) -> int:
+def _fill_unknown_from_clusters(
+    segments: list[dict], clusters: list,
+    audio: np.ndarray = None, sample_rate: int = REALTIME_SAMPLE_RATE, identifier=None,
+) -> int:
     """
     판정 못 한 턴을, 같은 화자분리 클러스터의 확정된 이름으로 메운다.
 
@@ -401,6 +409,35 @@ def _fill_unknown_from_clusters(segments: list[dict], clusters: list) -> int:
         if cluster is None or not seg.get("speaker"):
             continue
         names_by_cluster.setdefault(cluster, set()).add(seg["speaker"])
+
+    # 턴별 판정이 하나도 성공 못 한 클러스터는, 그 클러스터의 오디오를 모아 한 번 더
+    # 판정해본다. 조각이 짧아서 실패했을 뿐 오디오를 합치면 판정되는 경우가 있다 —
+    # 실측에서 이준오의 발언이 세 조각으로 갈려 전부 미상이었는데, 같은 구간을 9초로
+    # 이어붙이면 유사도 0.486으로 정상 판정됐다.
+    # 이것도 하한을 그대로 적용하므로, 두 사람이 섞인 클러스터는 임베딩이 흐려져
+    # 자연히 미상으로 남는다(잘못 묶인 클러스터가 오배정을 퍼뜨리지 않는다).
+    if audio is not None and identifier is not None:
+        spans_by_cluster: dict = {}
+        for seg, cluster in zip(segments, clusters):
+            if cluster is None or cluster in names_by_cluster:
+                continue    # 라벨이 없거나, 이미 확정된 이름이 있는 클러스터는 대상 아님
+            spans_by_cluster.setdefault(cluster, []).append((seg["start"], seg["end"]))
+
+        for cluster, spans in spans_by_cluster.items():
+            clips, total = [], 0.0
+            for start, end in spans:
+                if total >= _CLUSTER_RETRY_MAX_SEC:
+                    break
+                clip = audio[int(start * sample_rate): int(end * sample_rate)]
+                if len(clip):
+                    clips.append(clip)
+                    total += end - start
+            if total < _CLUSTER_RETRY_MIN_SEC:
+                continue    # 모아도 짧으면 판정해봐야 흔들린다
+            name = identifier.identify(np.concatenate(clips), update_profile=False)
+            if name:
+                names_by_cluster[cluster] = {name}
+                logger.info(f"🔎 클러스터 재판정: {cluster} → {name} (오디오 {total:.1f}초 합산)")
 
     filled = 0
     for seg, cluster in zip(segments, clusters):
