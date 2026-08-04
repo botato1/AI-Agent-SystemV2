@@ -12,10 +12,26 @@
   이 스크립트는 그 방식이 성립하는지만 확인한다 — 창이 짧으면 임베딩이 흔들려서
   판정이 안 될 수 있고, 그러면 방향 자체가 무의미하다. **만들기 전에 잰다.**
 
-같이 확인하는 것:
-  음량 정규화(창마다 RMS를 맞춤)가 도움이 되는지. 실패한 두 사람이 마이크에서 멀어
-  작게 녹음됐기 때문에(RMS 0.046 / 0.056 vs 성공한 사람들 0.073~0.100),
-  낮은 SNR이 임베딩을 흐렸을 가능성이 있다.
+1차 실측 결과 (5인 회의, 창 1.5초):
+  전체 1등 정확도 94%. **창 단위 판정은 성립한다.**
+
+  그리고 진짜 원인이 드러났다 — 실패했던 세 명의 평균 유사도가
+  이준오 0.360 / 이승주 0.302 / 김나연 0.286으로 **전부 0.4 미만**인데
+  1등은 87~94% 맞힌다. 순위는 처음부터 맞았고, SPEAKER_MIN_ASSIGN_SIMILARITY=0.4가
+  정답을 걷어내고 있었다.
+
+  절대 문턱은 "누가 말할지 모를 때" 쓰는 기준이다. 참석자를 아는 회의에선
+  "충분히 닮았나"가 아니라 "다섯 중 누가 제일 닮았나"를 물어야 한다.
+  절대 점수는 프로필 품질에 따라 0.29~0.53으로 흩어지므로 공통 문턱이 성립하지 않는다.
+
+  음량 정규화는 효과가 0이었다(소수점 셋째 자리까지 동일). 임베딩 모델이 내부에서
+  이득을 정규화하므로 녹음 크기는 영향을 주지 않는다 — 음량 가설은 폐기.
+
+2차에서 재는 것:
+  절대 점수를 버리고 무엇으로 판단할지. 1등과 2등의 차이(margin)가 후보다.
+  - margin 분포: 맞을 때와 틀릴 때가 갈리는지
+  - 문턱별 정확도/적용률: 어디서 끊어야 오답만 걸러지는지
+  - 이웃 창 다수결 평활화가 94%를 얼마나 끌어올리는지
 
 사용법:
   python probe_window_speaker_id.py --meeting <회의ID> \
@@ -42,12 +58,14 @@ def cosine(a, b) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
-def normalize_rms(clip: np.ndarray, target: float = 0.08) -> np.ndarray:
-    """창마다 음량을 맞춘다. 멀리서 녹음된 화자의 낮은 SNR을 보정하려는 시도."""
-    rms = np.sqrt((clip ** 2).mean())
-    if rms < 1e-6:
-        return clip
-    return np.clip(clip * (target / rms), -1.0, 1.0)
+def smooth(labels: list, width: int = 3) -> list:
+    """이웃 창 다수결. 한 창이 흔들려도 앞뒤가 같으면 그쪽으로 되돌린다."""
+    half = width // 2
+    out = []
+    for i in range(len(labels)):
+        window = labels[max(0, i - half): i + half + 1]
+        out.append(max(set(window), key=window.count))
+    return out
 
 
 def main():
@@ -73,57 +91,72 @@ def main():
     hop = int(args.hop * sr)
 
     print(f"창 {args.window}초 / 이동 {args.hop}초 / 등록 {len(profiles)}명\n")
-    print(f"{'정답':8s}{'창수':>5s}{'정답1등':>8s}{'정규화시':>9s}"
-          f"{'평균유사도':>11s}{'정규화시':>9s}   오답으로 뽑힌 이름")
-    print("-" * 78)
+    print(f"{'정답':8s}{'창수':>5s}{'1등정확':>8s}{'평활화후':>9s}"
+          f"{'유사도':>8s}{'margin':>8s}{'오답margin':>11s}   오답으로 뽑힌 이름")
+    print("-" * 84)
 
-    totals = {"plain_hit": 0, "norm_hit": 0, "count": 0}
+    rows = []          # (맞았나, margin) — 문턱 판단용
+    total = hit = smoothed_hit = 0
+
     for spec in args.truth:
         name, span = spec.split(":")
         start, end = (float(x) for x in span.split("-"))
         seg = audio[int(start * sr):int(end * sr)]
 
-        hits = norm_hits = 0
-        scores, norm_scores = [], []
+        preds, scores, margins, bad_margins = [], [], [], []
         wrong: dict = {}
-        n = 0
         for off in range(0, max(len(seg) - win + 1, 1), hop):
             clip = seg[off:off + win]
             if len(clip) < win // 2:
                 break
-            n += 1
-            for tag, c in (("plain", clip), ("norm", normalize_rms(clip))):
-                emb = identifier.extract_embedding(c)
-                ranked = sorted(((cosine(emb, v), k) for k, v in profiles.items()), reverse=True)
-                top_score, top_name = ranked[0]
-                if tag == "plain":
-                    scores.append(top_score)
-                    if top_name == name:
-                        hits += 1
-                    else:
-                        wrong[top_name] = wrong.get(top_name, 0) + 1
-                else:
-                    norm_scores.append(top_score)
-                    if top_name == name:
-                        norm_hits += 1
+            emb = identifier.extract_embedding(clip)
+            ranked = sorted(((cosine(emb, v), k) for k, v in profiles.items()), reverse=True)
+            top_score, top_name = ranked[0]
+            # 2등과의 차이. 절대 점수는 프로필 품질 탓에 0.29~0.53으로 흩어져 공통
+            # 문턱이 성립하지 않으므로, 대신 이걸로 판단할 수 있는지가 관건이다.
+            margin = top_score - (ranked[1][0] if len(ranked) > 1 else 0.0)
 
-        if not n:
+            preds.append(top_name)
+            scores.append(top_score)
+            margins.append(margin)
+            rows.append((top_name == name, margin))
+            if top_name != name:
+                wrong[top_name] = wrong.get(top_name, 0) + 1
+                bad_margins.append(margin)
+
+        if not preds:
             continue
-        totals["plain_hit"] += hits
-        totals["norm_hit"] += norm_hits
-        totals["count"] += n
-        wrong_str = ", ".join(f"{k} {v}" for k, v in sorted(wrong.items(), key=lambda x: -x[1])[:3])
-        print(f"{name:8s}{n:5d}{hits/n*100:7.0f}%{norm_hits/n*100:8.0f}%"
-              f"{np.mean(scores):10.3f}{np.mean(norm_scores):9.3f}   {wrong_str}")
+        n = len(preds)
+        h = sum(p == name for p in preds)
+        sh = sum(p == name for p in smooth(preds))
+        total += n
+        hit += h
+        smoothed_hit += sh
 
-    c = max(totals["count"], 1)
-    print("-" * 78)
-    print(f"{'전체':8s}{c:5d}{totals['plain_hit']/c*100:7.0f}%{totals['norm_hit']/c*100:8.0f}%")
-    print()
-    print("판정 기준:")
-    print("  정답1등 80% 이상 → 창 단위 판정이 성립. 이 방향으로 구현할 가치 있음")
-    print("  50~80%          → 창을 늘리거나 평활화(이웃 창 다수결)가 필요")
-    print("  50% 미만        → 짧은 창으로는 무리. 다른 접근을 찾아야 함")
+        wrong_str = ", ".join(f"{k} {v}" for k, v in sorted(wrong.items(), key=lambda x: -x[1])[:3])
+        bad = f"{np.mean(bad_margins):11.3f}" if bad_margins else f"{'-':>11s}"
+        print(f"{name:8s}{n:5d}{h/n*100:7.0f}%{sh/n*100:8.0f}%"
+              f"{np.mean(scores):8.3f}{np.mean(margins):8.3f}{bad}   {wrong_str}")
+
+    t = max(total, 1)
+    print("-" * 84)
+    print(f"{'전체':8s}{t:5d}{hit/t*100:7.0f}%{smoothed_hit/t*100:8.0f}%")
+
+    # margin 문턱을 어디서 끊을지: 버리는 양 대비 정확도가 얼마나 오르는지 본다.
+    print("\nmargin 문턱별 (문턱 미만은 '미상'으로 버림)")
+    print(f"{'문턱':>6s}{'적용률':>8s}{'적용분 정확도':>14s}{'버린 것 중 오답':>17s}")
+    for gate in (0.0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12):
+        kept = [ok for ok, m in rows if m >= gate]
+        dropped = [ok for ok, m in rows if m < gate]
+        if not kept:
+            continue
+        drop_wrong = f"{sum(not ok for ok in dropped)}/{len(dropped)}" if dropped else "-"
+        print(f"{gate:6.2f}{len(kept)/len(rows)*100:7.0f}%"
+              f"{sum(kept)/len(kept)*100:13.0f}%{drop_wrong:>17s}")
+
+    print("\n읽는 법:")
+    print("  '버린 것 중 오답' 비율이 높을수록 문턱이 오답만 골라 버린다는 뜻 = 좋은 문턱")
+    print("  적용률이 급격히 떨어지면 맞는 것까지 버리는 것이므로 그 앞에서 끊는다")
 
 
 if __name__ == "__main__":
