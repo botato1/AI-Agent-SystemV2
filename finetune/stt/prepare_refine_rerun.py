@@ -34,8 +34,11 @@ from stt.services.profile_store import GlobalProfileStore  # noqa: E402
 
 
 def backup(path: str) -> None:
+    # copy2가 아니라 copyfile을 쓴다 — NAS에서 다른 사용자 소유 파일의 수정 시각을
+    # 복사하려다 PermissionError로 죽는다(서버 프로세스가 쓴 profiles.npz에서 실제로 발생).
+    # 여기서 필요한 건 내용 보존뿐이라 메타데이터는 안 가져와도 된다.
     if os.path.isfile(path) and not os.path.isfile(path + ".bak"):
-        shutil.copy2(path, path + ".bak")
+        shutil.copyfile(path, path + ".bak")
         print(f"  백업: {os.path.basename(path)}.bak")
 
 
