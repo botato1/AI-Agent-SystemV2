@@ -55,7 +55,7 @@ JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v7")
 # narrowing이 안 되면 topic_match 잔여 오류율(홀드아웃 기준 8~10%)이 후보 개수만큼
 # 곱해져 노출됨 - 0.5로 올려 실제 필터 역할을 하게 함(TBD - 추후 대규모 실측 후 재조정).
 DECISION_CANDIDATE_TOP_K = int(os.getenv("DECISION_CANDIDATE_TOP_K", "15"))
-DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.5"))
+DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.4"))
 
 # [수정 - 리뷰 반영] 벡터 후보(top-15)를 전부 topic_match로 순회하면 무관한 발화 하나당
 # 최악의 경우 LLM 호출이 15번까지 순차로 늘어나 체감 지연이 커짐. 후보는 이미 벡터
