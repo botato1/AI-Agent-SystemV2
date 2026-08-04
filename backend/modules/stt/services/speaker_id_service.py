@@ -11,6 +11,7 @@ from ..core.config import (
     SPEAKER_EMBEDDING_MODEL,
     SPEAKER_SIMILARITY_THRESHOLD,
     SPEAKER_MIN_ASSIGN_SIMILARITY,
+    SPEAKER_MIN_MARGIN,
     MAX_SPEAKERS,
 )
 
@@ -124,17 +125,60 @@ class LiveSpeakerIdentifier:
         logger.info(f"✏️ 세션 화자 라벨 교체: {old_name} → {new_name}")
         return True
 
-    def _find_best_match(self, embedding: np.ndarray) -> tuple[str | None, float]:
-        best_label = None
-        best_score = -1.0
+    def rank_profiles(self, embedding: np.ndarray) -> list[tuple[float, str]]:
+        """등록 프로필을 유사도 내림차순으로. 1등뿐 아니라 2등까지 봐야 margin을 잴 수 있다."""
         # identify()는 executor 스레드에서 돌고 rename_speaker()는 이벤트 루프에서 불릴 수
         # 있어서, 순회 중 dict 크기 변경 예외가 나지 않게 스냅샷을 순회
-        for label, profile in list(self._profiles.items()):
-            score = self._cosine_similarity(embedding, profile)
-            if score > best_score:
-                best_score = score
-                best_label = label
-        return best_label, best_score
+        return sorted(
+            ((self._cosine_similarity(embedding, profile), label)
+             for label, profile in list(self._profiles.items())),
+            reverse=True,
+        )
+
+    def _find_best_match(self, embedding: np.ndarray) -> tuple[str | None, float]:
+        ranked = self.rank_profiles(embedding)
+        if not ranked:
+            return None, -1.0
+        return ranked[0][1], ranked[0][0]
+
+    def _closed_set_match(self, embedding: np.ndarray) -> tuple[str | None, str | None, float, float]:
+        """
+        참석자를 아는 회의의 판정: **절대 점수가 아니라 순위**로 정하고,
+        1등과 2등의 차이(margin)로만 걸러낸다.
+
+        (판정된 이름 또는 None, 최근접 이름, 유사도, margin)을 준다 — 미상일 때도
+        누구와 제일 가까웠는지는 로그에 남겨야 원인을 좁힐 수 있다.
+
+        왜 절대 문턱을 버렸나 (2026-08-04 실측, 정답 대본이 있는 5인 회의):
+          평균 유사도가 이준오 0.360 / 이승주 0.302 / 김나연 0.286으로 하한(0.4)
+          미만인데 1등은 87~94% 맞혔다. **순위는 처음부터 맞았고 문턱이 정답을
+          걷어내고 있었다.** 절대 점수는 프로필 품질에 따라 0.29~0.53으로 흩어지므로
+          모두에게 같은 문턱을 씌우는 것 자체가 성립하지 않는다.
+
+          절대 문턱은 "누가 말할지 모를 때" 쓰는 기준이다(등록 안 된 사람이 말할 수
+          있으니 '충분히 닮았나'를 물어야 한다). 참석자를 알면 물어야 할 것은
+          "다섯 중 누가 제일 닮았나"다. 열린 집합 경로는 지금도 절대 문턱을 쓴다.
+
+        margin이 필요한 이유: 순위 판정은 **무조건 누군가를 지목한다.** 잡음이나
+        겹쳐 말한 구간에도 이름이 붙는다는 뜻이라, 그걸 막을 방어선이 하나는 있어야 한다.
+        실측에서 오답 창의 margin은 0.028~0.078, 정답 창은 평균 0.086~0.244였다.
+        """
+        ranked = self.rank_profiles(embedding)
+        if not ranked:
+            return None, None, -1.0, 0.0
+        best_score, best_label = ranked[0]
+
+        if len(ranked) == 1:
+            # 경쟁자가 없으면 margin을 잴 수 없다(항상 0이 되어 전부 미상이 된다).
+            # 1인 회의에선 "누가 제일 닮았나"라는 질문 자체가 성립하지 않으므로,
+            # 열린 집합과 같은 절대 문턱으로 판단한다.
+            matched = best_label if best_score >= SPEAKER_MIN_ASSIGN_SIMILARITY else None
+            return matched, best_label, best_score, 0.0
+
+        margin = best_score - ranked[1][0]
+        if margin < SPEAKER_MIN_MARGIN:
+            return None, best_label, best_score, margin
+        return best_label, best_label, best_score, margin
 
     def identify(self, audio: np.ndarray, update_profile: bool = True) -> str | None:
         """
@@ -148,9 +192,9 @@ class LiveSpeakerIdentifier:
         """
         # 청크 전체가 아니라 가장 긴 발화 구간으로 판정 — 화자 전환이 섞인 청크에서
         # 유령 화자가 만들어지는 걸 막기 위함 (_dominant_speech_region 참고).
-        # 주의: extract_embedding 자체는 원본 그대로 두어야 한다 — refine_service가
-        # "같은 화자의 여러 발화를 이어붙여" 임베딩할 때 재사용하는데, 거기서는
-        # 오히려 오디오가 많을수록 정확하므로 잘라내면 안 됨.
+        # 주의: extract_embedding 자체는 원본 그대로 두어야 한다 — speaker_timeline이
+        # 이미 발화 구간 안에서 자른 짧은 창을 넘기는데, 거기서 또 "가장 긴 구간"을
+        # 골라내면 창이 더 짧아져 임베딩이 흔들린다.
         embedding = self.extract_embedding(self._dominant_speech_region(audio))
 
         if not self._profiles:
@@ -165,37 +209,36 @@ class LiveSpeakerIdentifier:
             logger.info(f"🆕 새 화자 등록: {new_label} (첫 화자)")
             return new_label
 
-        best_label, best_score = self._find_best_match(embedding)
-
-        if not update_profile:
-            # 읽기 전용 — 닫힌 집합이면 최근접 등록자, 열린 집합이면 임계값을 넘을 때만.
-            # 새 화자를 만들지 않으므로 잠정 자막에 유령 화자가 등장하지 않는다.
-            # 하한은 확정 경로와 동일하게 적용한다 — 잠정에서만 이름이 뜨다가 확정에서
-            # 사라지면 화면이 더 혼란스럽다.
-            if best_score < SPEAKER_MIN_ASSIGN_SIMILARITY:
-                return None
-            if self._closed_set or best_score >= self.similarity_threshold:
-                return best_label
-            return None
-
         if self._closed_set:
-            # 매칭이 너무 나쁘면 이름을 붙이지 않는다. 닫힌 집합은 원래 "무조건 가장
-            # 가까운 사람"에게 배정하는데, 하한이 없으면 유사도 0.32짜리에도 확신에 차서
-            # 이름이 붙는다(실측: 정상 매칭 0.72 vs 오배정 구간 0.32~0.37).
-            # 틀린 이름보다 미상이 낫다 — 회의록에서 고칠 수 있고, 모순 감지가 엉뚱한
-            # 사람의 발언으로 판단하는 것도 막는다.
-            if best_score < SPEAKER_MIN_ASSIGN_SIMILARITY:
+            # 참석자를 아는 회의 — 절대 점수가 아니라 순위+margin으로 판정한다.
+            # (근거는 _closed_set_match 참고. 절대 문턱은 정답까지 걷어냈다.)
+            name, nearest, best_score, margin = self._closed_set_match(embedding)
+            if name is None:
                 logger.info(
-                    f"🤷 화자 미상 — 최고 유사도 {best_score:.2f}가 하한"
-                    f"({SPEAKER_MIN_ASSIGN_SIMILARITY})에 못 미침 (최근접: {best_label})"
+                    f"🤷 화자 미상 — 1·2등 차이 {margin:.3f}가 하한({SPEAKER_MIN_MARGIN})에 "
+                    f"못 미침 (최근접: {nearest} {best_score:.2f})"
                 )
                 return None
             # 프로필 갱신(이동 평균)은 유사도가 충분히 높을 때만 — 겹쳐 말한 구간 등이
-            # 잘못 배정됐을 때 엉뚱한 사람의 목소리 지문을 조금씩 오염시키는 걸 방지
-            if best_score >= self.similarity_threshold:
-                self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding
-            logger.info(f"🗣️ 화자 매칭(사전등록): {best_label} (유사도 {best_score:.2f})")
-            return best_label
+            # 잘못 배정됐을 때 엉뚱한 사람의 목소리 지문을 조금씩 오염시키는 걸 방지.
+            # 여기는 절대 점수가 맞는 기준이다: "이 오디오를 지문에 섞어도 되나"를 묻는 것이라
+            # 순위와 무관하게 충분히 닮았어야 한다.
+            if update_profile and best_score >= self.similarity_threshold:
+                self._profiles[name] = 0.9 * self._profiles[name] + 0.1 * embedding
+            logger.info(
+                f"🗣️ 화자 매칭(사전등록): {name} (유사도 {best_score:.2f}, 2등과 {margin:.3f} 차이)"
+            )
+            return name
+
+        best_label, best_score = self._find_best_match(embedding)
+
+        if not update_profile:
+            # 읽기 전용(열린 집합) — 새 화자를 만들지 않으므로 잠정 자막에 유령 화자가
+            # 등장하지 않는다. 하한은 확정 경로와 동일하게 적용한다 — 잠정에서만 이름이
+            # 뜨다가 확정에서 사라지면 화면이 더 혼란스럽다.
+            if best_score < SPEAKER_MIN_ASSIGN_SIMILARITY:
+                return None
+            return best_label if best_score >= self.similarity_threshold else None
 
         if best_score >= self.similarity_threshold:
             self._profiles[best_label] = 0.9 * self._profiles[best_label] + 0.1 * embedding

@@ -16,19 +16,16 @@ from ..core.config import (
     is_confident,
     MIN_SPEAKERS,
     build_context_hint,
-    SPEAKER_MIN_ASSIGN_SIMILARITY,
 )
 from .diarize_service import run_diarization
 from .refine_webhook import notify_refine_done
-from .speaker_id_service import LiveSpeakerIdentifier
+from .speaker_timeline import build_speaker_timeline
 
 # 정밀 재분석은 전체 회의 오디오를 다시 돌리는 무거운 GPU 작업이라 동시에 하나만 수행
 # (진행 중인 다른 회의의 실시간 처리와 executor 스레드를 나눠 쓰므로 과부하 방지)
 _refine_lock = asyncio.Lock()
 
 MIN_REFINE_AUDIO_SEC = 1.0   # 이보다 짧은 회의는 재분석 의미 없음
-# (구 클러스터 단위 매핑에서 쓰던 값 — 턴별 판정으로 바꾸면서 제거.
-#  지금은 config.SPEAKER_MIN_ASSIGN_SIMILARITY 하나로 실시간·재분석이 같은 기준을 쓴다)
 MAX_TURN_GAP_SEC = 1.0       # 같은 화자의 인접 발화를 한 턴으로 합치는 최대 침묵 간격
 # "네", "네?" 같은 짧은 대꾸도 보통 0.3초 미만이라, 길이만으로 필터링하면 호흡/잡음뿐
 # 아니라 실제 짧은 발화까지 통째로 사라짐 — 그래서 길이로 미리 거르지 않고, 아주
@@ -36,10 +33,6 @@ MAX_TURN_GAP_SEC = 1.0       # 같은 화자의 인접 발화를 한 턴으로 �
 # VAD/빈 텍스트 여부로 판단한다(잡음이면 전사 결과가 비어서 자연스럽게 걸러짐).
 MIN_TURN_SEC = 0.05
 
-# 턴별 판정이 실패한 클러스터를 오디오를 합쳐 다시 판정할 때의 길이 범위.
-# 너무 짧으면 임베딩이 흔들리고, 너무 길면 그 안에 다른 화자가 섞일 위험이 커진다.
-_CLUSTER_RETRY_MIN_SEC = 3.0
-_CLUSTER_RETRY_MAX_SEC = 15.0
 
 
 async def refine_meeting(meeting_id: str, app_state) -> dict | None:
@@ -332,134 +325,46 @@ def _identify_turn_speakers(
     segments: list[dict], audio: np.ndarray, sample_rate: int, profiles_path: str, inference
 ) -> list[dict]:
     """
-    화자분리가 만든 익명 라벨을 버리고, **턴마다 목소리를 직접 판정**해 이름을 붙인다.
+    화자분리가 만든 익명 라벨을 버리고, **오디오 전체를 짧은 창으로 훑어 만든
+    화자 타임라인**에서 각 세그먼트의 이름을 읽어온다.
 
-    왜 클러스터 단위 매핑을 그만뒀나 (2026-08-03 실측):
-      예전에는 익명 화자(SPEAKER_00 등) 하나에 등록 이름 하나를 1:1로 매핑했다.
-      그 방식은 pyannote가 **두 사람을 한 클러스터로 묶으면 그 발언 전부가 한 사람
-      이름을 받는다.** 정답 대본이 있는 5인 모의 회의에서 실제로 그렇게 됐다 —
-      김나연·이승주·이준오의 발언이 문지수로 몰리고, 매핑 실패한 클러스터는
-      SPEAKER_01로 남았다. 같은 회의에서 실시간 경로는 문지수·김나연·가동현을
-      정확히 맞혔다. **더 정확한 결과를 덜 정확한 것으로 덮어쓰고 있었다.**
+    왜 화자분리 결과에 이름을 붙이지 않나 (2026-08-03~04 실측, 정답 대본이 있는
+    5인 공용 마이크 회의에서 다섯 번 고쳐가며 측정):
 
-    지금은 실시간과 같은 방식이다: 턴 오디오로 임베딩을 뽑아 등록 프로필과 비교하고,
-    충분히 닮지 않으면 이름을 붙이지 않는다(speaker=None). 화자분리의 **경계**는
-    그대로 쓴다 — 경계 잡기는 pyannote가 잘하고, 누구인지 판정은 등록 프로필 대조가
-    낫다는 게 실측 결론이다.
+      ① 클러스터 1:1 매핑 — pyannote가 두 사람을 한 클러스터로 묶으면 그 발언
+         전부가 한 사람 이름을 받는다. 김나연·이승주·이준오의 발언이 문지수로 몰렸다.
+      ② 턴별 판정 — 틀린 이름은 사라졌지만, 조각난 턴이 짧아 미상 19개가 남았다.
+      ③ 클러스터 보완/재판정 — 이준오·이승주가 묶인 클러스터는 15.9초를 다 모아도
+         최고 유사도 0.37(엉뚱한 사람)이었다. 클러스터가 틀리면 무엇을 해도 안 된다.
 
-    턴이 두 사람에 걸쳐 있으면 임베딩이 섞여 유사도가 낮게 나오고 미상이 된다.
-    틀린 이름이 붙는 것보다 낫다.
+      ①~③이 공통으로 깔고 있던 전제가 문제였다. 화자분리는 **참석자가 누구인지
+      모른다는 전제**로 도는데, 우리는 이미 알고 있다. 그 정보를 안 쓰고 클러스터링
+      결과를 받아 이름만 붙이니 클러스터링이 실패하면 같이 실패했다.
+      같은 회의에서 창 단위 직접 판정의 1등 정확도는 94%(평활화 후 97%)였다.
+
+    화자분리는 **전사 경계**를 잡는 데만 계속 쓴다 — 어디서 끊어 전사할지는
+    pyannote가 잘한다. 누구인지만 타임라인이 정한다.
+
+    (speaker_timeline.build_speaker_timeline에 판정 규칙의 근거가 정리돼 있다)
     """
     data = np.load(profiles_path)
     profiles = {name: data[name] for name in data.files}
     if not profiles:
         return segments
 
-    # 닫힌 집합으로 만들어 실시간과 동일한 판정 규칙을 태운다
-    # (유사도 하한 미달이면 None — SPEAKER_MIN_ASSIGN_SIMILARITY)
-    identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
-
-    # 화자분리가 붙인 익명 라벨을 보관해둔다 — 아래에서 짧은 턴을 메우는 데 쓴다
-    clusters = [seg.get("speaker") for seg in segments]
+    timeline = build_speaker_timeline(audio, profiles, inference, sample_rate)
 
     assigned: dict[str, int] = {}
     for seg in segments:
-        clip = audio[int(seg["start"] * sample_rate): int(seg["end"] * sample_rate)]
-        if len(clip) < sample_rate:      # 1초 미만은 임베딩이 불안정 — 판정 포기
-            seg["speaker"] = None
-            continue
-        # 프로필은 갱신하지 않는다 — 재분석은 사후 판정이라 지문을 건드릴 이유가 없고,
-        # 잘못 배정된 턴이 지문을 오염시키면 이후 회의까지 영향을 받는다.
-        name = identifier.identify(clip, update_profile=False)
+        name = timeline.speaker_of(seg["start"], seg["end"])
         seg["speaker"] = name
         if name:
             assigned[name] = assigned.get(name, 0) + 1
 
-    filled = _fill_unknown_from_clusters(segments, clusters, audio, sample_rate, identifier)
-
     unknown = sum(1 for seg in segments if not seg.get("speaker"))
     logger.info(
-        "🔗 턴별 화자 판정: " + (", ".join(f"{k} {v}개" for k, v in sorted(assigned.items())) or "확정 없음")
-        + (f", 클러스터로 보완 {filled}개" if filled else "")
+        "🔗 세그먼트 화자 배정: "
+        + (", ".join(f"{k} {v}개" for k, v in sorted(assigned.items())) or "확정 없음")
         + (f", 미상 {unknown}개" if unknown else "")
     )
     return segments
-
-
-def _fill_unknown_from_clusters(
-    segments: list[dict], clusters: list,
-    audio: np.ndarray = None, sample_rate: int = REALTIME_SAMPLE_RATE, identifier=None,
-) -> int:
-    """
-    판정 못 한 턴을, 같은 화자분리 클러스터의 확정된 이름으로 메운다.
-
-    왜 필요한가: 화자분리가 한 사람의 발언을 여러 조각으로 쪼개면(겹쳐 말한 "네" 하나가
-    끼는 것만으로도 그렇게 된다) 조각이 짧아 목소리 판정이 안 된다. 실측에서 이준오의
-    한 발언이 41.3 / 41.8 / 46.4초 세 조각으로 갈렸고, 긴 조각만 이름을 얻고 나머지는
-    미상이 됐다.
-
-    클러스터를 **주 근거로 쓰지 않는 이유**는 따로 있다 — 클러스터 하나에 이름 하나를
-    1:1로 매핑하던 예전 방식은 pyannote가 두 사람을 한 클러스터로 묶었을 때 그 발언
-    전부를 오배정했다. 그래서 판정은 턴별로 하고, 클러스터는 **빈칸을 메우는 보조**로만 쓴다.
-
-    한 클러스터에서 서로 다른 이름이 확정됐으면 그 클러스터는 믿을 수 없다는 뜻이므로
-    아무것도 메우지 않는다 — 잘못 묶인 클러스터가 오배정을 퍼뜨리는 걸 막는다.
-    """
-    names_by_cluster: dict = {}
-    for seg, cluster in zip(segments, clusters):
-        if cluster is None or not seg.get("speaker"):
-            continue
-        names_by_cluster.setdefault(cluster, set()).add(seg["speaker"])
-
-    # 턴별 판정이 하나도 성공 못 한 클러스터는, 그 클러스터의 오디오를 모아 한 번 더
-    # 판정해본다. 조각이 짧아서 실패했을 뿐 오디오를 합치면 판정되는 경우가 있다 —
-    # 실측에서 이준오의 발언이 세 조각으로 갈려 전부 미상이었는데, 같은 구간을 9초로
-    # 이어붙이면 유사도 0.486으로 정상 판정됐다.
-    # 이것도 하한을 그대로 적용하므로, 두 사람이 섞인 클러스터는 임베딩이 흐려져
-    # 자연히 미상으로 남는다(잘못 묶인 클러스터가 오배정을 퍼뜨리지 않는다).
-    if audio is not None and identifier is not None:
-        spans_by_cluster: dict = {}
-        for seg, cluster in zip(segments, clusters):
-            if cluster is None or cluster in names_by_cluster:
-                continue    # 라벨이 없거나, 이미 확정된 이름이 있는 클러스터는 대상 아님
-            spans_by_cluster.setdefault(cluster, []).append((seg["start"], seg["end"]))
-
-        for cluster, spans in spans_by_cluster.items():
-            clips, total = [], 0.0
-            for start, end in spans:
-                if total >= _CLUSTER_RETRY_MAX_SEC:
-                    break
-                clip = audio[int(start * sample_rate): int(end * sample_rate)]
-                if len(clip):
-                    clips.append(clip)
-                    total += end - start
-            if total < _CLUSTER_RETRY_MIN_SEC:
-                continue    # 모아도 짧으면 판정해봐야 흔들린다
-
-            # identify()를 쓰면 안 된다 — 내부에서 "가장 긴 발화 구간 하나"만 골라
-            # 쓰기 때문에(_dominant_speech_region) 조각을 이어붙인 의미가 사라진다.
-            # 여기서는 합친 오디오 전체로 임베딩을 뽑는 게 목적이므로 직접 대조한다.
-            embedding = identifier.extract_embedding(np.concatenate(clips))
-            name, score = identifier._find_best_match(embedding)
-            if name and score >= SPEAKER_MIN_ASSIGN_SIMILARITY:
-                names_by_cluster[cluster] = {name}
-                logger.info(
-                    f"🔎 클러스터 재판정: {cluster} → {name} "
-                    f"(유사도 {score:.2f}, 오디오 {total:.1f}초 합산)"
-                )
-            else:
-                # 실패도 남긴다 — 시도조차 안 한 것과 구분이 돼야 원인을 좁힐 수 있다
-                logger.info(
-                    f"🔎 클러스터 재판정 실패: {cluster} — 최고 {name} {score:.2f} "
-                    f"< 하한 {SPEAKER_MIN_ASSIGN_SIMILARITY} (오디오 {total:.1f}초)"
-                )
-
-    filled = 0
-    for seg, cluster in zip(segments, clusters):
-        if seg.get("speaker") or cluster is None:
-            continue
-        names = names_by_cluster.get(cluster)
-        if names and len(names) == 1:   # 이름이 하나로 일치할 때만
-            seg["speaker"] = next(iter(names))
-            filled += 1
-    return filled
