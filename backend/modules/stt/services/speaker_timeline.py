@@ -86,6 +86,21 @@ class EnrolledSpeakerTimeline:
             return None
         return max(by_name.items(), key=lambda kv: kv[1])[0]
 
+    def runs_in(self, start: float, end: float) -> list[tuple[float, float, str | None]]:
+        """구간 안의 슬롯을 같은 이름끼리 이어붙여 (시작, 끝, 이름) 목록으로."""
+        runs: list[list] = []
+        for slot_start, slot_end, name in self.slots:
+            if slot_end <= start:
+                continue
+            if slot_start >= end:
+                break
+            piece = (max(slot_start, start), min(slot_end, end), name)
+            if runs and runs[-1][2] == name:
+                runs[-1][1] = piece[1]
+            else:
+                runs.append([piece[0], piece[1], name])
+        return [(a, b, n) for a, b, n in runs]
+
     def summary(self) -> str:
         totals: dict[str, float] = {}
         for start, end, name in self.slots:
@@ -157,3 +172,72 @@ def build_speaker_timeline(
         f"🕐 화자 타임라인: 창 {len(slots)}개 (판정 실패 {dropped}개) — {timeline.summary()}"
     )
     return timeline
+
+
+# 턴을 쪼갤 때, 이보다 짧게 말한 사람은 경계로 치지 않는다.
+# 짧은 맞장구까지 경계로 삼으면 회의록이 조각으로 부서지고 전사 호출만 늘어난다.
+_MIN_SUBTURN_SEC = 1.0
+
+
+def split_turns_by_timeline(
+    turns: list[dict], timeline: EnrolledSpeakerTimeline,
+    min_subturn_sec: float = _MIN_SUBTURN_SEC,
+) -> list[dict]:
+    """
+    화자분리 턴 하나에 여러 사람이 들어 있으면 **전사하기 전에** 쪼갠다.
+
+    왜 전사 전인가 (이게 핵심이다):
+      지금까지는 화자분리 턴 단위로 전사한 뒤 이름을 붙였다. 그런데 화자가 빠르게
+      교대하면 두 사람이 한 턴에 묶이고, **전사가 이미 뭉쳐진 뒤라 손쓸 수 없다.**
+      타임라인은 "더 오래 말한 쪽"으로 통째로 귀속시킬 수밖에 없고, 앞뒤 절반이
+      남의 이름을 달게 된다.
+
+      실측(대본 대조): 이승주의 "넵넵 좋습니다"가 김나연 세그먼트에, 가동현의
+      "네 좋습니다"가 문지수 세그먼트에 섞여 들어갔다. 팀에서도 같은 유형이
+      제보됐다("빠른 화자 교대 시 한쪽으로 잘못 귀속됨").
+
+      타임라인은 0.5초 해상도라 **화자분리보다 경계를 세밀하게 안다.** 그 정보로
+      먼저 턴을 나누면, 전사 자체가 화자별로 분리돼 나온다.
+
+    경계는 두 사람의 발화 사이 중간 지점으로 잡는다 — 타임라인 슬롯은 0.5초 단위라
+    정확한 전환 시점을 모르고, 중간이 가장 오차가 적다.
+    """
+    result: list[dict] = []
+    split_count = 0
+
+    for turn in turns:
+        # 짧게 스친 사람은 경계로 치지 않는다(맞장구 하나로 회의록이 부서지면 안 된다)
+        runs = [
+            run for run in timeline.runs_in(turn["start"], turn["end"])
+            if run[2] is not None and run[1] - run[0] >= min_subturn_sec
+        ]
+        # 걸러낸 뒤 같은 사람이 이어지면 하나로 되돌린다 — 안 그러면 "A···(짧은 맞장구)···A"를
+        # A 두 조각으로 쪼개게 된다. 같은 사람을 둘로 나누는 건 아무 의미가 없다.
+        merged_runs: list[tuple[float, float, str]] = []
+        for run in runs:
+            if merged_runs and merged_runs[-1][2] == run[2]:
+                merged_runs[-1] = (merged_runs[-1][0], run[1], run[2])
+            else:
+                merged_runs.append(run)
+        runs = merged_runs
+
+        if len(runs) < 2:
+            result.append(turn)
+            continue
+
+        # 턴 시작 ~ (발화들 사이 중간지점들) ~ 턴 끝
+        edges = [turn["start"]]
+        edges += [(a[1] + b[0]) / 2 for a, b in zip(runs, runs[1:])]
+        edges.append(turn["end"])
+
+        for start, end, run in zip(edges, edges[1:], runs):
+            result.append({**turn, "start": round(start, 2), "end": round(end, 2),
+                           "speaker": run[2]})
+        split_count += 1
+
+    if split_count:
+        logger.info(
+            f"🔪 화자 경계로 턴 분할: {split_count}개 턴 → {len(result) - len(turns) + split_count}개 "
+            f"(빠른 화자 교대가 한 세그먼트로 뭉치는 것 방지)"
+        )
+    return result

@@ -26,7 +26,7 @@ from .overlap_detect import (
 )
 from .overlap_model import load_overlap_inference
 from .refine_webhook import notify_refine_done
-from .speaker_timeline import build_speaker_timeline
+from .speaker_timeline import build_speaker_timeline, split_turns_by_timeline
 from .speech_separation import active_channels, separate_sources
 from .transcript_correction import correct_transcript
 
@@ -364,9 +364,29 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     # 겹침을 안 걷어내면 공용 마이크(오디오 하나)에서 같은 소리를 두 번 전사해
     # 회의록에 같은 말이 두 번 들어간다 (_resolve_overlapping_turns 참고).
     turns = _resolve_overlapping_turns(_merge_adjacent_turns(diarization_tracks))
+
+    # 2. 등록 프로필이 있으면 **전사하기 전에** 화자 타임라인을 만들어 턴을 다시 나눈다.
+    #
+    #    화자분리 턴 하나에 두 사람이 들어 있으면 전사한 뒤에는 손쓸 수 없다 —
+    #    "더 오래 말한 쪽"으로 통째로 귀속시킬 수밖에 없고 앞뒤 절반이 남의 이름을 단다.
+    #    타임라인은 0.5초 해상도라 화자분리보다 경계를 세밀하게 알므로, 그걸로 먼저
+    #    나누면 전사 자체가 화자별로 분리돼 나온다.
+    #    같은 타임라인을 아래 이름 배정에도 재사용한다(두 번 만들면 비용도 두 배고,
+    #    두 결과가 어긋나면 "나눈 경계"와 "붙인 이름"이 안 맞는다).
+    timeline = None
+    if enrolled_count:
+        profile_data = np.load(profiles_path)
+        profiles = {name: profile_data[name] for name in profile_data.files}
+        if profiles:
+            timeline = await loop.run_in_executor(
+                None, build_speaker_timeline,
+                audio, profiles, app_state.speaker_embedding_inference, sample_rate,
+            )
+            turns = split_turns_by_timeline(turns, timeline)
+
     logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 정리 후 {len(turns)}개, 턴별 전사 시작")
 
-    # 2. 턴별 정밀 전사 (각자 PC 모드와 같은 헬퍼를 씀 — 차이는 오디오 출처뿐)
+    # 3. 턴별 정밀 전사 (각자 PC 모드와 같은 헬퍼를 씀 — 차이는 오디오 출처뿐)
     # 최종 회의록이 되는 경로라 인식 힌트를 여기에도 적용한다. 등록 프로필이 있으면
     # 그 이름들이 곧 참석자이므로 힌트에 넣고, 없으면 용어만 들어간다.
     enrolled_names = list(np.load(profiles_path).files) if enrolled_count else []
@@ -376,15 +396,11 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         initial_prompt=build_context_hint(enrolled_names, session_id=meta.get("session_id")),
     )
 
-    # 3. 사전 등록 프로필이 있으면 익명 라벨(SPEAKER_00 등) → 실제 이름으로 교체
-    if enrolled_count:
-        refined_segments = await loop.run_in_executor(
-            None, _identify_turn_speakers,
-            refined_segments, audio, sample_rate, profiles_path,
-            app_state.speaker_embedding_inference,
-        )
+    # 4. 익명 라벨(SPEAKER_00 등) → 실제 이름. 위에서 만든 타임라인을 그대로 쓴다.
+    if timeline is not None:
+        _assign_speakers_from_timeline(refined_segments, timeline)
 
-    # 4. 겹쳐 말한 구간 처리.
+    # 5. 겹쳐 말한 구간 처리.
     #    모델에 직접 묻는다. 화자분리 결과에서 역산하던 방식은 오탐이 많아 폐기했다 —
     #    그 방식이 겹침이라고 한 11개 구간이 실제로는 하나도 겹침이 아니었고,
     #    멀쩡한 발언까지 "겹쳤다"고 표시하고 있었다(overlap_detect 상단 참고).
@@ -394,12 +410,12 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         None, lambda: find_overlap_spans_from_audio(audio, load_overlap_inference(), sample_rate),
     )
     if overlap_spans:
-        # 4-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
+        # 5-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
         refined_segments = await _split_overlaps(
             app_state, meeting_id, refined_segments, overlap_spans,
             audio, sample_rate, profiles_path, enrolled_names, meta,
         )
-        # 4-b. **아직 안 풀린** 겹침에만 표시를 단다(이름은 그대로). 지울 근거가 실측에서
+        # 5-b. **아직 안 풀린** 겹침에만 표시를 단다(이름은 그대로). 지울 근거가 실측에서
         #      안 나왔다 — overlap_detect.mark_overlapped_segments의 설명 참고.
         #      분리로 이미 갈라낸 세그먼트는 대상이 아니다 — 해결해놓고 "안 풀렸다"고
         #      표시하면 소비자가 그 발언을 불필요하게 걸러낸다.
@@ -407,7 +423,7 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
             [seg for seg in refined_segments if not seg.get("separated")], overlap_spans,
         )
 
-    # 5. LLM이 문맥으로 읽고 오인식 단어를 고친다.
+    # 6. LLM이 문맥으로 읽고 오인식 단어를 고친다.
     #    용어 목록은 "사람이 미리 겪은 단어"만 커버한다. 여기서는 문장의 뜻으로 유추한다.
     #    실패해도 원문이 그대로 남으므로 회의록을 잃지 않는다.
     if REFINE_LLM_ENABLED:
@@ -528,12 +544,13 @@ def _name_separated_segments(
         seg["separated"] = True
 
 
-def _identify_turn_speakers(
-    segments: list[dict], audio: np.ndarray, sample_rate: int, profiles_path: str, inference
-) -> list[dict]:
+def _assign_speakers_from_timeline(segments: list[dict], timeline) -> list[dict]:
     """
-    화자분리가 만든 익명 라벨을 버리고, **오디오 전체를 짧은 창으로 훑어 만든
-    화자 타임라인**에서 각 세그먼트의 이름을 읽어온다.
+    각 세그먼트에 **미리 만들어둔 화자 타임라인**에서 읽은 이름을 붙인다.
+
+    타임라인은 전사 전에 만들어 턴을 나누는 데 이미 쓰였다(split_turns_by_timeline).
+    같은 것을 재사용한다 — 두 번 만들면 비용만 두 배고, 두 결과가 미세하게 달라지면
+    "나눈 경계"와 "붙인 이름"이 어긋난다.
 
     왜 화자분리 결과에 이름을 붙이지 않나 (2026-08-03~04 실측, 정답 대본이 있는
     5인 공용 마이크 회의에서 다섯 번 고쳐가며 측정):
@@ -549,18 +566,11 @@ def _identify_turn_speakers(
       결과를 받아 이름만 붙이니 클러스터링이 실패하면 같이 실패했다.
       같은 회의에서 창 단위 직접 판정의 1등 정확도는 94%(평활화 후 97%)였다.
 
-    화자분리는 **전사 경계**를 잡는 데만 계속 쓴다 — 어디서 끊어 전사할지는
-    pyannote가 잘한다. 누구인지만 타임라인이 정한다.
+    화자분리는 **전사 경계의 출발점**으로만 쓴다. 그 경계가 두 사람에 걸쳐 있으면
+    전사 전에 타임라인으로 다시 나눈다.
 
     (speaker_timeline.build_speaker_timeline에 판정 규칙의 근거가 정리돼 있다)
     """
-    data = np.load(profiles_path)
-    profiles = {name: data[name] for name in data.files}
-    if not profiles:
-        return segments
-
-    timeline = build_speaker_timeline(audio, profiles, inference, sample_rate)
-
     assigned: dict[str, int] = {}
     for seg in segments:
         name = timeline.speaker_of(seg["start"], seg["end"])
