@@ -15,6 +15,7 @@ from backend.core.security import create_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud
+from backend.modules.rag.document_loader import load_document
 from backend.services import meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
@@ -39,6 +40,8 @@ from backend.schemas.meeting_schema import (
     MeetingAttendeeListResponse,
     AttendeeMappingRequest,
     MeetingExportResponse,
+    MeetingExportFileResponse,
+    MeetingExportFileListResponse,
     MeetingRecentItem,
     MeetingRecentListResponse,
     MeetingScheduleRequest,
@@ -53,6 +56,7 @@ from backend.schemas.meeting_schema import (
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/meetings", tags=["Meetings"])
 decisions_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Decisions"])
 
+MEETING_EXPORT_STORAGE_DIR = Path("storage/uploads/exports")
 MEETING_AUDIO_STORAGE_DIR = Path("storage/uploads/audio")
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
@@ -669,7 +673,19 @@ def update_meeting_summary_api(
             detail="회의 요약을 찾을 수 없습니다.",
         )
 
-    updated = meeting_crud.upsert_summary(db, meeting_id, short_summary=request.short_summary)
+    if request.short_summary is None and request.full_summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+
+    update_fields = {}
+    if request.short_summary is not None:
+        update_fields["short_summary"] = request.short_summary
+    if request.full_summary is not None:
+        update_fields["full_summary"] = request.full_summary
+
+    updated = meeting_crud.upsert_summary(db, meeting_id, **update_fields)
     return MeetingSummaryResponse.model_validate(updated)
 
 # 회의록 내보내기용 데이터 일괄 조회 — 문서 조립은 프론트에서 처리
@@ -700,6 +716,105 @@ def get_meeting_export_api(
         short_summary=summary.short_summary if summary else None,
         filtered_transcript=summary.filtered_transcript if summary else None,
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments],
+    )
+
+def _build_export_document_text(meeting, summary, attendee_rows, segments) -> str:
+    lines = [f"# {meeting.title} 회의록"]
+    if meeting.location:
+        lines.append(f"장소: {meeting.location}")
+    if meeting.topic:
+        lines.append(f"주제: {meeting.topic}")
+    attendee_names = ", ".join(user.display_name for _, user in attendee_rows)
+    if attendee_names:
+        lines.append(f"참석자: {attendee_names}")
+    if summary and summary.full_summary:
+        lines.append(f"\n## 전체 내용\n{summary.full_summary}")
+    if summary and summary.short_summary:
+        lines.append(f"\n## 요약\n{summary.short_summary}")
+    if segments:
+        transcript = "\n".join(f"[{s.speaker_label or '화자 미상'}] {s.content}" for s in segments)
+        lines.append(f"\n## 스크립트\n{transcript}")
+    return "\n".join(lines)
+
+
+# 회의록 PDF 내보내기 - 완성된 PDF 파일을 서버에 저장/등록
+@router.post("/{meeting_id}/export", response_model=MeetingExportFileResponse, status_code=status.HTTP_201_CREATED)
+async def upload_meeting_export_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    file: UploadFile = File(...),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if not file.filename or Path(file.filename).suffix.lower() != ".pdf":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PDF 파일만 업로드 가능합니다.",
+        )
+
+    file_content = await file.read()
+    MEETING_EXPORT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{uuid.uuid4()}.pdf"
+    storage_path = MEETING_EXPORT_STORAGE_DIR / stored_filename
+    storage_path.write_bytes(file_content)
+
+    workspace_file = file_crud.create_meeting_export(
+        db,
+        workspace_id=workspace_id,
+        category_id=meeting.category_id,
+        meeting_id=meeting_id,
+        uploaded_by=uuid.UUID(current_user_id),
+        original_filename=file.filename,
+        stored_filename=stored_filename,
+        storage_path=str(storage_path),
+        file_size_bytes=len(file_content),
+        sha256_hash=hashlib.sha256(file_content).hexdigest(),
+    )
+
+    # 검색/모순 감지 대상에 포함되도록 임베딩 — 부가 기능이라 실패해도 파일 저장 자체는 성공 처리
+    try:
+        summary = meeting_crud.get_meeting_summary(db, meeting_id)
+        attendee_rows = meeting_crud.get_attendees(db, meeting_id)
+        segments = meeting_crud.get_segments(db, meeting_id)
+        document_text = _build_export_document_text(meeting, summary, attendee_rows, segments)
+        load_result = load_document(db, workspace_file.id, chunks=[
+            {"style": "body", "content": document_text, "page_number": 1}
+        ])
+        if load_result.get("status") != "success":
+            print(f"[meeting_router] 회의록 내보내기 임베딩 실패: {load_result}")
+    except Exception as e:
+        print(f"[meeting_router] 회의록 내보내기 임베딩 중 예외: {repr(e)}")
+
+    return MeetingExportFileResponse(
+        export_id=workspace_file.id,
+        meeting_id=meeting_id,
+        meeting_title=meeting.title,
+        filename=workspace_file.original_filename,
+        created_at=workspace_file.created_at,
+    )
+
+
+# 워크스페이스 전체 회의록 내보내기 이력
+@decisions_router.get("/meeting-exports", response_model=MeetingExportFileListResponse)
+def list_meeting_exports_api(
+    workspace_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    rows = file_crud.list_meeting_exports(db, workspace_id)
+    return MeetingExportFileListResponse(
+        exports=[
+            MeetingExportFileResponse(
+                export_id=wf.id, meeting_id=wf.related_meeting_id,
+                meeting_title=title, filename=wf.original_filename,
+                created_at=wf.created_at,
+            )
+            for wf, title in rows
+        ]
     )
 
 
