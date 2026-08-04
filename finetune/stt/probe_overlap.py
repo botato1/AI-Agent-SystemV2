@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "backend", "modules"))
 
 from stt.core.config import (  # noqa: E402
     MEETINGS_DIR, MIN_SPEAKERS, HF_TOKEN, SEPARATION_MODEL, OVERLAP_MIN_SEC,
-    OVERLAP_SEGMENT_RATIO,
+    OVERLAP_SEGMENT_RATIO, DIARIZATION_MODEL,
 )
 from stt.services.overlap_detect import find_overlap_spans, overlap_ratio  # noqa: E402
 
@@ -47,9 +47,8 @@ def main():
 
     from pyannote.audio import Pipeline
     print("화자분리 실행 중...")
-    pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1", use_auth_token=HF_TOKEN
-    )
+    # 앱과 같은 방식으로 로드해야 결과가 같다 (Pipeline은 token=, Model은 use_auth_token=)
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, token=HF_TOKEN)
     if torch.cuda.is_available():
         pipeline.to(torch.device("cuda"))
     annotation = pipeline(

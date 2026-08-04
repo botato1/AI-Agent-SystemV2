@@ -48,7 +48,9 @@ def load_separation_pipeline():
 
     try:
         from pyannote.audio import Pipeline
-        pipeline = Pipeline.from_pretrained(SEPARATION_MODEL, use_auth_token=HF_TOKEN)
+        # Pipeline은 token=, Model은 use_auth_token= 으로 인자 이름이 다르다
+        # (main.py의 화자분리 파이프라인 로드와 같은 형태여야 한다)
+        pipeline = Pipeline.from_pretrained(SEPARATION_MODEL, token=HF_TOKEN)
         if pipeline is None:
             raise RuntimeError(
                 "Pipeline.from_pretrained가 None을 반환 — "
