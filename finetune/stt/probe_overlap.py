@@ -28,7 +28,9 @@ from stt.core.config import (  # noqa: E402
     OVERLAP_SEGMENT_RATIO, DIARIZATION_MODEL,
 )
 from stt.services.diarize_service import tracks_of  # noqa: E402
-from stt.services.overlap_detect import find_overlap_spans, overlap_ratio  # noqa: E402
+from stt.services.overlap_detect import (  # noqa: E402
+    find_overlap_spans, overlap_ratio, concurrent_speakers,
+)
 
 
 def main():
@@ -60,36 +62,45 @@ def main():
         max_speakers=enrolled if enrolled >= MIN_SPEAKERS else None,
     ))
 
-    spans = find_overlap_spans(tracks)
-    total = sum(end - start for start, end in spans)
-    print(f"\n① 겹침 감지 (최소 {OVERLAP_MIN_SEC}초)")
-    print(f"   구간 {len(spans)}개, 합계 {total:.1f}초 "
-          f"(전체 {len(audio) / sr:.0f}초 중 {total / (len(audio) / sr) * 100:.1f}%)")
-    for start, end in spans:
-        print(f"     {start:6.1f}s ~ {end:6.1f}s  ({end - start:.1f}초)")
-
-    # 이 겹침이 실제 회의록의 어느 발화에 걸리는지 — 화자를 못 정할 줄이 어디인지 본다
+    # 동시 화자 수를 몇 명부터 겹침으로 볼지에 따라 결과가 크게 달라진다.
+    # 2명 기준은 "맞장구"까지 걸려서 맞는 이름을 지운다 — 그래서 나란히 놓고 고른다.
+    import json
     meta_path = os.path.join(meeting_dir, "transcript.json")
+    segments = []
     if os.path.isfile(meta_path):
-        import json
         with open(meta_path, encoding="utf-8") as f:
             segments = json.load(f).get("segments") or []
-        hits = [
+
+    for min_speakers in (2, 3, 4):
+        spans = find_overlap_spans(tracks, min_speakers)
+        total = sum(end - start for start, end in spans)
+        print(f"\n{'=' * 72}")
+        print(f"동시 화자 {min_speakers}명 이상 → 겹침 구간 {len(spans)}개, 합계 {total:.1f}초 "
+              f"({total / (len(audio) / sr) * 100:.1f}%)")
+
+        if not segments:
+            for start, end in spans:
+                print(f"     {start:6.1f}s ~ {end:6.1f}s  ({end - start:.1f}초)")
+            continue
+
+        marked = [
             (seg, overlap_ratio(seg["start"], seg["end"], spans))
             for seg in segments
+            if overlap_ratio(seg["start"], seg["end"], spans) >= OVERLAP_SEGMENT_RATIO
         ]
-        marked = [(s, r) for s, r in hits if r >= OVERLAP_SEGMENT_RATIO]
-        print(f"\n   '여러 명'으로 표시될 세그먼트 {len(marked)}개 "
-              f"(겹침 비율 {OVERLAP_SEGMENT_RATIO:.0%} 이상)")
+        print(f"'여러 명'으로 표시될 세그먼트 {len(marked)}개 "
+              f"(겹침 {OVERLAP_SEGMENT_RATIO:.0%} 이상)")
         for seg, ratio in marked:
-            print(f"     [{seg['start']:6.1f}s] {ratio:3.0%} {seg.get('speaker') or '미상':6s} "
-                  f"{seg['text'][:45]}")
-        partial = [(s, r) for s, r in hits if 0 < r < OVERLAP_SEGMENT_RATIO]
-        if partial:
-            print(f"\n   부분 겹침(건드리지 않음) {len(partial)}개 — 화자가 여전히 명확한 경우")
-            for seg, ratio in partial[:5]:
-                print(f"     [{seg['start']:6.1f}s] {ratio:3.0%} {seg.get('speaker') or '미상':6s} "
-                      f"{seg['text'][:45]}")
+            peak = concurrent_speakers(tracks, seg["start"], seg["end"])
+            print(f"   [{seg['start']:6.1f}s] 겹침{ratio:3.0%} 동시{peak}명 "
+                  f"{seg.get('speaker') or '미상':6s} {seg['text'][:40]}")
+
+    print(f"\n{'=' * 72}")
+    print("고르는 법:")
+    print("  이 목록의 각 줄이 **정말로 여러 명이 한꺼번에 말한 곳인지** 대본과 대조할 것.")
+    print("  맞는 이름이 붙어 있던 줄이 목록에 있으면 그건 손해다 —")
+    print("  오배정 하나를 고치려고 정답을 여러 개 버리게 된다.")
+    print("  목록이 '전원이 답한 줄'만 남는 문턱을 고르면 된다.")
 
     if not args.separation:
         print("\n(--separation 을 주면 음원 분리 모델까지 시험한다)")

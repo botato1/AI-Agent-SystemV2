@@ -19,6 +19,7 @@ from ..core.config import (
     REFINE_LLM_ENABLED,
     SEPARATION_ENABLED,
     OVERLAP_SEGMENT_RATIO,
+    OVERLAP_MIN_SPEAKERS,
 )
 from .diarize_service import run_diarization
 from .overlap_detect import find_overlap_spans, mark_overlapped_segments, overlap_ratio
@@ -318,7 +319,7 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     # 4. 겹쳐 말한 구간 처리.
     #    화자분리 결과에 이미 답이 들어 있다 — 서로 다른 화자의 구간이 시간상 겹치면
     #    그게 겹쳐 말한 구간이다(겹침 전용 모델을 따로 로드할 이유가 없다).
-    overlap_spans = find_overlap_spans(diarization_tracks)
+    overlap_spans = find_overlap_spans(diarization_tracks, OVERLAP_MIN_SPEAKERS)
     if overlap_spans:
         # 4-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
         refined_segments = await _split_overlaps(

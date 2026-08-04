@@ -17,15 +17,22 @@
   있다.** 화자분리는 구간마다 화자를 붙이는데, 서로 다른 화자의 구간이 시간상 겹치면
   그게 곧 겹쳐 말한 구간이다. 모델을 하나 더 로드할 이유가 없다(메모리·시작 시간).
 """
-from ..core.config import logger, OVERLAP_MIN_SEC, OVERLAP_SEGMENT_RATIO
+from ..core.config import (
+    logger, OVERLAP_MIN_SEC, OVERLAP_SEGMENT_RATIO, OVERLAP_MIN_SPEAKERS,
+)
 
 
-def find_overlap_spans(tracks: list[dict]) -> list[tuple[float, float]]:
+def find_overlap_spans(tracks: list[dict], min_speakers: int = 2) -> list[tuple[float, float]]:
     """
-    화자분리 구간 목록에서 서로 다른 화자가 겹치는 시간대를 뽑는다.
+    화자분리 구간 목록에서 min_speakers명 이상이 동시에 말한 시간대를 뽑는다.
 
-    스윕 라인: 모든 구간의 시작/끝을 시간순으로 훑으며 '지금 말하고 있는 화자 수'를
-    센다. 2명 이상인 동안이 겹침 구간이다.
+    스윕 라인: 모든 구간의 시작/끝을 시간순으로 훑으며 '지금 말하고 있는 화자 수'를 센다.
+
+    **몇 명부터를 겹침으로 볼지가 중요하다** (2026-08-04 실측):
+      2명 기준으로 잡으면 "한 사람이 말하는 중에 누가 짧게 맞장구친" 구간까지 전부
+      걸린다. 그런 구간은 주된 화자가 명확해서 이름을 지우면 손해다 — 실측에서
+      오배정 1개를 고치려다 맞는 이름 6개를 잃었다(이준오 "시연 전에", 가동현 발언 등).
+      정말로 한 명을 고를 수 없는 것은 여러 명이 한꺼번에 말한 경우다.
     """
     events: list[tuple[float, int, str]] = []
     for track in tracks:
@@ -50,9 +57,9 @@ def find_overlap_spans(tracks: list[dict]) -> list[tuple[float, float]]:
         if active[speaker] <= 0:
             active.pop(speaker, None)
 
-        if len(active) >= 2 and overlap_start is None:
+        if len(active) >= min_speakers and overlap_start is None:
             overlap_start = time
-        elif len(active) < 2 and overlap_start is not None:
+        elif len(active) < min_speakers and overlap_start is not None:
             if time - overlap_start >= OVERLAP_MIN_SEC:
                 spans.append((overlap_start, time))
             overlap_start = None
@@ -84,6 +91,20 @@ def overlap_ratio(start: float, end: float, spans: list[tuple[float, float]]) ->
             break
         covered += min(span_end, end) - max(span_start, start)
     return covered / duration
+
+
+def concurrent_speakers(tracks: list[dict], start: float, end: float) -> int:
+    """구간 [start, end)에서 동시에 말한 최대 화자 수 — 문턱을 정하기 위한 측정용."""
+    peak = 0
+    for time in sorted({t["start"] for t in tracks} | {t["end"] for t in tracks}):
+        if not (start <= time < end):
+            continue
+        count = len({
+            t["speaker"] for t in tracks
+            if t["start"] <= time < t["end"] and t.get("speaker") is not None
+        })
+        peak = max(peak, count)
+    return peak
 
 
 def mark_overlapped_segments(segments: list[dict], spans: list[tuple[float, float]]) -> int:
