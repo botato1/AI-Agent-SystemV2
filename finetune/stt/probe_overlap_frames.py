@@ -83,27 +83,58 @@ def main():
     max_concurrent = getattr(spec, "powerset_max_classes", 2)
     print(f"  로컬 최대 화자 {max_speakers}명, 동시 최대 {max_concurrent}명")
 
-    inference = Inference(model, duration=5.0, step=0.5)
+    # ⚠️ skip_aggregation=True 가 핵심이다.
+    #
+    # 이 모델은 "화자 조합"을 클래스로 예측하는데, **조합 번호가 청크마다 다른 사람을
+    # 가리킨다** (청크1의 '화자0+화자1'과 청크2의 그것은 서로 다른 사람이다).
+    # 기본 동작은 겹치는 청크들의 확률을 평균내서 하나로 합치는데, 그러면 서로 다른
+    # 사람을 가리키는 값끼리 섞여 의미가 사라진다.
+    #   → 실제로 그렇게 재봤더니 사람이 말하는 구간이 '아무도 안 말함'으로 나오고
+    #     겹침은 전 구간 0건이었다. pyannote도 청크마다 먼저 변환한 뒤 합친다.
+    #
+    # 반면 **인원수는 조합 번호가 어떻든 같은 값**이다(순서와 무관). 그래서 청크별로
+    # 먼저 인원수를 뽑고, 그 다음에 시간축으로 합친다.
+    inference = Inference(model, skip_aggregation=True)
     if torch.cuda.is_available():
         inference.to(torch.device("cuda"))
 
     print("프레임 단위 예측 중...")
     output = inference({"waveform": torch.from_numpy(audio.reshape(1, -1)), "sample_rate": sr})
-    data = np.asarray(output.data)          # (프레임수, 클래스수)
-    frames = output.sliding_window
+    data = np.asarray(output.data)          # (청크수, 프레임수, 클래스수)
+    if data.ndim != 3:
+        raise SystemExit(f"❌ 예상과 다른 출력 형태 {data.shape} — pyannote 버전 확인 필요")
 
     sizes = powerset_cardinality(data.shape[-1], max_speakers, max_concurrent)
-    # 프레임마다 가장 확률이 높은 조합을 고르고, 그 조합의 인원수를 센다
-    counts = sizes[data.argmax(axis=-1)]
+    counts = sizes[data.argmax(axis=-1)]    # (청크수, 프레임수) 동시 발화자 수
+
+    chunks = output.sliding_window
+    frame_window = model.receptive_field
+    frame_offsets = np.array([
+        frame_window.start + frame_window.step * i + frame_window.duration / 2
+        for i in range(data.shape[1])
+    ])
+
+    # 청크마다 시간축이 겹치므로 0.1초 칸에 모아 평균/최댓값을 낸다
+    _BIN = 0.1
+    total_bins = int(len(audio) / sr / _BIN) + 2
+    bin_sum = np.zeros(total_bins)
+    bin_num = np.zeros(total_bins)
+    bin_max = np.zeros(total_bins)
+    for c in range(data.shape[0]):
+        times = chunks[c].start + frame_offsets
+        idx = np.clip((times / _BIN).astype(int), 0, total_bins - 1)
+        np.add.at(bin_sum, idx, counts[c])
+        np.add.at(bin_num, idx, 1)
+        np.maximum.at(bin_max, idx, counts[c])
+    bin_mean = np.divide(bin_sum, bin_num, out=np.zeros_like(bin_sum), where=bin_num > 0)
 
     def speakers_at(start: float, end: float) -> tuple[float, int, float]:
         """구간의 (평균 동시 화자 수, 최대, 2명 이상인 시간 비율)."""
-        i0 = max(int((start - frames.start) / frames.step), 0)
-        i1 = min(int((end - frames.start) / frames.step) + 1, len(counts))
-        window = counts[i0:i1]
-        if not len(window):
+        i0, i1 = max(int(start / _BIN), 0), min(int(end / _BIN) + 1, total_bins)
+        window_mean, window_max = bin_mean[i0:i1], bin_max[i0:i1]
+        if not len(window_mean):
             return 0.0, 0, 0.0
-        return float(window.mean()), int(window.max()), float((window >= 2).mean())
+        return float(window_mean.mean()), int(window_max.max()), float((window_mean >= 1.5).mean())
 
     print(f"\n{'=' * 78}")
     if args.at:
