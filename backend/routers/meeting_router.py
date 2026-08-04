@@ -21,6 +21,7 @@ from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
 from backend.modules.judgment import agenda_reminder
 from backend.routers import meeting_ws_router
+from backend.schemas.task_schema import TaskResponse, TaskListResponse
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
     MeetingResponse,
@@ -456,6 +457,22 @@ def get_upcoming_meetings_api(
             ],
         ))
     return UpcomingMeetingListResponse(meetings=items)
+
+# 회의에서 AI가 추출한 할 일 중 아직 검수(승인) 안 된 제안 목록
+@router.get("/{meeting_id}/suggested-tasks", response_model=TaskListResponse)
+def get_meeting_suggested_tasks_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    items = meeting_crud.list_suggested_tasks_by_meeting(db, meeting_id)
+    return TaskListResponse(
+        tasks=[TaskResponse.model_validate(i) for i in items]
+    )
 
 # 예정된 회의를 실제 녹음으로 시작
 @router.post("/{meeting_id}/begin", response_model=MeetingStartResponse)
