@@ -178,6 +178,8 @@ async def _process_segment_analysis(
                         "statement_text": statement_text,
                         "display_message": judgment_result["message"],
                         "source": "decision",
+                        "judgment_case": judgment_result.get("judgment_case"),
+                        "actions": judgment_result.get("actions", []),
                     })
             except Exception as e:
                 print(f"[meeting_ws_router] decision 모순 알림 전송 실패: {repr(e)}")
