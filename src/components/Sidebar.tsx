@@ -1,5 +1,6 @@
+// src/components/Sidebar.tsx
 import { useEffect, useRef, useState } from "react";
-import { Channel, User, Workspace } from "../types";
+import { Channel, User, Workspace, AiChatSessionItem } from "../types";
 import { Theme } from "../hooks/useTheme";
 import ProfilePopup from "./ProfilePopup";
 import NotificationBell from "./NotificationBell";
@@ -7,6 +8,7 @@ import InviteMemberModal from "./InviteMemberModal";
 import ManageMembersModal from "./ManageMembersModal";
 import {
   HomeIcon,
+  GridIcon,
   ChatIcon,
   DocumentIcon,
   MicIcon,
@@ -20,7 +22,7 @@ import {
   CheckIcon,
 } from "./icons";
 
-export type PlaceholderKey = "dashboard" | "docAnalysis" | "voiceMeeting" | "graph";
+export type PlaceholderKey = "home" | "dashboard" | "docAnalysis" | "voiceMeeting" | "graph" | "aiChat";
 
 interface SidebarProps {
   workspaces: Workspace[];
@@ -38,6 +40,10 @@ interface SidebarProps {
   onCreateChannel: () => void;
   onRenameChannel: (id: string, name: string) => void;
   onDeleteChannel: (id: string) => void;
+  aiSessions?: AiChatSessionItem[];
+  activeAiSessionId?: string | null;
+  onSelectAiSession?: (sessionId: string) => void;
+  onCreateNewAiSession?: () => void;
   user: User;
   onOpenProfile: () => void;
   onOpenSettings: () => void;
@@ -64,6 +70,10 @@ export default function Sidebar({
   onCreateChannel,
   onRenameChannel,
   onDeleteChannel,
+  aiSessions = [],
+  activeAiSessionId,
+  onSelectAiSession,
+  onCreateNewAiSession,
   user,
   onOpenProfile,
   onOpenSettings,
@@ -73,19 +83,18 @@ export default function Sidebar({
   t,
 }: SidebarProps) {
   const [isChannelsExpanded, setIsChannelsExpanded] = useState(true);
+  const [isAiInsightsExpanded, setIsAiInsightsExpanded] = useState(true);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [openMenuChannelId, setOpenMenuChannelId] = useState<string | null>(null);
   const prevChannelIdsRef = useRef<Set<string>>(new Set(channels.map((c) => c.id)));
   const prevWorkspaceIdForChannelsRef = useRef(currentWorkspaceId);
 
-  // 워크스페이스 드롭다운 및 메뉴 관련 상태
   const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [workspaceDraftName, setWorkspaceDraftName] = useState("");
   const [openWsMenuId, setOpenWsMenuId] = useState<string | null>(null);
 
-  // 초대 모달 및 팀원 관리 모달용 상태
   const [invitingWorkspace, setInvitingWorkspace] = useState<Workspace | null>(null);
   const [managingWorkspace, setManagingWorkspace] = useState<Workspace | null>(null);
 
@@ -94,17 +103,10 @@ export default function Sidebar({
 
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId) ?? workspaces[0];
 
-  const ANALYSIS_ITEMS: { key: PlaceholderKey; icon: typeof DocumentIcon; label: string }[] = [
-    { key: "docAnalysis", icon: DocumentIcon, label: t.sidebar_doc_analysis },
-    { key: "graph", icon: GraphIcon, label: t.sidebar_graph },
-  ];
-
   useEffect(() => {
     const prevIds = prevWorkspaceIdsRef.current;
     const newOnes = workspaces.filter((w) => !prevIds.has(w.id));
 
-    // 목록을 통째로 처음 불러온 경우(prevIds가 비어있음)는 제외하고,
-    // 실제로 새로 생긴 워크스페이스가 정확히 1개일 때만 이름 입력 모드로 전환
     if (prevIds.size > 0 && newOnes.length === 1) {
       setEditingWorkspaceId(newOnes[0].id);
       setWorkspaceDraftName(newOnes[0].name);
@@ -147,8 +149,6 @@ export default function Sidebar({
   }
 
   useEffect(() => {
-    // 워크스페이스 자체가 바뀐 경우엔 채널 목록이 통째로 교체된 것이므로
-    // "새로 생긴 채널"로 오인하지 않도록 이번 사이클은 추적 목록만 재동기화
     const sameWorkspace = prevWorkspaceIdForChannelsRef.current === currentWorkspaceId;
 
     if (sameWorkspace) {
@@ -188,12 +188,12 @@ export default function Sidebar({
   }
 
   return (
-    <div className="flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text">
-      {/* 1. 상단 워크스페이스 영역 */}
+    <div className="flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text select-none">
+      {/* 1. 상단 워크스페이스 선택 영역 */}
       <div ref={workspaceMenuRef} className="relative px-3 pb-3 pt-4">
         <button
           onClick={() => setIsWorkspaceMenuOpen((v) => !v)}
-          className="flex w-full items-center justify-between rounded-lg px-1 py-1 text-left hover:bg-white/5"
+          className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-white/5 transition"
         >
           <span className="truncate text-base font-semibold">{currentWorkspace?.name}</span>
           <ChevronDownIcon
@@ -236,7 +236,6 @@ export default function Sidebar({
                         {isCurrent && <CheckIcon size={13} className="flex-shrink-0 text-recall-accent" />}
                       </button>
 
-                      {/* [더보기 ...] 버튼 */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -248,13 +247,11 @@ export default function Sidebar({
                         <MoreIcon size={15} />
                       </button>
 
-                      {/* [더보기 ...] 드롭다운 메뉴 (이름 변경 / 팀원 관리 / 구분선 / 삭제하기) */}
                       {isWsMenuOpen && (
                         <div
                           onMouseDown={(e) => e.stopPropagation()}
                           className="absolute right-0 top-full z-40 mt-0.5 w-36 rounded-lg border border-recall-border bg-recall-bg p-1.5 shadow-xl"
                         >
-                          {/* 1. 이름 변경 */}
                           <button
                             onClick={() => startRenameWorkspace(ws)}
                             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
@@ -263,7 +260,6 @@ export default function Sidebar({
                             이름 변경
                           </button>
 
-                          {/* 2. 팀원 관리 */}
                           <button
                             onClick={() => {
                               setOpenWsMenuId(null);
@@ -275,10 +271,8 @@ export default function Sidebar({
                             ⚙️ 팀원 관리
                           </button>
 
-                          {/* 3. 구분선 */}
                           <div className="my-1 border-t border-recall-border" />
 
-                          {/* 4. 삭제하기 */}
                           {onDeleteWorkspace && (
                             <button
                               onClick={() => {
@@ -316,168 +310,264 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* 2. 중앙 메인 스크롤 영역 */}
-      <div className="flex-1 overflow-y-auto px-3">
-        {/* 메인 그룹 */}
-        <p className="mb-1.5 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
-          {t.main_group}
-        </p>
+      {/* 2. 중앙 스크롤 메인 메뉴 영역 */}
+      <div className="flex-1 overflow-y-auto px-3 space-y-4 custom-scrollbar">
+        {/* 그룹 1: 메인 (MAIN) */}
+        <div>
+          <p className="mb-1.5 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+            {t.main_group || "MAIN"}
+          </p>
 
-        {/* 대시보드 */}
-        <button
-          onClick={() => onSelectPlaceholder("dashboard")}
-          className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base ${
-            activePlaceholder === "dashboard"
-              ? "bg-recall-accent/15 text-recall-text"
-              : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
-          }`}
-        >
-          <HomeIcon size={16} className="flex-shrink-0" />
-          <span className="truncate">{t.sidebar_dashboard}</span>
-        </button>
+          {/* 홈 */}
+          <button
+            onClick={() => onSelectPlaceholder("home")}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              activePlaceholder === "home"
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            <HomeIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_home}</span>
+          </button>
 
-        {/* 채팅방 (채널 목록) */}
-        <button
-          onClick={() => setIsChannelsExpanded((v) => !v)}
-          className="mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
-        >
-          {isChannelsExpanded ? (
-            <ChevronDownIcon size={13} className="flex-shrink-0" />
-          ) : (
-            <ChevronRightIcon size={13} className="flex-shrink-0" />
+          {/* 대시보드 */}
+          <button
+            onClick={() => onSelectPlaceholder("dashboard")}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              activePlaceholder === "dashboard"
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            <GridIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_dashboard}</span>
+          </button>
+        </div>
+        {/* 그룹 2: 워크스페이스 핵심 기능 (WORKSPACE) */}
+        <div>
+
+          {/* 🌟 최상단으로 끌어올린 메인 액션: 음성 회의 */}
+          <button
+            onClick={() => onSelectPlaceholder("voiceMeeting")}
+            className={`mb-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              activePlaceholder === "voiceMeeting"
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            <MicIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_voice_meeting}</span>
+            {voiceMeetingStatus && (
+              <span
+                className={`ml-auto h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                  voiceMeetingStatus === "recording" ? "bg-recall-danger" : "bg-recall-textMuted"
+                }`}
+                title={voiceMeetingStatus === "recording" ? t.sidebar_recording : t.sidebar_paused}
+              />
+            )}
+          </button>
+
+          {/* 채팅방 (채널 목록) */}
+          <button
+            onClick={() => setIsChannelsExpanded((v) => !v)}
+            className="mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text transition"
+          >
+            {isChannelsExpanded ? (
+              <ChevronDownIcon size={13} className="flex-shrink-0" />
+            ) : (
+              <ChevronRightIcon size={13} className="flex-shrink-0" />
+            )}
+            <ChatIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_chat}</span>
+          </button>
+
+          {isChannelsExpanded && (
+            <div className="mb-1 flex flex-col gap-0.5 py-0.5 pl-8">
+              {channels.map((channel) => {
+                const isSelected = selectedChannelId === channel.id && activePlaceholder === null;
+                const isEditing = editingChannelId === channel.id;
+                const isMenuOpen = openMenuChannelId === channel.id;
+                return (
+                  <div key={channel.id} className="group relative flex items-center">
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={draftName}
+                        onChange={(e) => setDraftName(e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => e.key === "Enter" && commitRename()}
+                        className="min-w-0 flex-1 rounded-lg border border-recall-border bg-transparent px-2 py-1.5 text-base text-recall-text focus:outline-none focus:border-recall-accent"
+                      />
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => onSelectChannel(channel)}
+                          className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-base transition ${
+                            isSelected
+                              ? "bg-recall-accent/15 text-recall-text font-medium"
+                              : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+                          }`}
+                        >
+                          <span className="truncate">{channel.name}</span>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuChannelId(isMenuOpen ? null : channel.id);
+                          }}
+                          aria-label="Channel options"
+                          className="hidden flex-shrink-0 px-1.5 text-recall-textMuted hover:text-recall-text group-hover:inline"
+                        >
+                          <MoreIcon size={15} />
+                        </button>
+
+                        {isMenuOpen && (
+                          <div
+                            onMouseDown={(e) => e.stopPropagation()}
+                            className="absolute right-0 top-full z-20 mt-0.5 w-36 rounded-lg border border-recall-border bg-recall-bgSoft p-1.5 shadow-lg"
+                          >
+                            <button
+                              onClick={() => startRename(channel)}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
+                            >
+                              <PencilIcon size={13} />
+                              이름 변경
+                            </button>
+                            <button
+                              onClick={() => {
+                                setOpenMenuChannelId(null);
+                                onDeleteChannel(channel.id);
+                              }}
+                              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
+                            >
+                              <TrashIcon size={13} />
+                              삭제
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+
+              <button
+                onClick={onCreateChannel}
+                className="mt-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text transition"
+              >
+                <PlusIcon size={15} className="flex-shrink-0" />
+                <span>{t.sidebar_create_channel}</span>
+              </button>
+            </div>
           )}
-          <ChatIcon size={16} className="flex-shrink-0" />
-          <span className="truncate">{t.sidebar_chat}</span>
-        </button>
+        </div>
 
-        {isChannelsExpanded && (
-          <div className="mb-1 flex flex-col gap-0.5 py-0.5 pl-9">
-            {channels.map((channel) => {
-              const isSelected = selectedChannelId === channel.id && activePlaceholder === null;
-              const isEditing = editingChannelId === channel.id;
-              const isMenuOpen = openMenuChannelId === channel.id;
-              return (
-                <div key={channel.id} className="group relative flex items-center">
-                  {isEditing ? (
-                    <input
-                      autoFocus
-                      value={draftName}
-                      onChange={(e) => setDraftName(e.target.value)}
-                      onFocus={(e) => e.target.select()}
-                      onBlur={commitRename}
-                      onKeyDown={(e) => e.key === "Enter" && commitRename()}
-                      className="min-w-0 flex-1 rounded-lg border border-recall-border bg-transparent px-2 py-1.5 text-base text-recall-text focus:outline-none focus:border-recall-accent"
-                    />
-                  ) : (
-                    <>
+        {/* 그룹 3: 지식 및 분석 (KNOWLEDGE & ANALYTICS) */}
+        <div>
+          <p className="mb-1.5 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+            {t.analysis_group || "KNOWLEDGE & ANALYTICS"}
+          </p>
+
+          {/* 회의 자료 (문서 분석) */}
+          <button
+            onClick={() => onSelectPlaceholder("docAnalysis")}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              activePlaceholder === "docAnalysis"
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            <DocumentIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_doc_analysis}</span>
+          </button>
+
+          {/* AI 인사이트 */}
+          <button
+            onClick={() => {
+              onSelectPlaceholder("aiChat");
+              setIsAiInsightsExpanded((v) => !v);
+            }}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              activePlaceholder === "aiChat"
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            {isAiInsightsExpanded ? (
+              <ChevronDownIcon size={13} className="flex-shrink-0" />
+            ) : (
+              <ChevronRightIcon size={13} className="flex-shrink-0" />
+            )}
+            <ChatIcon size={16} className="flex-shrink-0" />
+            <span className="truncate font-medium">AI 인사이트</span>
+          </button>
+
+          {/* AI 대화 세션 서브 목록 */}
+          {isAiInsightsExpanded && (
+            <div className="mb-2 flex flex-col gap-0.5 pl-8 pr-1 py-1">
+              {onCreateNewAiSession && (
+                <button
+                  onClick={onCreateNewAiSession}
+                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs font-semibold text-recall-accent hover:bg-recall-accent/10 transition"
+                >
+                  <PlusIcon size={13} />
+                  <span>+ 새 대화 시작</span>
+                </button>
+              )}
+
+              <div className="max-h-36 overflow-y-auto space-y-0.5 pr-0.5 custom-scrollbar">
+                {aiSessions.length === 0 ? (
+                  <p className="px-2 py-1.5 text-[11px] text-recall-textMuted">이전 대화가 없습니다.</p>
+                ) : (
+                  aiSessions.map((session) => {
+                    const isSelected = activePlaceholder === "aiChat" && activeAiSessionId === session.id;
+                    return (
                       <button
-                        onClick={() => onSelectChannel(channel)}
-                        className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-base ${
+                        key={session.id}
+                        onClick={() => {
+                          onSelectPlaceholder("aiChat");
+                          if (onSelectAiSession) onSelectAiSession(session.id);
+                        }}
+                        className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs transition ${
                           isSelected
-                            ? "bg-recall-accent/15 text-recall-text"
+                            ? "bg-recall-accent/15 font-medium text-recall-text"
                             : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
                         }`}
                       >
-                        <span className="truncate">{channel.name}</span>
+                        <span className="truncate">{session.title || "새로운 대화"}</span>
                       </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuChannelId(isMenuOpen ? null : channel.id);
-                        }}
-                        aria-label="Channel options"
-                        className="hidden flex-shrink-0 px-1.5 text-recall-textMuted hover:text-recall-text group-hover:inline"
-                      >
-                        <MoreIcon size={15} />
-                      </button>
-
-                      {isMenuOpen && (
-                        <div
-                          onMouseDown={(e) => e.stopPropagation()}
-                          className="absolute right-0 top-full z-20 mt-0.5 w-36 rounded-lg border border-recall-border bg-recall-bgSoft p-1.5 shadow-lg"
-                        >
-                          <button
-                            onClick={() => startRename(channel)}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
-                          >
-                            <PencilIcon size={13} />
-                            이름 변경
-                          </button>
-                          <button
-                            onClick={() => {
-                              setOpenMenuChannelId(null);
-                              onDeleteChannel(channel.id);
-                            }}
-                            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
-                          >
-                            <TrashIcon size={13} />
-                            삭제
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              );
-            })}
-
-            <button
-              onClick={onCreateChannel}
-              className="mt-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-base text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
-            >
-              <PlusIcon size={15} className="flex-shrink-0" />
-              <span>{t.sidebar_create_channel}</span>
-            </button>
-          </div>
-        )}
-
-        {/* 음성 회의 */}
-        <button
-          onClick={() => onSelectPlaceholder("voiceMeeting")}
-          className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base ${
-            activePlaceholder === "voiceMeeting"
-              ? "bg-recall-accent/15 text-recall-text"
-              : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
-          }`}
-        >
-          <MicIcon size={16} className="flex-shrink-0" />
-          <span className="truncate">{t.sidebar_voice_meeting}</span>
-          {voiceMeetingStatus && (
-            <span
-              className={`ml-auto h-1.5 w-1.5 flex-shrink-0 rounded-full ${
-                voiceMeetingStatus === "recording" ? "bg-recall-danger" : "bg-recall-textMuted"
-              }`}
-              title={voiceMeetingStatus === "recording" ? t.sidebar_recording : t.sidebar_paused}
-            />
+                    );
+                  })
+                )}
+              </div>
+            </div>
           )}
-        </button>
 
-        {/* 분석 그룹 */}
-        <p className="mb-1.5 mt-4 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
-          {t.analysis_group}
-        </p>
-        {ANALYSIS_ITEMS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.key}
-              onClick={() => onSelectPlaceholder(item.key)}
-              className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base ${
-                activePlaceholder === item.key
-                  ? "bg-recall-accent/15 text-recall-text"
-                  : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
-              }`}
-            >
-              <Icon size={16} className="flex-shrink-0" />
-              <span className="truncate">{item.label}</span>
-            </button>
-          );
-        })}
+          {/* 그래프 뷰 */}
+          <button
+            onClick={() => onSelectPlaceholder("graph")}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              activePlaceholder === "graph"
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            <GraphIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_graph}</span>
+          </button>
+        </div>
       </div>
 
-      {/* 3. 하단 프로필 영역 */}
+      {/* 3. 하단 알림 및 사용자 프로필 영역 */}
       <div className="flex items-center gap-1.5 border-t border-recall-border px-3 pt-2">
-        <NotificationBell workspaceId={currentWorkspaceId} />
+        <NotificationBell
+          workspaceId={currentWorkspaceId}
+          channels={channels}
+          onSelectChannel={onSelectChannel}
+          onSelectPlaceholder={onSelectPlaceholder}
+        />
       </div>
       <ProfilePopup
         user={user}

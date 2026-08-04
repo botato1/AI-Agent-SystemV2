@@ -1,6 +1,6 @@
 // src/components/MainArea.tsx
 import { useEffect, useRef, useState } from "react";
-import { Channel, MemberActivity } from "../types"; // types.ts에서 정식 MemberActivity 타입을 가져옴 (충돌 해결!)
+import { Channel, MemberActivity } from "../types";
 import {
   SendIcon,
   DocumentIcon,
@@ -15,7 +15,6 @@ import {
   ChevronRightIcon,
 } from "./icons";
 import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRuntime";
-import { useAiChat } from "../hooks/useAiChat";
 import { useRoomFiles } from "../hooks/useRoomFiles";
 import { useContradictions } from "../hooks/useContradictions";
 import { RoomFile } from "../services/roomFile";
@@ -25,6 +24,8 @@ import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
 import ContradictionMessage from "./ContradictionMessage";
 import ChangeSummaryModal from "./ChangeSummaryModal";
+import DocumentPreviewModal from "./DocumentPreviewModal";
+import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -35,8 +36,6 @@ function severityBadge(severity: ContradictionSeverity, t: any) {
   const { label, className } = map[severity];
   return <span className={`flex-shrink-0 rounded-full px-1.5 py-0.5 text-[11px] ${className}`}>{label}</span>;
 }
-import DocumentPreviewModal from "./DocumentPreviewModal";
-import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
 
 interface MainAreaProps {
   channel: Channel;
@@ -45,11 +44,9 @@ interface MainAreaProps {
   memberNameById: Record<string, string>;
   memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
-  t: any; // 번역 객체 타입
+  t: any;
 }
 
-// 메시지 발신자의 아바타 표시용 정보를 구성한다 - 내 메시지면 내 프로필,
-// 다른 멤버면 멤버 목록에서 가져온 이미지 + 이름 해시 기반 색상으로 대체
 function resolveSenderAvatar(
   m: ChatMessage,
   currentUser: MainAreaProps["currentUser"],
@@ -65,12 +62,22 @@ function resolveSenderAvatar(
   };
 }
 
-type Tab = "message" | "docs" | "aiChat";
+type Tab = "message" | "docs";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatMessageTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hours = d.getHours();
+  const period = hours < 12 ? "오전" : "오후";
+  const h12 = hours % 12 === 0 ? 12 : hours % 12;
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${period} ${h12}:${mm}`;
 }
 
 function formatDocDate(iso: string): string {
@@ -97,7 +104,6 @@ function analysisStatusLabel(status: string): string {
   }
 }
 
-// 채팅 입력창 - "+"로 문서/음성 업로드 선택
 function ComposerBar({
   pendingFiles,
   onAddFiles,
@@ -219,7 +225,9 @@ function ComposerBar({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            // 한글 등 조합 입력(IME) 중 Enter는 조합 확정용 키 입력이라 무시 - 안 그러면
+            // Enter 한 번에 keydown이 두 번 발생해서 마지막 글자가 별도 메시지로 중복 전송됨
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               handleSend();
             }
@@ -245,16 +253,17 @@ function ComposerBar({
   );
 }
 
-// 모순 감지 패널 (이 채팅방 메시지에서 감지된 모순만 필터링해서 보여줌)
 function ContradictionPanel({
   contradictions,
   onResolve,
   onDismiss,
+  onViewReference,
   t,
 }: {
   contradictions: Contradiction[];
   onResolve: (id: string, resolutionType: ContradictionResolutionType) => void;
   onDismiss: (id: string) => void;
+  onViewReference: (fileId: string, name: string) => void;
   t: any;
 }) {
   const [isOpen, setIsOpen] = useState(true);
@@ -270,7 +279,6 @@ function ContradictionPanel({
     });
   }
 
-  // 닫혀 있는 동안 새 모순이 감지되면 자동으로 펼침
   useEffect(() => {
     if (contradictions.length > prevCountRef.current) {
       setIsOpen((prevOpen) => (prevOpen ? prevOpen : true));
@@ -324,34 +332,34 @@ function ContradictionPanel({
           contradictions.map((c) => {
             const isExpanded = expandedIds.has(c.id);
             return (
-            <div
-              key={c.id}
-              onClick={() => toggleExpanded(c.id)}
-              className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
-            >
-              <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity, t)}</div>
-              <ContradictionMessage contradiction={c} expanded={isExpanded} t={t} />
-              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                <button
-                  onClick={() => onDismiss(c.id)}
-                  className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
-                >
-                  {t.contradiction_dismiss}
-                </button>
-                <button
-                  onClick={() => onResolve(c.id, "keep_reference")}
-                  className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
-                >
-                  {t.contradiction_keep}
-                </button>
-                <button
-                  onClick={() => onResolve(c.id, "change_acknowledged")}
-                  className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
-                >
-                  {t.contradiction_apply}
-                </button>
+              <div
+                key={c.id}
+                onClick={() => toggleExpanded(c.id)}
+                className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
+              >
+                <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity, t)}</div>
+                <ContradictionMessage contradiction={c} expanded={isExpanded} onViewReference={onViewReference} t={t} />
+                <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => onDismiss(c.id)}
+                    className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
+                  >
+                    {t.contradiction_dismiss}
+                  </button>
+                  <button
+                    onClick={() => onResolve(c.id, "keep_reference")}
+                    className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
+                  >
+                    {t.contradiction_keep}
+                  </button>
+                  <button
+                    onClick={() => onResolve(c.id, "change_acknowledged")}
+                    className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                  >
+                    {t.contradiction_apply}
+                  </button>
+                </div>
               </div>
-            </div>
             );
           })
         )}
@@ -360,7 +368,6 @@ function ContradictionPanel({
   );
 }
 
-// 메시지 탭
 function MessageTab({
   messages,
   onSend,
@@ -436,7 +443,7 @@ function MessageTab({
     setPendingFiles([]);
   }
 
- return (
+  return (
     <div
       onDragEnter={(e) => {
         e.preventDefault();
@@ -500,7 +507,10 @@ function MessageTab({
             >
               <Avatar user={resolveSenderAvatar(m, currentUser, memberAvatarById)} size={28} />
               <div className="min-w-0 flex-1">
-                <p className="text-base font-medium text-recall-text">{m.author}</p>
+                <p className="flex items-baseline gap-1.5 text-base font-medium text-recall-text">
+                  {m.author}
+                  <span className="text-xs font-normal text-recall-textMuted">{formatMessageTime(m.createdAt)}</span>
+                </p>
                 {(() => {
                   const shareMatch = m.text.match(SHARE_MESSAGE_PATTERN);
                   const sharedFile = shareMatch
@@ -558,13 +568,13 @@ function MessageTab({
         contradictions={contradictions}
         onResolve={onResolveContradiction}
         onDismiss={onDismissContradiction}
+        onViewReference={onOpenPreview}
         t={t}
       />
     </div>
   );
 }
 
-// 문서보관함 탭
 function docExtension(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toUpperCase() : "";
@@ -718,90 +728,6 @@ function DocsTab({
   );
 }
 
-// AI Chat 탭
-function ThinkingDots() {
-  return (
-    <span className="flex items-center gap-1">
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-recall-textMuted [animation-delay:-0.3s]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-recall-textMuted [animation-delay:-0.15s]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-recall-textMuted" />
-    </span>
-  );
-}
-
-function AiChatTab({ workspaceId, roomId, t }: { workspaceId: string; roomId: string; t: any }) {
-  const { messages, isLoading, isSending, sendMessage } = useAiChat(workspaceId, roomId);
-  const [input, setInput] = useState("");
-
-  function handleSend() {
-    if (!input.trim() || isSending) return;
-    sendMessage(input);
-    setInput("");
-  }
-
-  return (
-    <div className="flex flex-1 flex-col">
-      <div className="flex-1 space-y-4 overflow-y-auto px-1 py-2">
-        {isLoading ? (
-          <p className="text-base text-recall-textMuted">불러오는 중...</p>
-        ) : messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <p className="text-base text-recall-textMuted">{t.ai_chat_welcome}</p>
-          </div>
-        ) : (
-          messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex items-end gap-2 ${m.role === "assistant" ? "" : "flex-row-reverse"}`}
-            >
-              <div className={`flex max-w-[75%] flex-col gap-1 ${m.role === "assistant" ? "items-start" : "items-end"}`}>
-                <div
-                  className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-base leading-relaxed shadow-sm ${
-                    m.role === "assistant"
-                      ? "rounded-bl-md bg-recall-bgSoft text-recall-text"
-                      : "rounded-br-md bg-recall-accent text-white"
-                  } ${m.isPending || m.errorText ? "opacity-60" : ""}`}
-                >
-                  {m.content}
-                </div>
-                {m.errorText && (
-                  <p className="flex items-center gap-1 text-xs text-recall-danger">
-                    <WarningIcon size={12} /> {m.errorText}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-        {isSending && (
-          <div className="flex items-end gap-2">
-            <div className="rounded-2xl rounded-bl-md bg-recall-bgSoft px-3.5 py-2.5 shadow-sm">
-              <ThinkingDots />
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="relative mt-3 flex items-center gap-2 rounded-2xl border border-recall-border bg-recall-bgSoft p-2 shadow-sm">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder={t.ai_input_placeholder}
-          className="flex-1 bg-transparent px-2 py-1.5 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none"
-        />
-        <button
-          onClick={handleSend}
-          disabled={!input.trim() || isSending}
-          aria-label="Send"
-          className="flex flex-shrink-0 items-center justify-center rounded-full bg-recall-accent p-2 text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-        >
-          <SendIcon size={14} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function MainArea({
   channel,
   workspaceId,
@@ -822,7 +748,6 @@ export default function MainArea({
 
   const roomFiles = useRoomFiles(workspaceId, channel.id);
 
-  // 이 채팅방 메시지에서 감지된 모순만 필터링 (회의 발언 쪽 모순은 회의 화면에서 따로 보여줌)
   const {
     contradictions: workspaceContradictions,
     resolve: resolveContradiction,
@@ -832,6 +757,7 @@ export default function MainArea({
     isChangeSummaryLoading,
     closeChangeSummary,
   } = useContradictions(workspaceId);
+
   const roomContradictions = workspaceContradictions.filter(
     (c) => c.source_type === "room_message" && c.room_message_id && chatMessages.some((m) => m.id === c.room_message_id)
   );
@@ -845,9 +771,6 @@ export default function MainArea({
     kind: "file" as const,
   }));
 
-  // 채팅창 "+"로 문서를 올리면 실제로 업로드하고(room_id로 자동 연결), 성공하면 공유 메시지를 남김.
-  // 음성은 이 채팅방에 연결된 진짜 회의(Meeting)로 업로드해서 STT/요약/모순감지까지 실제로 돌게 한다
-  // (문서보관함이 아니라 사이드바 "음성 회의" 목록에 나타남).
   async function handleUploadFromChat(files: File[], kind: "file" | "voice") {
     if (kind === "voice") {
       for (const file of files) {
@@ -867,7 +790,6 @@ export default function MainArea({
     }
   }
 
-  // 문서보관함 탭의 업로드는 항상 문서(document) 종류
   async function handleUploadFromDocsTab(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
     for (const file of Array.from(fileList)) {
@@ -885,7 +807,6 @@ export default function MainArea({
   const tabs: { id: Tab; label: string }[] = [
     { id: "message", label: t.chat_tab_message },
     { id: "docs", label: t.chat_tab_docs },
-    { id: "aiChat", label: t.chat_tab_ai },
   ];
 
   const participants = Object.entries(memberNameById).map(([id, name]) => ({ id, name }));
@@ -927,7 +848,7 @@ export default function MainArea({
               activeTab === tab.id
                 ? "border-b-2 border-recall-accent text-recall-text"
                 : "text-recall-textMuted hover:text-recall-text"
-              }`}
+            }`}
           >
             {tab.label}
           </button>
@@ -961,7 +882,6 @@ export default function MainArea({
           t={t}
         />
       )}
-      {activeTab === "aiChat" && <AiChatTab workspaceId={workspaceId} roomId={channel.id} t={t} />}
 
       {showLinkModal && (
         <LinkExistingDocumentModal

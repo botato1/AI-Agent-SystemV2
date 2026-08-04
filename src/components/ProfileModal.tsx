@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { User } from "../types";
 import Avatar from "./Avatar";
 import { AVATAR_COLORS } from "../data/avatarColors";
@@ -6,6 +6,15 @@ import { PencilIcon } from "./icons";
 import { updateProfileApi } from "../services/auth";
 import AvatarCropModal from "./AvatarCropModal";
 import { validatePassword } from "../data/passwordPolicy";
+
+// 목소리 프로필 API 및 모달 연동
+import {
+  getVoiceProfileStatusApi,
+  deleteVoiceProfileApi,
+  renameVoiceProfileApi,
+  VoiceProfileStatus,
+} from "../services/voice";
+import { VoiceRegisterModal } from "./VoiceRegisterModal"; 
 
 interface ProfileModalProps {
   user: User;
@@ -16,7 +25,7 @@ interface ProfileModalProps {
   t: any;
 }
 
-// 이미지와 동일한 얇은 꺾쇠 화살표 아이콘
+// 얇은 꺾쇠 화살표 아이콘
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg
@@ -60,17 +69,78 @@ export default function ProfileModal({
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const [showPasswordSection, setShowPasswordSection] = useState(false);
 
+  // 목소리 등록 섹션 관련 State
+  const [showVoiceSection, setShowVoiceSection] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceProfileStatus | null>(null);
+  const [isVoiceLoading, setIsVoiceLoading] = useState(false);
+  const [isVoiceRegisterModalOpen, setIsVoiceRegisterModalOpen] = useState(false);
+
+  // STT 인식 이름 수정용 State
+  const [isEditingVoiceName, setIsEditingVoiceName] = useState(false);
+  const [editingVoiceName, setEditingVoiceName] = useState("");
+
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [cropFile, setCropFile] = useState<File | null>(null);
+
+  // 컴포넌트 마운트 시 목소리 등록 상태 조회
+  useEffect(() => {
+    fetchVoiceStatus();
+  }, []);
+
+  const fetchVoiceStatus = async () => {
+    setIsVoiceLoading(true);
+    const res = await getVoiceProfileStatusApi();
+    setIsVoiceLoading(false);
+    if (res.status === "success" && res.data) {
+      setVoiceStatus(res.data);
+      if (res.data.speaker_name) {
+        setEditingVoiceName(res.data.speaker_name);
+      }
+    }
+  };
+
+  // 목소리 프로필 삭제
+  const handleDeleteVoice = async () => {
+    if (!window.confirm("등록된 목소리를 삭제하시겠습니까?")) return;
+    setError(null);
+    setSuccessMessage(null);
+
+    const res = await deleteVoiceProfileApi();
+    if (res.status === "success") {
+      setSuccessMessage("목소리가 삭제되었습니다.");
+      fetchVoiceStatus();
+    } else {
+      setError(res.message);
+    }
+  };
+
+  // STT 이름 수정
+  const handleRenameVoice = async () => {
+    if (!editingVoiceName.trim()) {
+      setError("올바른 이름을 입력해 주세요.");
+      return;
+    }
+    setError(null);
+    setSuccessMessage(null);
+
+    const res = await renameVoiceProfileApi(editingVoiceName.trim());
+    if (res.status === "success") {
+      setSuccessMessage("인식된 목소리 이름이 수정되었습니다.");
+      setIsEditingVoiceName(false);
+      fetchVoiceStatus();
+    } else {
+      setError(res.message);
+    }
+  };
 
   function handlePickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setCropFile(file);
     setShowAvatarMenu(false);
-    e.target.value = ""; // 같은 파일 다시 선택할 수 있도록 초기화
+    e.target.value = "";
   }
 
   async function handleSaveProfile() {
@@ -110,7 +180,6 @@ export default function ProfileModal({
     const passwordChangeRequested = showPasswordSection && !!currentPassword && !!newPassword;
 
     if (!nameChanged && !passwordChangeRequested) {
-      // 이름/비밀번호 둘 다 안 바뀌었으면(아바타만 바꾼 경우 등) 빈 수정 요청을 보낼 필요가 없다.
       onClose();
       return;
     }
@@ -142,8 +211,8 @@ export default function ProfileModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-xl text-recall-text">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-xl text-recall-text custom-scrollbar">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold">프로필 설정</h2>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
@@ -225,7 +294,108 @@ export default function ProfileModal({
             />
           </div>
 
-          {/* 비밀번호 변경 영역 (이미지 디자인 적용) */}
+          {/* 목소리 등록하기 영역 */}
+          <div className="mt-1 border-t border-recall-border/50 pt-3">
+            <button
+              type="button"
+              onClick={() => {
+                setShowVoiceSection((v) => !v);
+                setError(null);
+                setSuccessMessage(null);
+              }}
+              className="flex items-center justify-between w-full text-sm text-recall-text font-medium hover:opacity-80 transition"
+            >
+              <div className="flex items-center gap-1.5">
+                <ChevronIcon open={showVoiceSection} />
+                <span>목소리 등록하기</span>
+              </div>
+              <span className="text-xs font-normal">
+                {voiceStatus?.registered ? (
+                  <span className="text-emerald-400 font-medium">등록됨</span>
+                ) : (
+                  <span className="text-recall-textMuted">미등록</span>
+                )}
+              </span>
+            </button>
+
+            {showVoiceSection && (
+              <div className="mt-3.5 flex flex-col gap-3 rounded-xl border border-recall-border/60 bg-white/5 p-3.5 text-xs">
+                {isVoiceLoading ? (
+                  <p className="text-recall-textMuted">상태 확인 중...</p>
+                ) : voiceStatus?.registered ? (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between bg-white/5 p-2 rounded-lg border border-recall-border/40">
+                      <span className="text-recall-textMuted">인식된 이름</span>
+                      {isEditingVoiceName ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={editingVoiceName}
+                            onChange={(e) => setEditingVoiceName(e.target.value)}
+                            className="w-20 rounded border border-recall-border bg-transparent px-1.5 py-0.5 text-xs focus:outline-none focus:border-recall-accent"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleRenameVoice}
+                            className="rounded bg-recall-accent px-2 py-0.5 text-xs text-white"
+                          >
+                            저장
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingVoiceName(false)}
+                            className="text-recall-textMuted hover:text-recall-text px-1"
+                          >
+                            취소
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-recall-text">{voiceStatus.speaker_name}</span>
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingVoiceName(true)}
+                            className="text-recall-textMuted hover:text-recall-text underline text-[11px]"
+                          >
+                            수정
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between mt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsVoiceRegisterModalOpen(true)}
+                        className="rounded-lg border border-recall-border px-3 py-1.5 text-recall-text hover:bg-white/5 transition"
+                      >
+                        다시 녹음하기
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteVoice}
+                        className="text-red-400 hover:text-red-300 underline text-xs"
+                      >
+                        등록 삭제
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsVoiceRegisterModalOpen(true)}
+                      className="mt-1 w-full rounded-lg bg-recall-accent py-2 font-medium text-white hover:opacity-90 transition text-sm shadow-sm"
+                    >
+                      목소리 등록하기
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 비밀번호 변경 영역 */}
           <div className="mt-1 border-t border-recall-border/50 pt-3">
             <button
               type="button"
@@ -317,6 +487,16 @@ export default function ProfileModal({
           }}
         />
       )}
+
+      {/* 목소리 등록 모달 */}
+      <VoiceRegisterModal
+        isOpen={isVoiceRegisterModalOpen}
+        onClose={() => setIsVoiceRegisterModalOpen(false)}
+        onSuccess={() => {
+          setSuccessMessage("목소리가 등록되었습니다.");
+          fetchVoiceStatus();
+        }}
+      />
     </div>
   );
 }

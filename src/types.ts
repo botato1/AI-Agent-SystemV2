@@ -81,3 +81,11 @@ export interface WorkspaceListApiResponse {
   workspaces: Workspace[]; // 배열 형태
   error: string | null;
 }
+
+export type PlaceholderKey = "home" | "dashboard" | "docAnalysis" | "voiceMeeting" | "graph" | "aiChat";
+
+export interface AiChatSessionItem {
+  id: string;
+  title: string;
+  createdAt: string;
+}

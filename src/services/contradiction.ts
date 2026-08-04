@@ -38,6 +38,9 @@ export interface Contradiction {
   confidence_score: number;
   severity: ContradictionSeverity;
   status: ContradictionStatus;
+  // 백엔드에 아직 없는 필드 - 되돌리기 가능 여부를 판단하려면 필요해서 요청해둔 것.
+  // 값이 없으면(예전 응답) "유지"로 해결된 것도 판별을 못 하므로 되돌리기 버튼을 우선 보여준다.
+  resolution_type?: ContradictionResolutionType | null;
   detected_at: string;
   updated_at: string;
 }
@@ -359,7 +362,77 @@ export async function dismissContradictionApi(
 }
 
 /**
- * 5. 변경 요약 초안 조회 API
+ * 5. 모순 되돌리기 API (POST /api/workspaces/{workspace_id}/contradictions/{contradiction_id}/reopen)
+ *
+ * "유지"(keep_reference)로 해결한 것만 되돌릴 수 있다 - "반영"(change_acknowledged)은 이미
+ * 기준문서 변경 요약까지 생성됐을 수 있어서 단순 상태 되돌리기로는 안전하지 않다.
+ * resolution_type이 change_acknowledged이거나 이미 unresolved인 항목에 호출하면 409로 거부된다.
+ */
+export async function reopenContradictionApi(
+  workspaceId: string,
+  contradictionId: string
+): Promise<GetContradictionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      contradiction: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/contradictions/${contradictionId}/reopen`,
+      { method: "POST" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "되돌리기에 실패했습니다.";
+      let errorCode = data.error || `HTTP_${response.status}`;
+      if (response.status === 409 || response.status === 400) {
+        defaultMsg = "'반영'된 항목은 되돌릴 수 없습니다.";
+        errorCode = "not_revertible";
+      } else if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 처리할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스이거나 모순입니다.";
+      }
+
+      return {
+        status: "error",
+        contradiction: null,
+        message: data.message || data.detail || defaultMsg,
+        error: errorCode,
+      };
+    }
+
+    return {
+      status: "success",
+      contradiction: data.contradiction || data,
+      message: "미해결 상태로 되돌렸습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("reopenContradictionApi error:", error);
+    return {
+      status: "error",
+      contradiction: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 6. 변경 요약 초안 조회 API
  * (GET /api/workspaces/{workspace_id}/contradictions/{contradiction_id}/change-summary)
  */
 export async function getChangeSummaryApi(

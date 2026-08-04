@@ -80,14 +80,14 @@ export default function ContentBlocks({ text }: { text: string }) {
 
           return (
             <div key={blockIndex} className="overflow-x-auto rounded-lg border border-recall-border">
-              <table className="w-full border-collapse text-sm">
+              <table className="border-collapse text-sm">
                 <tbody>
                   {rows.map((row, rowIndex) => (
                     <tr key={rowIndex} className={rowIndex === 0 ? "bg-recall-bgMain" : ""}>
                       {row.map((cell, cellIndex) => (
                         <td
                           key={cellIndex}
-                          className={`border border-recall-border px-2 py-1.5 text-recall-textMuted ${
+                          className={`whitespace-nowrap border border-recall-border px-2 py-1.5 text-recall-textMuted ${
                             rowIndex === 0 ? "font-semibold text-recall-text" : ""
                           }`}
                         >

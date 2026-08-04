@@ -1,14 +1,11 @@
 // src/components/DashboardView.tsx
 import { useState } from "react";
 import { Task, TaskPriority, TaskStatus } from "../types";
-import { Contradiction, ContradictionStatus, ContradictionResolutionType } from "../services/contradiction";
-import { useContradictions } from "../hooks/useContradictions";
-import { useClampCheck } from "../hooks/useClampCheck";
-import { WarningIcon, ChevronDownIcon } from "./icons";
+import { WorkspaceDecision } from "../services/decision";
+import { useWorkspaceDecisions } from "../hooks/useWorkspaceDecisions";
+import { ChevronDownIcon } from "./icons";
 import TaskBoard from "./TaskBoard";
 import CreateTaskModal from "./CreateTaskmodal";
-import ContradictionMessage from "./ContradictionMessage";
-import ChangeSummaryModal from "./ChangeSummaryModal";
 
 interface DashboardViewProps {
   workspaceId: string;
@@ -22,193 +19,111 @@ interface DashboardViewProps {
   t: any;
 }
 
-type DashboardTab = "tasks" | "log";
+type DashboardTab = "tasks" | "decisions";
 
-function severityBadge(severity: Contradiction["severity"], t: any) {
-  const map = {
-    high: { label: t.priority_high, className: "bg-recall-danger/15 text-recall-danger" },
-    medium: { label: t.priority_medium, className: "bg-amber-500/15 text-amber-400" },
-    low: { label: t.priority_low, className: "bg-recall-textMuted/15 text-recall-textMuted" },
-  } as const;
-  const { label, className } = map[severity];
-  return <span className={`rounded-full px-2 py-0.5 text-xs ${className}`}>{label}</span>;
-}
-
-function formatDate(iso: string): string {
+function formatShortDate(iso: string): string {
   const d = new Date(iso);
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes()
-  ).padStart(2, "0")}`;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-function ContradictionLogCard({
-  c,
-  isExpanded,
-  onToggleExpand,
-  onDismiss,
-  onResolve,
-  t,
-}: {
-  c: Contradiction;
-  isExpanded: boolean;
-  onToggleExpand: () => void;
-  onDismiss: () => void;
-  onResolve: (resolutionType: ContradictionResolutionType) => void;
-  t: any;
-}) {
-  // 접힌 상태에서 실제로 텍스트가 잘리는지 측정해서, 잘릴 때만 "자세히 보기"를 보여준다
-  // (짧은 내용에서 눌러도 아무 변화가 없는 버튼을 없애기 위함)
-  const [clampRef, isClamped] = useClampCheck([c.id]);
+function isWithinLastWeek(iso: string): boolean {
+  const decidedAt = new Date(iso).getTime();
+  return Date.now() - decidedAt <= 7 * 24 * 60 * 60 * 1000;
+}
+
+// 결정사항 하나 - 접었을 땐 현재 값만, 누르면 이 주제가 어떻게 바뀌어왔는지(history) 펼쳐서 보여준다
+function DecisionCard({ d, t }: { d: WorkspaceDecision; t: any }) {
+  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
-    <div className="rounded-lg border border-recall-border bg-recall-bg p-3 shadow-sm">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="flex items-center gap-1.5 text-base font-bold text-recall-text">
-          <WarningIcon size={15} className="text-recall-danger" />
-          {t.contradiction_title}
-        </span>
-        <span className="text-sm text-recall-textMuted">{formatDate(c.detected_at)}</span>
-      </div>
-
-      <span className="mb-2 inline-block rounded-md bg-recall-bgMain px-1.5 py-1 text-xs font-medium text-recall-textMuted">
-        {c.source_type === "meeting_segment" ? t.contradiction_source_meeting : t.contradiction_source_chat}
-      </span>
-
-      <div ref={clampRef}>
-        <ContradictionMessage contradiction={c} expanded={isExpanded} t={t} />
-
-        {c.reason && (
-          <div className="mb-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-              {t.contradiction_reason_label}
-            </p>
-            <p data-clamp className={`text-base text-recall-textMuted ${isExpanded ? "" : "line-clamp-1"}`}>{c.reason}</p>
-          </div>
-        )}
-      </div>
-
-      {isClamped && (
-        <button
-          onClick={onToggleExpand}
-          className="mb-2 flex items-center gap-1 text-sm font-medium text-recall-accent hover:underline"
-        >
-          {isExpanded ? t.contradiction_show_less : t.contradiction_show_more}
-          <ChevronDownIcon size={13} className={`transition-transform ${isExpanded ? "rotate-180" : ""}`} />
-        </button>
-      )}
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          {severityBadge(c.severity, t)}
-          <span className="text-sm text-recall-textMuted">
-            {t.contradiction_confidence} {Math.round(c.confidence_score * 100)}%
-          </span>
+    <div className="rounded-xl border border-recall-border bg-recall-bg p-4">
+      <button
+        onClick={() => setIsExpanded((v) => !v)}
+        className="flex w-full items-start justify-between gap-3 text-left"
+      >
+        <div className="min-w-0">
+          <p className="font-medium text-recall-text">{d.title}</p>
+          <p className="mt-1 text-sm text-recall-textMuted">{d.decision_text}</p>
         </div>
+        <span className="flex flex-shrink-0 items-center gap-1 text-sm text-recall-textMuted">
+          {formatShortDate(d.decided_at)}
+          <ChevronDownIcon size={13} className={`transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+        </span>
+      </button>
 
-        {c.status === "unresolved" && (
-          <div className="flex gap-1.5">
-            <button
-              onClick={onDismiss}
-              className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-textMuted hover:bg-white/5"
-            >
-              {t.contradiction_dismiss}
-            </button>
-            <button
-              onClick={() => onResolve("keep_reference")}
-              className="rounded-lg border border-recall-border px-2.5 py-1 text-sm text-recall-text hover:bg-white/5"
-            >
-              {t.contradiction_keep}
-            </button>
-            <button
-              onClick={() => onResolve("change_acknowledged")}
-              className="rounded-lg bg-recall-accent px-2.5 py-1 text-sm font-medium text-white hover:opacity-90"
-            >
-              {t.contradiction_apply}
-            </button>
-          </div>
-        )}
-      </div>
+      {isExpanded && d.history.length > 0 && (
+        <div className="mt-4 space-y-2.5 border-t border-recall-border pt-4">
+          {d.history
+            .slice()
+            .reverse()
+            .map((h, i) => (
+              <div key={i} className="flex items-center gap-2 text-sm">
+                <span
+                  className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                    h.status === "active" ? "bg-emerald-400" : "bg-recall-textMuted/40"
+                  }`}
+                />
+                <span className="flex-shrink-0 text-recall-textMuted">{formatShortDate(h.decided_at)}</span>
+                <span className="min-w-0 flex-1 truncate text-recall-text">{h.value}</span>
+                {h.status === "active" && (
+                  <span className="flex-shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-xs text-emerald-400">
+                    {t.decisions_current_badge}
+                  </span>
+                )}
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function ContradictionLog({ workspaceId, t }: { workspaceId: string; t: any }) {
-  const {
-    statusFilter,
-    setStatusFilter,
-    contradictions,
-    isLoading,
-    resolve,
-    dismiss,
-    pendingSummaryFor,
-    changeSummary,
-    isChangeSummaryLoading,
-    closeChangeSummary,
-  } = useContradictions(workspaceId);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+function DecisionsTab({ workspaceId, tasks, t }: { workspaceId: string; tasks: Task[]; t: any }) {
+  const { decisions, isLoading } = useWorkspaceDecisions(workspaceId);
 
-  function toggleExpanded(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const inProgressCount = tasks.filter((task) => task.status === "in_progress").length;
+  const changedThisWeekCount = decisions.filter((d) => isWithinLastWeek(d.decided_at)).length;
 
-  const tabs: { key: ContradictionStatus; label: string }[] = [
-    { key: "unresolved", label: t.contradiction_status_unresolved },
-    { key: "resolved", label: t.contradiction_status_resolved },
-    { key: "dismissed", label: t.contradiction_status_dismissed },
+  const stats: { label: string; value: number }[] = [
+    { label: t.decisions_stat_active, value: decisions.length },
+    { label: t.decisions_stat_in_progress_tasks, value: inProgressCount },
+    { label: t.decisions_stat_changed_this_week, value: changedThisWeekCount },
   ];
 
   return (
-    <div>
-      <div className="mb-3 flex gap-0.5">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setStatusFilter(tab.key)}
-            className={`rounded-lg px-2.5 py-1 text-sm ${
-              statusFilter === tab.key
-                ? "bg-recall-accent/15 text-recall-accent"
-                : "text-recall-textMuted hover:bg-white/5"
-            }`}
-          >
-            {tab.label}
-          </button>
+    <div className="space-y-8">
+      <div className="grid grid-cols-3 gap-3">
+        {stats.map((stat) => (
+          <div key={stat.label} className="rounded-xl border border-recall-border bg-recall-bg p-4">
+            <p className="text-sm text-recall-textMuted">{stat.label}</p>
+            <p className="mt-1.5 text-2xl font-bold text-recall-text">
+              {stat.value}
+              <span className="ml-0.5 text-base font-medium text-recall-textMuted">{t.decisions_count_unit}</span>
+            </p>
+          </div>
         ))}
       </div>
 
-      {isLoading ? (
-        <p className="text-base text-recall-textMuted">{t.common_loading}</p>
-      ) : contradictions.length === 0 ? (
-        <p className="text-base text-recall-textMuted">{t.contradiction_log_empty}</p>
-      ) : (
-        <div className="space-y-3">
-          {contradictions.map((c) => (
-            <ContradictionLogCard
-              key={c.id}
-              c={c}
-              isExpanded={expandedIds.has(c.id)}
-              onToggleExpand={() => toggleExpanded(c.id)}
-              onDismiss={() => dismiss(c.id)}
-              onResolve={(resolutionType) => resolve(c.id, resolutionType)}
-              t={t}
-            />
-          ))}
+      <div>
+        <div className="mb-3 flex items-baseline justify-between">
+          <p className="text-sm font-semibold uppercase tracking-wide text-recall-textMuted">
+            {t.decisions_list_title}
+          </p>
+          <p className="text-xs text-recall-textMuted">{t.decisions_list_hint}</p>
         </div>
-      )}
 
-      {pendingSummaryFor && (
-        <ChangeSummaryModal
-          contradiction={pendingSummaryFor}
-          changeSummary={changeSummary}
-          isLoading={isChangeSummaryLoading}
-          onClose={closeChangeSummary}
-          t={t}
-        />
-      )}
+        {isLoading ? (
+          <p className="text-base text-recall-textMuted">{t.common_loading}</p>
+        ) : decisions.length === 0 ? (
+          <p className="text-base text-recall-textMuted">{t.decisions_empty}</p>
+        ) : (
+          <div className="space-y-3">
+            {decisions.map((d) => (
+              <DecisionCard key={d.id} d={d} t={t} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -224,22 +139,22 @@ export default function DashboardView({
   onDeleteTask,
   t,
 }: DashboardViewProps) {
-  const [activeTab, setActiveTab] = useState<DashboardTab>("tasks");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("decisions");
   const [createInitialStatus, setCreateInitialStatus] = useState<TaskStatus | null>(null);
 
   const tabs: { id: DashboardTab; label: string }[] = [
+    { id: "decisions", label: t.dashboard_tab_decisions },
     { id: "tasks", label: t.dashboard_tab_tasks },
-    { id: "log", label: t.dashboard_tab_log },
   ];
 
   return (
-    <div className="flex h-full w-full flex-col bg-recall-bgMain p-4">
-      <div className="mb-3 flex gap-0.5 border-b border-recall-border">
+    <div className="flex h-full w-full flex-col bg-recall-bgMain p-6">
+      <div className="mb-5 flex gap-1 border-b border-recall-border">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1.5 text-base ${
+            className={`px-3.5 py-2 text-base ${
               activeTab === tab.id
                 ? "border-b-2 border-recall-accent text-recall-text"
                 : "text-recall-textMuted hover:text-recall-text"
@@ -263,7 +178,7 @@ export default function DashboardView({
             t={t}
           />
         ) : (
-          <ContradictionLog workspaceId={workspaceId} t={t} />
+          <DecisionsTab workspaceId={workspaceId} tasks={tasks} t={t} />
         )}
       </div>
 

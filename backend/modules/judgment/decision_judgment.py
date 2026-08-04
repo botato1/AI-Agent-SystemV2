@@ -43,16 +43,19 @@ from backend.modules.llm.ollama_client import _call_ollama
 from backend.modules.rag import chroma_client
 
 # [수정 - 2026.07.27] confidence/Model2 이원화 제거. 판단은 배치1~4 통합
-# 파인튜닝 모델(re-call-model1-unified-v2) 하나로, 단계별 개별 호출.
+# 파인튜닝 모델(re-call-model1-unified-v7) 하나로, 단계별 개별 호출.
 # ollama_client.OLLAMA_MODEL_LIGHT를 그대로 안 쓰는 이유: 그건 의도분류/일반답변
 # 등 다른 기능도 같이 쓰는 공용 상수라, 판단 전용 모델을 거기 넣으면 다른 기능까지
 # 좁은 판단용 모델로 넘어가게 됨 - 판단 파이프라인 전용 상수를 따로 둔다.
-JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v2")
+JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v7")
 
-# [수정] 벡터 검색을 후보 축소용으로 재도입. top_k는 넉넉하게, threshold는 낮게
-# 잡아서 "필터"가 아니라 "후보 목록 좁히기"로만 동작하게 한다 (TBD - 실측 후 조정).
+# [수정 - 2026.08.03] threshold=0.3은 실회의록 스모크테스트(data/test_meetings/)에서
+# 결정 개수가 적은 워크스페이스일 때 "넵 알겠습니다" 같은 무관한 발화까지 거의 항상
+# 후보로 통과시키는 것을 확인함(dense count == final count로 사실상 무필터). 후보
+# narrowing이 안 되면 topic_match 잔여 오류율(홀드아웃 기준 8~10%)이 후보 개수만큼
+# 곱해져 노출됨 - 0.5로 올려 실제 필터 역할을 하게 함(TBD - 추후 대규모 실측 후 재조정).
 DECISION_CANDIDATE_TOP_K = int(os.getenv("DECISION_CANDIDATE_TOP_K", "15"))
-DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.3"))
+DECISION_CANDIDATE_THRESHOLD = float(os.getenv("DECISION_CANDIDATE_THRESHOLD", "0.4"))
 
 # [수정 - 리뷰 반영] 벡터 후보(top-15)를 전부 topic_match로 순회하면 무관한 발화 하나당
 # 최악의 경우 LLM 호출이 15번까지 순차로 늘어나 체감 지연이 커짐. 후보는 이미 벡터
@@ -83,20 +86,35 @@ JUDGMENT_INPUT_TEMPLATE = """[과거 결정]
 [방금 발화]
 {statement}"""
 
-# 배치4(topic_match) 학습 때 쓴 instruction/입력 라벨 그대로 - 문구가 조금이라도
-# 다르면 정확도가 크게 떨어짐 (dataset_topic_match_v2.jsonl 참조)
+# 배치4(topic_match) v7 학습 때 쓴 instruction 그대로 - 문구가 조금이라도
+# 다르면 정확도가 크게 떨어짐 (finetune/dataset_topic_match_v2_augment.jsonl 참조).
+# 학습 데이터의 instruction 필드는 JSON 출력 스펙까지 안에 포함돼 있으므로,
+# 이 상수도 스펙을 끝에 그대로 포함해서 학습 형식과 완전히 동일하게 맞춘다
+# (아래 _ask_topic_match()에서 별도로 스펙을 덧붙이지 않는 이유이기도 함).
 TOPIC_MATCH_INSTRUCTION = (
-    "아래는 과거 의사결정과 새 발화이다.\n\n목표:\n새 발화가 과거 의사결정을 수정·대체·조정하려는 내용인지 판단하라.\n\n"
+    "아래는 과거 의사결정과 새 발화이다.\n\n"
+    "목표:\n새 발화가 과거 의사결정에서 실제로 결정된 그 항목·속성을 다루는지 판단하라.\n\n"
     "같은 주제(true)인 경우\n"
-    "- 동일 항목을 다른 기술/서비스/제품으로 교체\n"
-    "- 동일 항목의 설정값(수치, 기간, 비율, 개수 등) 변경\n"
-    "- 동일 기능을 수행하는 대안 기술 제안\n"
-    "- 동일 의사결정의 구현 방식 변경\n\n"
+    "- 과거 의사결정에서 선택한 항목을 다른 기술/서비스/제품으로 교체하자는 제안\n"
+    "- 과거 의사결정에서 정한 그 설정값(수치, 기간, 비율, 개수 등)을 조정하자는 제안\n"
+    "- 과거 의사결정과 동일한 선택지를 놓고 대안을 비교하거나 장단점을 논하는 경우\n"
+    "- 과거 의사결정 내용 자체를 단순히 되묻거나 재확인하거나 다시 언급하는 경우, "
+    "변경 의도가 없는 동의·긍정적 코멘트도 포함\n"
+    "  (예: \"그거 A로 하기로 했었죠?\", \"왜 A로 정했었죠\", \"A 맞나요\", "
+    "\"A로 그대로 가면 될 것 같아요\", \"A가 요즘 보니 괜찮더라고요\")\n\n"
     "다른 주제(false)인 경우\n"
-    "- 같은 프로젝트라도 다른 컴포넌트에 대한 이야기\n"
+    "- 같은 시스템/프로젝트/컴포넌트에 대한 이야기라도, 과거 의사결정이 실제로\n"
+    "  다루지 않은 별개의 속성·정책·운영 이슈인 경우\n"
+    "  (예: \"DB는 PostgreSQL을 쓴다\"는 \"어떤 DB 기술을 쓸지\"에 대한 결정이므로,\n"
+    "  같은 DB에 대한 이야기여도 \"백업 주기\", \"마이그레이션 자동화\" 등은 별개 항목)\n"
+    "- 비슷한 분야/카테고리라도 역할이 다른 경우 (예: 관계형DB vs 벡터DB, "
+    "인증 vs 권한관리, 캐시 vs 메시지큐, 검색엔진 vs 그래프DB) — 배경지식으로 "
+    "역할이 다름을 판단해야 하는 경우도 포함\n"
     "- 기존 결정과 독립적인 신규 기능 또는 신규 컴포넌트 제안\n"
-    "- 기존 결정과 직접적인 수정 관계가 없는 논의\n\n"
-    "판단 기준은 \"같은 기술 분야\"가 아니라\n\"동일한 의사결정을 수정하려는가\"이다."
+    "- 완전히 무관한 화제\n\n"
+    "판단의 핵심은 \"같은 시스템/키워드가 언급되었는가\"가 아니라\n"
+    "\"과거에 실제로 결정된 바로 그 속성을 다루는가\"이다.\n\n"
+    "다음 JSON만 출력한다.\n{\n  \"reason\": \"20자 이내\",\n  \"same_topic\": true | false\n}"
 )
 
 TOPIC_MATCH_INPUT_TEMPLATE = """[과거 의사결정]
@@ -132,10 +150,10 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
     input_text = TOPIC_MATCH_INPUT_TEMPLATE.format(
         decision_text=decision_text, decision_reason=decision_reason, statement=statement,
     )
-    prompt = (
-        f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}\n\n"
-        f'다음 JSON만 출력한다.\n{{\n  "reason": "20자 이내",\n  "same_topic": true | false\n}}'
-    )
+    # TOPIC_MATCH_INSTRUCTION이 이미 JSON 출력 스펙을 끝에 포함하고 있으므로
+    # (학습 데이터의 instruction 필드와 동일한 형식), 여기서 별도로 스펙을
+    # 덧붙이지 않는다 - instruction 뒤에 input만 붙이는 게 학습 형식과 일치한다.
+    prompt = f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}"
     raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
     try:
         start, end = raw.find("{"), raw.rfind("}")

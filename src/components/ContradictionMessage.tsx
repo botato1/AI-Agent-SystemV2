@@ -3,7 +3,11 @@ import { DocumentIcon } from "./icons";
 
 type ContradictionDisplayFields = Pick<
   Contradiction,
-  "display_message" | "reference_source_name" | "statement_text_snapshot" | "reference_text_snapshot"
+  | "display_message"
+  | "reference_source_name"
+  | "reference_file_id"
+  | "statement_text_snapshot"
+  | "reference_text_snapshot"
 >;
 
 // display_message는 백엔드가 "'{새 발언}'라고 하셨는데, 기존 자료({문서명})의 '{기존 내용}'와
@@ -19,15 +23,57 @@ function parseDisplayMessage(message: string): { newStatement: string; existingC
   return { newStatement: match[1], existingContent: match[2] };
 }
 
+interface ContradictionMessageProps {
+  contradiction: ContradictionDisplayFields;
+  expanded: boolean;
+  t: any;
+  // 모든 모순에는 근거 자료가 있으므로, 눌러서 그 자료를 바로 볼 수 있게 한다. 안 넘겨주면
+  // (아직 연결 안 한 화면) 기존처럼 그냥 텍스트 배지로만 보인다.
+  onViewReference?: (fileId: string, name: string) => void;
+}
+
+function ReferenceBadge({
+  name,
+  fileId,
+  onViewReference,
+}: {
+  name: string;
+  fileId: string;
+  onViewReference?: (fileId: string, name: string) => void;
+}) {
+  const className =
+    "mt-1.5 inline-flex items-center gap-1 rounded-md border border-recall-border bg-recall-bgMain px-1.5 py-1 text-xs font-medium text-recall-textMuted";
+
+  if (!onViewReference) {
+    return (
+      <span className={className}>
+        <DocumentIcon size={12} className="flex-shrink-0" />
+        {name}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onViewReference(fileId, name);
+      }}
+      className={`${className} text-recall-accent hover:border-recall-accent/50 hover:bg-recall-accent/5`}
+    >
+      <DocumentIcon size={12} className="flex-shrink-0" />
+      {name}
+    </button>
+  );
+}
+
 export default function ContradictionMessage({
   contradiction: c,
   expanded,
   t,
-}: {
-  contradiction: ContradictionDisplayFields;
-  expanded: boolean;
-  t: any;
-}) {
+  onViewReference,
+}: ContradictionMessageProps) {
   const parsed = c.display_message ? parseDisplayMessage(c.display_message) : null;
 
   // display_message가 파싱이 안 될 때만(예전 형식 등) 원문을 통째로 보여준다
@@ -36,10 +82,7 @@ export default function ContradictionMessage({
       <div className="mb-2">
         <p data-clamp className={`text-base text-recall-text ${expanded ? "" : "line-clamp-3"}`}>{c.display_message}</p>
         {c.reference_source_name && (
-          <span className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-recall-border bg-recall-bgMain px-1.5 py-1 text-xs font-medium text-recall-textMuted">
-            <DocumentIcon size={12} className="flex-shrink-0" />
-            {c.reference_source_name}
-          </span>
+          <ReferenceBadge name={c.reference_source_name} fileId={c.reference_file_id} onViewReference={onViewReference} />
         )}
       </div>
     );
@@ -66,10 +109,7 @@ export default function ContradictionMessage({
           {newStatement}
         </p>
         {c.reference_source_name && (
-          <span className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-recall-border bg-recall-bgMain px-1.5 py-1 text-xs font-medium text-recall-textMuted">
-            <DocumentIcon size={12} className="flex-shrink-0" />
-            {c.reference_source_name}
-          </span>
+          <ReferenceBadge name={c.reference_source_name} fileId={c.reference_file_id} onViewReference={onViewReference} />
         )}
       </div>
     </>

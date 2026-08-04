@@ -45,21 +45,24 @@ const priorityWeight: Record<TaskPriority, number> = { high: 0, medium: 1, low: 
 
 type SortMode = "deadline" | "priority" | "custom";
 
-const CUSTOM_ORDER_KEY = "recall-task-custom-order";
-
-function saveCustomOrder(columnId: string, taskIds: string[]) {
+// 💡 workspaceId 별로 localStorage 키를 격리
+function saveCustomOrder(workspaceId: string | undefined, columnId: string, taskIds: string[]) {
+  if (!workspaceId) return;
   try {
-    const all = JSON.parse(localStorage.getItem(CUSTOM_ORDER_KEY) ?? "{}");
+    const storageKey = `recall-task-custom-order:${workspaceId}`;
+    const all = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
     all[columnId] = taskIds;
-    localStorage.setItem(CUSTOM_ORDER_KEY, JSON.stringify(all));
+    localStorage.setItem(storageKey, JSON.stringify(all));
   } catch {
     /* 무시 */
   }
 }
 
-function loadCustomOrder(columnId: string): string[] {
+function loadCustomOrder(workspaceId: string | undefined, columnId: string): string[] {
+  if (!workspaceId) return [];
   try {
-    const all = JSON.parse(localStorage.getItem(CUSTOM_ORDER_KEY) ?? "{}");
+    const storageKey = `recall-task-custom-order:${workspaceId}`;
+    const all = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
     return all[columnId] ?? [];
   } catch {
     return [];
@@ -558,7 +561,8 @@ export default function TaskBoard({
 
   const columnsWithTasks = columns.map((col) => {
     const colTasks = taskList.filter((t) => t.status === col.id);
-    const sorted = sortFn ? sortFn(colTasks) : sortByCustomOrder(colTasks, loadCustomOrder(col.id));
+    // 💡 loadCustomOrder 호출 시 workspaceId 전달
+    const sorted = sortFn ? sortFn(colTasks) : sortByCustomOrder(colTasks, loadCustomOrder(workspaceId, col.id));
     return { ...col, tasks: sorted };
   });
 
@@ -586,12 +590,14 @@ export default function TaskBoard({
     }
 
     const currentCol = columnsWithTasks.find((c) => c.id === newStatus);
-    const baseOrder = currentCol ? currentCol.tasks.map((t) => t.id) : loadCustomOrder(newStatus);
+    // 💡 loadCustomOrder 호출 시 workspaceId 전달
+    const baseOrder = currentCol ? currentCol.tasks.map((t) => t.id) : loadCustomOrder(workspaceId, newStatus);
     const withoutMoved = baseOrder.filter((id) => id !== taskId);
     const clampedIndex = Math.max(0, Math.min(insertIndex, withoutMoved.length));
     const newOrder = [...withoutMoved.slice(0, clampedIndex), taskId, ...withoutMoved.slice(clampedIndex)];
 
-    saveCustomOrder(newStatus, newOrder);
+    // 💡 saveCustomOrder 호출 시 workspaceId 전달
+    saveCustomOrder(workspaceId, newStatus, newOrder);
     setSortMode("custom");
   }
 

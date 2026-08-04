@@ -186,6 +186,7 @@ export async function signUpApi(params: {
   email: string;
   password: string;
   displayName: string;
+  inviteToken?: string | null;
 }) {
   try {
     const payload = {
@@ -194,6 +195,7 @@ export async function signUpApi(params: {
       password: params.password.trim(),
       display_name: params.displayName.trim(),
       name: params.displayName.trim(),
+      invite_token: params.inviteToken || null,
     };
 
     const response = await fetch(`${API_BASE_URL}/api/auth/signup`, {
@@ -217,6 +219,11 @@ export async function signUpApi(params: {
     return {
       status: "success",
       message: data.message || "회원가입이 완료되었습니다.",
+      inviteStatus: (data.invite_status ?? null) as
+        | "joined"
+        | "invite_expired"
+        | "invite_invalid"
+        | null,
       data,
     };
   } catch (error) {

@@ -14,8 +14,9 @@ import re
 
 from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
 
-EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 이 내용을 분석해서 아래 JSON 스키마에
-맞춰 정확히 출력하라. 다른 설명이나 텍스트 없이 JSON만 출력하라.
+EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각 발화 앞에는 [번호] 형식의
+발화 번호가 붙어있다. 이 내용을 분석해서 아래 JSON 스키마에 맞춰 정확히 출력하라.
+다른 설명이나 텍스트 없이 JSON만 출력하라.
 
 [중요 지침]
 - topics는 이 회의에서 실제로 논의된 주제만 포함한다.
@@ -26,15 +27,20 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 이
 - 아직 논의 중이거나 제안 단계에 머문 것, 결론이 나지 않은 것은 "reopened_no_conclusion"으로
   분류하고, 절대로 "confirmed"로 표시하지 않는다.
 - action_items는 담당자 또는 기한이 명시적으로 언급된 항목만 포함한다.
+- 인사말/날씨/안부 등 회의 주제와 무관한 잡담은 full_summary/discussion_points/topics
+  어디에도 포함하지 마라. 대신 그런 발화의 번호를 chit_chat_segment_indexes에 전부 나열하라.
+- title은 이 회의 내용을 대표하는 15자 내외의 짧은 제목이다.
 
 [회의 전체 발화]
 {transcript}
 
 [출력 JSON 스키마]
 {{
+  "title": "회의 제목으로 쓸 15자 내외의 짧은 문구",
   "full_summary": "회의 전체를 상세히 요약한 텍스트",
   "short_summary": "한두 문장으로 요약한 텍스트",
   "discussion_points": ["논의 포인트1", "논의 포인트2"],
+  "chit_chat_segment_indexes": [1, 5, 12],
   "topics": [
     {{
       "title": "주제 제목",
@@ -83,9 +89,11 @@ def extract(transcript: str) -> dict:
     prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript=transcript)
 
     fallback = {
+        "title": "",
         "full_summary": "",
         "short_summary": "",
         "discussion_points": [],
+        "chit_chat_segment_indexes": [],
         "topics": [],
         "action_items": [],
     }
@@ -120,6 +128,9 @@ def extract(transcript: str) -> dict:
     # 통째로 날아간다).
     parsed["topics"] = [t for t in parsed.get("topics", []) if isinstance(t, dict)]
     parsed["action_items"] = [t for t in parsed.get("action_items", []) if isinstance(t, dict)]
+    parsed["chit_chat_segment_indexes"] = [
+        i for i in parsed.get("chit_chat_segment_indexes", []) if isinstance(i, int)
+    ]
 
     # status 값 검증 - 스키마에 없는 값이 오면 reopened_no_conclusion으로 안전하게 처리
     valid_statuses = {"confirmed", "reconfirmed", "reopened_no_conclusion"}

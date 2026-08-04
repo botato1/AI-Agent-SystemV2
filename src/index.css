@@ -59,3 +59,13 @@ body {
 .dark ::-webkit-scrollbar-thumb {
   background-color: rgb(139 143 141 / 0.4);
 }
+
+/* 홈 화면 상단 배너의 흐르는 물결 애니메이션 - 패턴을 가로로 이어붙이고 -50%까지 흘려서 이음매 없이 반복 */
+@keyframes recall-wave-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
