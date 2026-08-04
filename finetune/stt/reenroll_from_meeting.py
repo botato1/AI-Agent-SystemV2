@@ -114,7 +114,10 @@ def main():
     if os.path.isfile(src):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = os.path.join(VOICE_PROFILES_DIR, f"{args.name}.{stamp}.npy.bak")
-        shutil.copy2(src, dst)
+        # copy2가 아니라 copyfile — NAS에서 다른 사용자 소유 파일의 수정 시각을
+        # 복사하려다 PermissionError로 죽는다(서버 프로세스가 쓴 프로필에서 발생).
+        # 내용 보존만 필요하므로 메타데이터는 안 가져와도 된다.
+        shutil.copyfile(src, dst)
         print(f"\n백업: {os.path.basename(dst)}")
 
     pcm16 = (np.clip(merged, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
