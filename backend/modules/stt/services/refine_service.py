@@ -26,8 +26,8 @@ from .speaker_id_service import LiveSpeakerIdentifier
 _refine_lock = asyncio.Lock()
 
 MIN_REFINE_AUDIO_SEC = 1.0   # 이보다 짧은 회의는 재분석 의미 없음
-MIN_MAP_SIMILARITY = 0.3     # 등록 이름 매핑 최소 유사도 (미달이면 익명 라벨 유지)
-MAX_EMBED_SEC = 10           # 화자당 임베딩 추출에 쓸 최대 오디오 길이
+# (구 클러스터 단위 매핑에서 쓰던 값 — 턴별 판정으로 바꾸면서 제거.
+#  지금은 config.SPEAKER_MIN_ASSIGN_SIMILARITY 하나로 실시간·재분석이 같은 기준을 쓴다)
 MAX_TURN_GAP_SEC = 1.0       # 같은 화자의 인접 발화를 한 턴으로 합치는 최대 침묵 간격
 # "네", "네?" 같은 짧은 대꾸도 보통 0.3초 미만이라, 길이만으로 필터링하면 호흡/잡음뿐
 # 아니라 실제 짧은 발화까지 통째로 사라짐 — 그래서 길이로 미리 거르지 않고, 아주
@@ -302,11 +302,12 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
         initial_prompt=build_context_hint(enrolled_names, session_id=meta.get("session_id")),
     )
 
-    # 3. 사전 등록 프로필이 있으면 익명 라벨(SPEAKER_00 등) → 실제 이름으로 매핑
+    # 3. 사전 등록 프로필이 있으면 익명 라벨(SPEAKER_00 등) → 실제 이름으로 교체
     if enrolled_count:
         refined_segments = await loop.run_in_executor(
-            None, _map_speaker_names,
-            refined_segments, audio, profiles_path, app_state.speaker_embedding_inference,
+            None, _identify_turn_speakers,
+            refined_segments, audio, sample_rate, profiles_path,
+            app_state.speaker_embedding_inference,
         )
 
     # 실시간 결과는 비교/디버깅용으로 보존하고 segments를 정밀본으로 교체
@@ -321,53 +322,53 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
     return meta
 
 
-def _map_speaker_names(segments: list[dict], audio: np.ndarray, profiles_path: str, inference) -> list[dict]:
+def _identify_turn_speakers(
+    segments: list[dict], audio: np.ndarray, sample_rate: int, profiles_path: str, inference
+) -> list[dict]:
     """
-    화자분리의 익명 라벨을 사전 등록된 실제 이름으로 매핑.
-    각 익명 화자의 발화 구간에서 임베딩을 뽑아 등록 프로필과 코사인 유사도를 재고,
-    유사도 높은 순으로 1:1 매칭 (같은 이름이 두 화자에게 배정되지 않게).
+    화자분리가 만든 익명 라벨을 버리고, **턴마다 목소리를 직접 판정**해 이름을 붙인다.
+
+    왜 클러스터 단위 매핑을 그만뒀나 (2026-08-03 실측):
+      예전에는 익명 화자(SPEAKER_00 등) 하나에 등록 이름 하나를 1:1로 매핑했다.
+      그 방식은 pyannote가 **두 사람을 한 클러스터로 묶으면 그 발언 전부가 한 사람
+      이름을 받는다.** 정답 대본이 있는 5인 모의 회의에서 실제로 그렇게 됐다 —
+      김나연·이승주·이준오의 발언이 문지수로 몰리고, 매핑 실패한 클러스터는
+      SPEAKER_01로 남았다. 같은 회의에서 실시간 경로는 문지수·김나연·가동현을
+      정확히 맞혔다. **더 정확한 결과를 덜 정확한 것으로 덮어쓰고 있었다.**
+
+    지금은 실시간과 같은 방식이다: 턴 오디오로 임베딩을 뽑아 등록 프로필과 비교하고,
+    충분히 닮지 않으면 이름을 붙이지 않는다(speaker=None). 화자분리의 **경계**는
+    그대로 쓴다 — 경계 잡기는 pyannote가 잘하고, 누구인지 판정은 등록 프로필 대조가
+    낫다는 게 실측 결론이다.
+
+    턴이 두 사람에 걸쳐 있으면 임베딩이 섞여 유사도가 낮게 나오고 미상이 된다.
+    틀린 이름이 붙는 것보다 낫다.
     """
     data = np.load(profiles_path)
     profiles = {name: data[name] for name in data.files}
     if not profiles:
         return segments
 
-    identifier = LiveSpeakerIdentifier(inference)  # 임베딩 추출 기능만 재사용
+    # 닫힌 집합으로 만들어 실시간과 동일한 판정 규칙을 태운다
+    # (유사도 하한 미달이면 None — SPEAKER_MIN_ASSIGN_SIMILARITY)
+    identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
 
-    # 익명 화자별로 발화 구간 오디오를 모아 임베딩 추출 (화자당 최대 MAX_EMBED_SEC초)
-    spans_by_speaker: dict[str, list] = {}
+    assigned: dict[str, int] = {}
     for seg in segments:
-        spans_by_speaker.setdefault(seg["speaker"], []).append((seg["start"], seg["end"]))
-
-    candidates = []  # (유사도, 익명라벨, 등록이름)
-    for label, spans in spans_by_speaker.items():
-        clips, total_sec = [], 0.0
-        for start, end in spans:
-            if total_sec >= MAX_EMBED_SEC:
-                break
-            clip = audio[int(start * REALTIME_SAMPLE_RATE): int(end * REALTIME_SAMPLE_RATE)]
-            if len(clip) == 0:
-                continue
-            clips.append(clip)
-            total_sec += end - start
-        if not clips:
+        clip = audio[int(seg["start"] * sample_rate): int(seg["end"] * sample_rate)]
+        if len(clip) < sample_rate:      # 1초 미만은 임베딩이 불안정 — 판정 포기
+            seg["speaker"] = None
             continue
-        embedding = identifier.extract_embedding(np.concatenate(clips))
-        for name, profile in profiles.items():
-            score = LiveSpeakerIdentifier._cosine_similarity(embedding, profile)
-            candidates.append((score, label, name))
+        # 프로필은 갱신하지 않는다 — 재분석은 사후 판정이라 지문을 건드릴 이유가 없고,
+        # 잘못 배정된 턴이 지문을 오염시키면 이후 회의까지 영향을 받는다.
+        name = identifier.identify(clip, update_profile=False)
+        seg["speaker"] = name
+        if name:
+            assigned[name] = assigned.get(name, 0) + 1
 
-    # 유사도 높은 순 1:1 배정
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    mapping: dict[str, str] = {}
-    used_names: set[str] = set()
-    for score, label, name in candidates:
-        if label in mapping or name in used_names or score < MIN_MAP_SIMILARITY:
-            continue
-        mapping[label] = name
-        used_names.add(name)
-        logger.info(f"🔗 화자 매핑: {label} → {name} (유사도 {score:.2f})")
-
-    for seg in segments:
-        seg["speaker"] = mapping.get(seg["speaker"], seg["speaker"])
+    unknown = sum(1 for s in segments if not s.get("speaker"))
+    logger.info(
+        f"🔗 턴별 화자 판정: " + ", ".join(f"{k} {v}개" for k, v in sorted(assigned.items()))
+        + (f", 미상 {unknown}개" if unknown else "")
+    )
     return segments
