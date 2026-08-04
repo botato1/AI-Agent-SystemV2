@@ -12,6 +12,7 @@ from ..core.config import (
     SPEAKER_SIMILARITY_THRESHOLD,
     SPEAKER_MIN_ASSIGN_SIMILARITY,
     SPEAKER_MIN_MARGIN,
+    SPEAKER_ABSOLUTE_FLOOR,
     MAX_SPEAKERS,
 )
 
@@ -141,7 +142,7 @@ class LiveSpeakerIdentifier:
             return None, -1.0
         return ranked[0][1], ranked[0][0]
 
-    def _closed_set_match(self, embedding: np.ndarray) -> tuple[str | None, str | None, float, float]:
+    def match_closed_set(self, embedding: np.ndarray) -> tuple[str | None, str | None, float, float]:
         """
         참석자를 아는 회의의 판정: **절대 점수가 아니라 순위**로 정하고,
         1등과 2등의 차이(margin)로만 걸러낸다.
@@ -176,6 +177,10 @@ class LiveSpeakerIdentifier:
             return matched, best_label, best_score, 0.0
 
         margin = best_score - ranked[1][0]
+        if best_score < SPEAKER_ABSOLUTE_FLOOR:
+            # 명단 밖 목소리 차단 — 1등이라도 이 정도조차 안 닮았으면 참석자가 아니다.
+            # margin은 이걸 못 잡는다(명단 안에서 갈리기만 하면 통과한다).
+            return None, best_label, best_score, margin
         if margin < SPEAKER_MIN_MARGIN:
             return None, best_label, best_score, margin
         return best_label, best_label, best_score, margin
@@ -211,13 +216,15 @@ class LiveSpeakerIdentifier:
 
         if self._closed_set:
             # 참석자를 아는 회의 — 절대 점수가 아니라 순위+margin으로 판정한다.
-            # (근거는 _closed_set_match 참고. 절대 문턱은 정답까지 걷어냈다.)
-            name, nearest, best_score, margin = self._closed_set_match(embedding)
+            # (근거는 match_closed_set 참고. 절대 문턱은 정답까지 걷어냈다.)
+            name, nearest, best_score, margin = self.match_closed_set(embedding)
             if name is None:
-                logger.info(
-                    f"🤷 화자 미상 — 1·2등 차이 {margin:.3f}가 하한({SPEAKER_MIN_MARGIN})에 "
-                    f"못 미침 (최근접: {nearest} {best_score:.2f})"
+                reason = (
+                    f"유사도 {best_score:.2f} < 바닥 {SPEAKER_ABSOLUTE_FLOOR} (명단 밖으로 판단)"
+                    if best_score < SPEAKER_ABSOLUTE_FLOOR
+                    else f"1·2등 차이 {margin:.3f} < 하한 {SPEAKER_MIN_MARGIN}"
                 )
+                logger.info(f"🤷 화자 미상 — {reason} (최근접: {nearest})")
                 return None
             # 프로필 갱신(이동 평균)은 유사도가 충분히 높을 때만 — 겹쳐 말한 구간 등이
             # 잘못 배정됐을 때 엉뚱한 사람의 목소리 지문을 조금씩 오염시키는 걸 방지.

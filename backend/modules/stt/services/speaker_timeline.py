@@ -41,7 +41,6 @@ from ..core.config import (
     REALTIME_SAMPLE_RATE,
     SPEAKER_WINDOW_SEC,
     SPEAKER_WINDOW_HOP_SEC,
-    SPEAKER_MIN_MARGIN,
     SPEAKER_SMOOTH_WIDTH,
 )
 
@@ -134,18 +133,15 @@ def build_speaker_timeline(
         labels, bounds = [], []
         for off in offsets:
             clip = audio[off: min(off + win, span_end)]
-            embedding = identifier.extract_embedding(clip)
-            ranked = identifier.rank_profiles(embedding)
-            top_score, top_name = ranked[0]
-            margin = top_score - (ranked[1][0] if len(ranked) > 1 else top_score)
-
-            if margin < SPEAKER_MIN_MARGIN:
-                # 1등과 2등이 비슷하면 등록된 누구의 목소리도 아닐 가능성이 크다
-                # (잡음, 겹쳐 말한 구간, 화자 전환 경계).
-                labels.append(None)
+            # 판정 규칙은 match_closed_set 한 곳에만 둔다 — 실시간 경로와 재분석이
+            # 다른 기준으로 판정하면, 실시간에서 보이던 이름이 회의록에서 바뀐다.
+            # margin 미달(잡음·겹침·화자 전환 경계)이나 바닥값 미달(명단 밖)이면 None.
+            name, _nearest, _score, _margin = identifier.match_closed_set(
+                identifier.extract_embedding(clip)
+            )
+            labels.append(name)
+            if name is None:
                 dropped += 1
-            else:
-                labels.append(top_name)
 
             # 창은 서로 겹치므로, 각 창의 판정을 '중심 주변 hop 길이'에만 귀속시켜
             # 서로 겹치지 않는 타임라인을 만든다.
@@ -158,6 +154,6 @@ def build_speaker_timeline(
     slots.sort(key=lambda s: s[0])
     timeline = EnrolledSpeakerTimeline(slots)
     logger.info(
-        f"🕐 화자 타임라인: 창 {len(slots)}개 (margin 미달 {dropped}개) — {timeline.summary()}"
+        f"🕐 화자 타임라인: 창 {len(slots)}개 (판정 실패 {dropped}개) — {timeline.summary()}"
     )
     return timeline
