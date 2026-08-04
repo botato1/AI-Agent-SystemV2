@@ -241,6 +241,7 @@ TaskStatus = Literal[
     "in_progress",
     "done",
     "cancelled",
+    "suggested",
 ]
 
 TaskPriority = Literal[
