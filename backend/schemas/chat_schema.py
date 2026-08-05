@@ -311,6 +311,7 @@ class AIMessageSourceSchema(ORMBaseSchema):
 
     source_type: AIMessageSourceType
     file_id: Optional[UUID] = None
+    file_name: Optional[str] = None
 
     chunk_id: Optional[UUID] = None
     code_fact_id: Optional[UUID] = None
