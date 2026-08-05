@@ -50,8 +50,39 @@ def _finalize_recorder(app_state, session_id: str, recorder, status: str) -> Non
         asyncio.create_task(refine_meeting(recorder.meeting_id, app_state))
 
 
+# 끊김 후 남은 오디오를 마저 전사할 때 기다리는 한도. 전사가 밀려 있으면 시간이
+# 걸리지만, 무한정 기다리면 세션이 안 닫힌다.
+_DRAIN_TIMEOUT_SEC = 60
+
+
+async def _drain_worker(audio_q: asyncio.Queue, worker: asyncio.Task, session_id: str) -> bool:
+    """
+    워커에게 종료를 알리고 **큐에 남은 오디오를 다 처리할 때까지** 기다린다.
+
+    왜 필요한가: 수신 루프와 전사는 큐로 분리돼 있어서, 전사가 밀리면 큐에 최대 43초치
+    오디오가 쌓여 있을 수 있다. 그 상태에서 연결이 끊겼다고 바로 종료해버리면
+    **아직 전사 안 된 마지막 발언들이 통째로 버려진다** — 오디오 원본에는 남는데
+    회의록에서만 사라지는 형태로 나타난다.
+
+    성공적으로 비웠으면 True. 이 경우 호출부는 flush_remaining을 또 부르면 안 된다
+    (워커가 이미 했다).
+    """
+    try:
+        await asyncio.wait_for(audio_q.put(None), timeout=5)
+        await asyncio.wait_for(asyncio.shield(worker), timeout=_DRAIN_TIMEOUT_SEC)
+        return True
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        logger.warning(
+            f"⚠️ [{session_id}] 끊김 후 잔여 오디오 처리 시간 초과 — 뒷부분이 회의록에서 빠질 수 있음"
+        )
+    except Exception:
+        logger.exception(f"⚠️ [{session_id}] 끊김 후 잔여 오디오 처리 실패")
+    return False
+
+
 async def _finalize_abnormal(
     session, recorder, app_state, session_id: str, cause: str, participant_key: str,
+    drained: bool = False,
 ) -> None:
     """
     비정상 종료(end 신호 없는 끊김/에러) 공통 처리.
@@ -65,11 +96,14 @@ async def _finalize_abnormal(
     일어날 수도 있음" — 이 경우도 recorder가 아직 active_recorders에 살아있는 것으로
     자연스럽게 처리되므로 별도 방어 로직 불필요.
     """
-    try:
-        # 클라이언트에 보낼 순 없지만, 회의록에는 마지막 발언까지 남긴다
-        await session.flush_remaining()
-    except Exception:
-        logger.exception(f"⚠️ [{session_id}] 종료 시 잔여 버퍼 처리 실패 — 기존 기록까지만 저장됨")
+    if not drained:
+        # 워커가 잔여 오디오를 못 비운 경우에만 여기서 마무리한다.
+        # 비웠다면 워커가 이미 flush까지 했고, 여기서 또 부르면 같은 세션 객체를
+        # 두 코루틴이 동시에 건드리게 된다.
+        try:
+            await session.flush_remaining()
+        except Exception:
+            logger.exception(f"⚠️ [{session_id}] 종료 시 잔여 버퍼 처리 실패 — 기존 기록까지만 저장됨")
 
     async def _delayed_finalize():
         await asyncio.sleep(RECONNECT_GRACE_SEC)
@@ -124,12 +158,23 @@ async def _stt_worker(
         # 받는 쪽이 "남의 발언"임을 구분할 수 있게 표시해서 보낸다
         room.broadcast_json_nowait(participant_key, {**result, "remote": True})
 
+    async def send(payload: dict) -> None:
+        """
+        클라이언트로 보낸다. **실패해도 전사는 계속한다.**
+        연결이 끊긴 뒤에도 큐에 남은 오디오를 마저 처리해야 회의록이 안 잘린다 —
+        보내기가 실패했다고 여기서 멈추면 마지막 발언들이 통째로 사라진다.
+        """
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            pass
+
     while True:
         item = await audio_q.get()
         if item is None:
             result = await session.flush_remaining()
             if result:
-                await websocket.send_json(result)
+                await send(result)
                 share_final(result)
             return
 
@@ -138,12 +183,12 @@ async def _stt_worker(
         # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
         partial = await session.maybe_stream_partial()
         if partial:
-            await websocket.send_json(partial)
+            await send(partial)
 
         if session.should_flush():
             chunk, offset_sec = session.pop_chunk()
             result = await session.process_chunk(chunk, offset_sec)
-            await websocket.send_json(result)
+            await send(result)
             share_final(result)
 
             # 오디오가 인식이 무너질 상태면 알린다. **회의 중에** 알려야 마이크를
@@ -152,7 +197,7 @@ async def _stt_worker(
             #  뜨면 누구 문제인지 헷갈린다.)
             warning = session.pop_audio_quality_warning()
             if warning:
-                await websocket.send_json(warning)
+                await send(warning)
 
 
 async def _run_session(
@@ -195,7 +240,13 @@ async def _run_session(
             message = await websocket.receive()
 
             if message["type"] == "websocket.disconnect":
-                await _finalize_abnormal(session, recorder, websocket.app.state, session_id, "연결 끊김", participant_key)
+                # 큐에 남은 오디오를 **먼저** 마저 전사한다. 이걸 안 하면 전사가 밀린
+                # 만큼(최대 43초치) 마지막 발언이 회의록에서만 사라진다.
+                drained = await _drain_worker(audio_q, worker, session_id)
+                await _finalize_abnormal(
+                    session, recorder, websocket.app.state, session_id, "연결 끊김",
+                    participant_key, drained=drained,
+                )
                 return
 
             if message.get("text") is not None:
