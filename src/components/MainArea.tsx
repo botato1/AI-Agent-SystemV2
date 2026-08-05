@@ -18,12 +18,11 @@ import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRunt
 import { useRoomFiles } from "../hooks/useRoomFiles";
 import { useContradictions } from "../hooks/useContradictions";
 import { RoomFile } from "../services/roomFile";
-import { Contradiction, ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
+import { Contradiction, ContradictionSeverity } from "../services/contradiction";
 import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
 import ContradictionMessage from "./ContradictionMessage";
-import ChangeSummaryModal from "./ChangeSummaryModal";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
 
@@ -255,14 +254,10 @@ function ComposerBar({
 
 function ContradictionPanel({
   contradictions,
-  onResolve,
-  onDismiss,
   onViewReference,
   t,
 }: {
   contradictions: Contradiction[];
-  onResolve: (id: string, resolutionType: ContradictionResolutionType) => void;
-  onDismiss: (id: string) => void;
   onViewReference: (fileId: string, name: string) => void;
   t: any;
 }) {
@@ -339,26 +334,6 @@ function ContradictionPanel({
               >
                 <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity, t)}</div>
                 <ContradictionMessage contradiction={c} expanded={isExpanded} onViewReference={onViewReference} t={t} />
-                <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    onClick={() => onDismiss(c.id)}
-                    className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
-                  >
-                    {t.contradiction_dismiss}
-                  </button>
-                  <button
-                    onClick={() => onResolve(c.id, "keep_reference")}
-                    className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
-                  >
-                    {t.contradiction_keep}
-                  </button>
-                  <button
-                    onClick={() => onResolve(c.id, "change_acknowledged")}
-                    className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
-                  >
-                    {t.contradiction_apply}
-                  </button>
-                </div>
               </div>
             );
           })
@@ -376,8 +351,6 @@ function MessageTab({
   roomFiles,
   onOpenPreview,
   contradictions,
-  onResolveContradiction,
-  onDismissContradiction,
   currentUser,
   memberAvatarById,
   t,
@@ -389,8 +362,6 @@ function MessageTab({
   roomFiles: RoomFile[];
   onOpenPreview: (documentId: string, name: string) => void;
   contradictions: Contradiction[];
-  onResolveContradiction: (id: string, resolutionType: ContradictionResolutionType) => void;
-  onDismissContradiction: (id: string) => void;
   currentUser: MainAreaProps["currentUser"];
   memberAvatarById: Record<string, string | null>;
   t: any;
@@ -586,8 +557,6 @@ function MessageTab({
 
       <ContradictionPanel
         contradictions={contradictions}
-        onResolve={onResolveContradiction}
-        onDismiss={onDismissContradiction}
         onViewReference={onOpenPreview}
         t={t}
       />
@@ -768,15 +737,7 @@ export default function MainArea({
 
   const roomFiles = useRoomFiles(workspaceId, channel.id);
 
-  const {
-    contradictions: workspaceContradictions,
-    resolve: resolveContradiction,
-    dismiss: dismissContradiction,
-    pendingSummaryFor,
-    changeSummary,
-    isChangeSummaryLoading,
-    closeChangeSummary,
-  } = useContradictions(workspaceId);
+  const { contradictions: workspaceContradictions } = useContradictions(workspaceId);
 
   const roomContradictions = workspaceContradictions.filter(
     (c) => c.source_type === "room_message" && c.room_message_id && chatMessages.some((m) => m.id === c.room_message_id)
@@ -884,8 +845,6 @@ export default function MainArea({
           roomFiles={roomFiles.files}
           onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           contradictions={roomContradictions}
-          onResolveContradiction={resolveContradiction}
-          onDismissContradiction={dismissContradiction}
           currentUser={currentUser}
           memberAvatarById={memberAvatarById}
           t={t}
@@ -918,15 +877,6 @@ export default function MainArea({
           documentId={previewDoc.id}
           documentName={previewDoc.name}
           onClose={() => setPreviewDoc(null)}
-        />
-      )}
-
-      {pendingSummaryFor && (
-        <ChangeSummaryModal
-          contradiction={pendingSummaryFor}
-          changeSummary={changeSummary}
-          isLoading={isChangeSummaryLoading}
-          onClose={closeChangeSummary}
           t={t}
         />
       )}
