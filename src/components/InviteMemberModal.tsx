@@ -5,12 +5,14 @@ interface InviteMemberModalProps {
   workspaceId: string;
   workspaceName: string;
   onClose: () => void;
+  onMembersChanged?: () => void;
 }
 
 export default function InviteMemberModal({
   workspaceId,
   workspaceName,
   onClose,
+  onMembersChanged,
 }: InviteMemberModalProps) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "owner">("member");
@@ -37,6 +39,7 @@ export default function InviteMemberModal({
           : `${res.member?.display_name || email} 님을 멤버로 추가했습니다!`
       );
       setEmail("");
+      onMembersChanged?.();
       setTimeout(() => {
         onClose();
       }, 1600);
