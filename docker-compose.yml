@@ -40,6 +40,17 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    # 리랭커(chroma_client._get_reranker)가 devices=["cuda:0"]로 GPU를 고정 지정하는데
+    # 이 컨테이너에 GPU 할당이 없어서 "Found no NVIDIA driver" 로 워밍업이 실패하고 있었음.
+    # rerank_results()가 예외를 잡아 hybrid_score로 폴백하므로 검색이 죽지는 않지만,
+    # 리랭킹이 조용히 비활성화돼 검색 품질이 떨어진 상태로 동작한다.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: always
 
   # PostgreSQL
