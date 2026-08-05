@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 from fastapi import APIRouter, Depends, Query, WebSocket
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -185,11 +186,50 @@ async def _process_segment_analysis(
                 print(f"[meeting_ws_router] decision 모순 알림 전송 실패: {repr(e)}")
 
 
-def _open_recording_file(meeting_id: uuid.UUID, participant_name: str | None = None):
+def _open_recording_file(meeting_id: uuid.UUID, participant_name: str | None = None, offset_ms: int = 0):
     MEETING_RECORDING_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    suffix = f"_{participant_name}" if participant_name else ""
-    path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}{suffix}.pcm"
+    if participant_name:
+        path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}_{participant_name}_{offset_ms}.pcm"
+    else:
+        path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}.pcm"
     return open(path, "ab")
+
+def _merge_individual_recordings(meeting_id: uuid.UUID) -> None:
+    """각자 PC 모드: 참가자별 PCM 파일을 회의 시작 기준 오프셋만큼 무음 패딩 후 파형 합산해서
+    single_device 모드와 동일한 {meeting_id}.pcm 하나로 만든다. 겹치는 구간은 클리핑 처리."""
+    participant_files = sorted(MEETING_RECORDING_STORAGE_DIR.glob(f"{meeting_id}_*_*.pcm"))
+    if not participant_files:
+        return
+
+    SAMPLE_RATE = 16000
+    streams: list[tuple[int, np.ndarray]] = []
+    max_len = 0
+
+    for path in participant_files:
+        try:
+            offset_ms = int(path.stem.rsplit("_", 1)[-1])
+        except ValueError:
+            offset_ms = 0
+        offset_samples = int(offset_ms * SAMPLE_RATE / 1000)
+
+        raw = path.read_bytes()
+        raw = raw[: len(raw) - (len(raw) % 2)]  # 홀수 바이트 꼬리 제거
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.int32)
+
+        streams.append((offset_samples, samples))
+        max_len = max(max_len, offset_samples + len(samples))
+
+    if max_len == 0:
+        return
+
+    mixed = np.zeros(max_len, dtype=np.int32)
+    for offset_samples, samples in streams:
+        mixed[offset_samples: offset_samples + len(samples)] += samples
+
+    mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
+
+    output_path = MEETING_RECORDING_STORAGE_DIR / f"{meeting_id}.pcm"
+    output_path.write_bytes(mixed.tobytes())
 
 def _extract_stt_confidence(seg: dict) -> float | None:
     avg_logprob = seg.get("avg_logprob")
@@ -216,6 +256,9 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     meeting = meeting_crud.get_meeting(db, meeting_id)
     if not meeting or meeting.status not in ("recording", "paused"):
         return
+
+    if meeting.recording_mode == "individual":
+        _merge_individual_recordings(meeting_id)
 
     ended_at = datetime.now(timezone.utc)
     duration_ms = (
@@ -402,7 +445,10 @@ async def meeting_stream_ws(
         await websocket.close(code=1011)
         return
 
-    recording_file = _open_recording_file(meeting_id, participant_name)
+    offset_ms = 0
+    if participant_name and meeting.started_at:
+        offset_ms = max(0, int((datetime.now(timezone.utc) - meeting.started_at).total_seconds() * 1000))
+    recording_file = _open_recording_file(meeting_id, participant_name, offset_ms)
 
     _register_connection(meeting_id)
     paused_event = _PAUSED_STREAMS.get(meeting_id)
