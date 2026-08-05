@@ -169,8 +169,24 @@ def main():
     print("-" * 100)
     print(f"화자 정확도: {correct}/{judged} ({correct / max(judged,1) * 100:.0f}%)"
           f"  — 오배정 {wrong}, 미상 {missed}")
-    print(f"CER        : {total_err / max(total_ref,1) * 100:.2f}%  "
-          f"({total_err}자 오류 / 정답 {total_ref}자)")
+
+    # CER은 **전체를 이어붙여서** 잰다.
+    #
+    # 줄마다 따로 재면 정렬 오차가 두 번 벌을 준다: 대본 두 줄이 한 세그먼트로 합쳐지면
+    # 뒷줄은 "전사 없음"(전부 삭제 오류)이 되고, 앞줄은 남의 문장까지 떠안아(삽입 오류)
+    # 같은 글자가 두 번 오류로 세어진다. 실측에서 이 때문에 24%로 나온 것이 실제로는
+    # 13~15% 수준이었다.
+    #
+    # 화자 정확도는 줄 단위로 봐야 하지만(누구 발언인지가 줄마다 다르므로),
+    # CER은 "전사가 얼마나 정확한가"라서 경계를 어떻게 나눴든 무관하다.
+    whole_err, whole_ref = cer(
+        " ".join(line["text"] for line in script),
+        " ".join(seg["text"] for seg in segments),
+    )
+    print(f"CER        : {whole_err / max(whole_ref,1) * 100:.2f}%  "
+          f"({whole_err}자 오류 / 정답 {whole_ref}자)  ← 전체 이어붙여 측정")
+    print(f"  (참고) 줄 단위 합산: {total_err / max(total_ref,1) * 100:.2f}% — "
+          f"정렬 오차가 섞여 실제보다 높게 나온다")
 
     if overlap_lines:
         print(f"\n겹침 줄 {len(overlap_lines)}개 (화자 정확도에서 제외)")
