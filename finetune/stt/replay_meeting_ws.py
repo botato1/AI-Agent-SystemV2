@@ -80,6 +80,10 @@ async def main():
     parser.add_argument("--participant-name", default=None, help="각자 PC 모드로 접속")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="1.0=실제 속도. 높이면 서버가 못 따라가 프레임을 버릴 수 있음")
+    parser.add_argument("--no-end", action="store_true",
+                        help="'end'를 보내지 않고 소켓을 그냥 닫는다 — 프론트가 종료 버튼에서 "
+                             "소켓만 닫는 상황을 재현한다. 이때 전사가 밀려 있으면 뒷부분이 "
+                             "유실되는지 확인하는 용도(실측된 실패 모드)")
     args = parser.parse_args()
 
     try:
@@ -149,11 +153,16 @@ async def main():
             if args.speed > 0:
                 await asyncio.sleep(_FRAME_SEC / args.speed)
 
-        await ws.send("end")
-        try:
-            await asyncio.wait_for(receiver, timeout=180)
-        except asyncio.TimeoutError:
-            print("⚠️ session_end를 기다리다 시간 초과")
+        if args.no_end:
+            # 종료 신호 없이 그냥 끊는다. 서버가 큐에 남은 오디오를 마저 처리하는지 본다.
+            print("\n⚡ 'end' 없이 소켓을 닫는다 (프론트가 그냥 닫는 상황 재현)")
+            receiver.cancel()
+        else:
+            await ws.send("end")
+            try:
+                await asyncio.wait_for(receiver, timeout=180)
+            except asyncio.TimeoutError:
+                print("⚠️ session_end를 기다리다 시간 초과")
 
     speakers = {s.get("speaker") for m in finals for s in m["final"]["segments"]}
     print(f"\n{'=' * 56}")
