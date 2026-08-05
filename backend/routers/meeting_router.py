@@ -51,6 +51,8 @@ from backend.schemas.meeting_schema import (
     MeetingJoinResponse,
     MeetingSegmentUpdateRequest,
     MeetingSummaryUpdateRequest,
+    MeetingSegmentSplitRequest,
+    MeetingSegmentSplitResponse,
 )
 
 
@@ -656,6 +658,43 @@ def update_meeting_segment_api(
     )    
     return MeetingSegmentResponse.model_validate(updated)
 
+# 발화 세그먼트 분할 (한 세그먼트에 두 사람 발언이 섞였을 때)
+@router.post("/{meeting_id}/segments/{segment_id}/split", response_model=MeetingSegmentSplitResponse)
+def split_meeting_segment_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    request: MeetingSegmentSplitRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    segment = meeting_crud.get_segment(db, segment_id)
+    if not segment or segment.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="발화 세그먼트를 찾을 수 없습니다.",
+        )
+    if segment.end_ms - segment.start_ms < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="구간이 너무 짧아 분할할 수 없습니다.",
+        )
+
+    result = meeting_crud.split_segment(
+        db, segment_id,
+        first_content=request.first_content,
+        second_content=request.second_content,
+        first_speaker_label=request.first_speaker_label,
+        second_speaker_label=request.second_speaker_label,
+    )
+    first, second = result
+    return MeetingSegmentSplitResponse(
+        first=MeetingSegmentResponse.model_validate(first),
+        second=MeetingSegmentResponse.model_validate(second),
+    )
 
 # 회의 요약 조회
 @router.get("/{meeting_id}/summary", response_model=MeetingSummaryResponse)

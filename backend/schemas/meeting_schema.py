@@ -460,3 +460,14 @@ class MeetingSegmentUpdateRequest(BaseModel):
 class MeetingSummaryUpdateRequest(BaseModel):
     short_summary: Optional[str] = None
     full_summary: Optional[str] = None
+
+class MeetingSegmentSplitRequest(BaseModel):
+    first_content: str = Field(..., min_length=1)
+    first_speaker_label: Optional[str] = Field(default=None, min_length=1)
+    second_content: str = Field(..., min_length=1)
+    second_speaker_label: Optional[str] = Field(default=None, min_length=1)
+
+
+class MeetingSegmentSplitResponse(BaseModel):
+    first: MeetingSegmentResponse
+    second: MeetingSegmentResponse
