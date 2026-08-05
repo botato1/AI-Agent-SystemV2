@@ -8,7 +8,6 @@
 
 import json
 import math
-import os
 import uuid
 
 import httpx
@@ -19,10 +18,17 @@ from backend.graphs.states.contradiction_state import (
     ContradictionState,
     DetectedContradiction,
 )
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_LIGHT, _call_ollama
 from backend.modules.rag.chroma_client import DOCUMENT_COLLECTION, search_hybrid
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+# [수정] 자체 OLLAMA_BASE_URL/OLLAMA_MODEL 선언과 httpx 직접 호출을 걷어내고
+# 공용 ollama_client를 쓴다 (승주 리뷰 반영, ai_chat_answer.py와 동일한 정리).
+# - 독자 선언한 OLLAMA_MODEL 환경변수가 공용 OLLAMA_MODEL_LIGHT/HEAVY와 어긋날 수 있었음
+# - _call_ollama()를 거치면 다른 노드와 동일하게 중국어 감지 자동 재시도가 적용된다
+#   (기존엔 httpx.post 직접 호출이라 이 안전장치가 빠져있었음)
+# format:json은 응답을 JSON으로 파싱하는 이 노드에 필요한 보장이라, 공용 함수에
+# response_format 인자를 추가해서 그대로 유지한다.
+CONTRADICTION_JUDGE_MODEL = OLLAMA_MODEL_LIGHT
 
 TOP_K_CANDIDATES = 5
 # 이 미만이면 LLM이 "모순"이라고 답해도 저장/알림 대상에서 완전히 제외한다.
@@ -68,18 +74,12 @@ def _judge_contradiction(statement: str, reference: str) -> dict:
     prompt = _JUDGE_PROMPT.format(statement=statement, reference=reference)
 
     try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-            },
+        raw_text = _call_ollama(
+            prompt,
             timeout=60.0,
-        )
-        response.raise_for_status()
-        raw_text = response.json().get("response", "").strip()
+            model=CONTRADICTION_JUDGE_MODEL,
+            response_format="json",
+        ).strip()
         parsed = json.loads(raw_text)
 
         if not isinstance(parsed, dict):
