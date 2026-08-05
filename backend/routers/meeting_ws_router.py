@@ -269,6 +269,12 @@ async def _relay_stt_to_frontend(
     speaker_name_to_user_id: dict[str, uuid.UUID],
 ) -> None:
     async for data in stt_client.receive():
+        if isinstance(data, (bytes, bytearray)):
+            # 통화(voice) 음성 프레임 - 그대로 프론트로 중계 ([1바이트 발신자 슬롯][PCM16LE])
+            async with send_lock:
+                await websocket.send_bytes(data)
+            continue
+
         msg_type = data.get("type")
 
         if msg_type == "partial":
@@ -284,7 +290,8 @@ async def _relay_stt_to_frontend(
                 seg["speaker_user_id"] = str(speaker_user_id) if speaker_user_id else None
 
                 if is_remote:
-                    continue  # 화면 표시는 하되, 저장·모순감지·판단 파이프라인은 스킵
+                    continue  # 다른 참가자 연결에서 이미 저장·분석됨 - 화면 표시만 하고 저장은 스킵
+
                 try:
                     segment_row = meeting_crud.add_segment_safe(
                         db,
@@ -317,6 +324,11 @@ async def _relay_stt_to_frontend(
                 await websocket.send_json(data)
             return
 
+        else:
+            # voice_ready 등 새로운/알 수 없는 메시지 타입도 일단 그대로 프론트에 전달
+            async with send_lock:
+                await websocket.send_json(data)
+
 
 @router.websocket("/api/workspaces/{workspace_id}/meetings/{meeting_id}/stream")
 async def meeting_stream_ws(
@@ -324,6 +336,7 @@ async def meeting_stream_ws(
     workspace_id: uuid.UUID,
     meeting_id: uuid.UUID,
     ticket: str = Query(...),
+    voice: int = Query(0),
     db: Session = Depends(get_db),
 ):
     try:
@@ -381,6 +394,7 @@ async def meeting_stream_ws(
 
     stt_client = SttStreamClient(
         session_id=str(meeting_id), participant_name=participant_name, attendees=attendee_names,
+        voice=bool(voice) and meeting.recording_mode == "individual",
     )
     try:
         await stt_client.connect()
