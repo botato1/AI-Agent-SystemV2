@@ -304,6 +304,18 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
             await stt_client.send_end()
 
 _MEETING_SPEAKER_MAPS: dict[uuid.UUID, dict[str, uuid.UUID]] = {}
+_VIEWER_CONNECTIONS: dict[uuid.UUID, list[WebSocket]] = {}
+
+async def _broadcast_to_viewers(meeting_id: uuid.UUID, data: dict) -> None:
+    viewers = _VIEWER_CONNECTIONS.get(meeting_id)
+    if not viewers:
+        return
+    for viewer_ws in list(viewers):
+        try:
+            await viewer_ws.send_json(data)
+        except Exception:
+            pass  # 끊긴 뷰어는 자기 쪽에서 정리됨
+
 
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
@@ -323,6 +335,7 @@ async def _relay_stt_to_frontend(
         if msg_type == "partial":
             async with send_lock:
                 await websocket.send_json(data)
+            await _broadcast_to_viewers(meeting_id, data)
 
         elif msg_type == "final":
             is_remote = bool(data.get("remote"))
@@ -361,16 +374,19 @@ async def _relay_stt_to_frontend(
                     ))
             async with send_lock:
                 await websocket.send_json(data)
+            await _broadcast_to_viewers(meeting_id, data)
 
         elif msg_type == "session_end":
             async with send_lock:
                 await websocket.send_json(data)
+            await _broadcast_to_viewers(meeting_id, data)
             return
 
         else:
             # voice_ready 등 새로운/알 수 없는 메시지 타입도 일단 그대로 프론트에 전달
             async with send_lock:
                 await websocket.send_json(data)
+            await _broadcast_to_viewers(meeting_id, data)
 
 
 @router.websocket("/api/workspaces/{workspace_id}/meetings/{meeting_id}/stream")
@@ -405,6 +421,25 @@ async def meeting_stream_ws(
         return
 
     await websocket.accept()
+
+    if payload.get("view_only"):
+        _VIEWER_CONNECTIONS.setdefault(meeting_id, []).append(websocket)
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+        finally:
+            viewers = _VIEWER_CONNECTIONS.get(meeting_id)
+            if viewers and websocket in viewers:
+                viewers.remove(websocket)
+                if not viewers:
+                    _VIEWER_CONNECTIONS.pop(meeting_id, None)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+        return
 
     participant_name = None
     attendee_names: list[str] | None = None
