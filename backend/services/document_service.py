@@ -21,7 +21,7 @@ DOCUMENT_PROCESS_URL = "http://61.81.98.86:8003/api/document"
 DOCUMENT_PROCESS_BASE_URL = DOCUMENT_PROCESS_URL.rsplit("/api/document", 1)[0]
 
 
-ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".png", ".jpg", ".jpeg"}
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".png", ".jpg", ".jpeg", ".docx", ".txt"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
 LOCAL_STORAGE_DIR = Path("storage/uploads/files")
