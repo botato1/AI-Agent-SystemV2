@@ -260,6 +260,7 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
         if text == "end":
             await stt_client.send_end()
 
+_MEETING_SPEAKER_MAPS: dict[uuid.UUID, dict[str, uuid.UUID]] = {}
 
 async def _relay_stt_to_frontend(
     websocket: WebSocket, stt_client: SttStreamClient, db: Session,
@@ -279,12 +280,11 @@ async def _relay_stt_to_frontend(
             for seg in data.get("final", {}).get("segments", []):
                 resolved_speaker = _resolve_speaker_label(db, meeting_id, seg.get("speaker"))
                 seg["speaker"] = resolved_speaker
-
-                if is_remote:
-                    continue  # 다른 참가자 연결에서 이미 저장·분석됨 — 화면 표시만 하고 저장은 스킵
-
                 speaker_user_id = speaker_name_to_user_id.get(resolved_speaker) if resolved_speaker else None
                 seg["speaker_user_id"] = str(speaker_user_id) if speaker_user_id else None
+
+                if is_remote:
+                    continue  # 화면 표시는 하되, 저장·모순감지·판단 파이프라인은 스킵
                 try:
                     segment_row = meeting_crud.add_segment_safe(
                         db,
@@ -356,6 +356,7 @@ async def meeting_stream_ws(
     if meeting.recording_mode == "individual":
         user = auth_crud.get_user_by_id(db, uuid.UUID(payload["sub"]))
         participant_name = user.display_name if user else payload["sub"]
+        speaker_name_to_user_id = _MEETING_SPEAKER_MAPS.setdefault(meeting_id, {})
         if user and participant_name:
             speaker_name_to_user_id[participant_name] = user.id
     else:
@@ -423,6 +424,7 @@ async def meeting_stream_ws(
         is_last = _unregister_connection(meeting_id)
         if is_last:
             _PAUSED_STREAMS.pop(meeting_id, None)
+            _MEETING_SPEAKER_MAPS.pop(meeting_id, None)
         recording_file.close()
         await stt_client.close()
         if is_last:
