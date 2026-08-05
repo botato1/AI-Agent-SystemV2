@@ -249,6 +249,26 @@ REALTIME_SPEAKER_SCAN_MIN_SEC = float(os.getenv("REALTIME_SPEAKER_SCAN_MIN_SEC",
 REALTIME_SPEAKER_SCAN_HOP_SEC = float(os.getenv("REALTIME_SPEAKER_SCAN_HOP_SEC", "0.75"))
 
 # ──────────────────────────────────────────
+# 회의 중 오디오 품질 경고 (services/audio_quality.py)
+# ──────────────────────────────────────────
+# 2026-08-05: 대본까지 준비한 5인 모의 회의가 CER 31.8%로 나왔다(평소 6% 수준).
+# 원인은 배경 소음이었고 — SNR이 잘 나온 회의의 18.9dB에서 8.8dB로 떨어져 있었다 —
+# **회의가 끝난 뒤에야 알았다.** 마이크를 옮기거나 창문을 닫는 건 회의 초반에
+# 알려주면 할 수 있는 일이다. 그래서 사후 보고가 아니라 초반 경고를 목표로 한다.
+#
+# ⚠️ 문턱은 좋은 회의 1건·나쁜 회의 1건, **표본 두 개로 정한 잠정값**이다.
+#    오경보가 잦으면 사람들이 경고를 무시하게 되므로 확실히 나쁠 때만 뜨도록
+#    보수적으로 잡았다(실측 8.8dB는 잡고 18.9dB는 안 잡는 선에서 아래쪽에 가깝게).
+#    표본이 쌓이면 조정할 것.
+AUDIO_WARN_MIN_SPEECH_SEC = float(os.getenv("AUDIO_WARN_MIN_SPEECH_SEC", "15"))
+AUDIO_WARN_SNR_DB = float(os.getenv("AUDIO_WARN_SNR_DB", "12"))
+AUDIO_WARN_SPEECH_RMS = float(os.getenv("AUDIO_WARN_SPEECH_RMS", "0.02"))
+AUDIO_WARN_CLIP_RATIO = float(os.getenv("AUDIO_WARN_CLIP_RATIO", "0.001"))
+# 소리가 아예 안 들어오는 건 판단에 오래 걸릴 이유가 없다 — 마이크 미선택/음소거는
+# 빨리 알려줄수록 좋다.
+AUDIO_WARN_NO_SPEECH_SEC = float(os.getenv("AUDIO_WARN_NO_SPEECH_SEC", "30"))
+
+# ──────────────────────────────────────────
 # 인식 힌트(initial_prompt) 설정
 # ──────────────────────────────────────────
 # 2026-07-15에 hotwords를 제거하고 파인튜닝으로 방향을 틀었으나("임의로 고른 단어 목록이라

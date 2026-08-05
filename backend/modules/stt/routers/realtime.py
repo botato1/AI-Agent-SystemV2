@@ -146,6 +146,14 @@ async def _stt_worker(
             await websocket.send_json(result)
             share_final(result)
 
+            # 오디오가 인식이 무너질 상태면 알린다. **회의 중에** 알려야 마이크를
+            # 옮기거나 소음원을 줄일 수 있다 — 끝난 뒤 알려주면 녹음을 다시 해야 한다.
+            # (중계하지 않는다. 각자 자기 마이크 상태만 알면 되고, 남의 경고까지
+            #  뜨면 누구 문제인지 헷갈린다.)
+            warning = session.pop_audio_quality_warning()
+            if warning:
+                await websocket.send_json(warning)
+
 
 async def _run_session(
     websocket: WebSocket, session, recorder, session_id: str,

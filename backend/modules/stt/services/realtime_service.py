@@ -30,6 +30,7 @@ from ..core.config import (
     REALTIME_FINAL_USES_FAST_MODEL,
     is_confident,
 )
+from .audio_quality import AudioQualityMonitor
 from .speaker_timeline import find_speaker_runs
 
 
@@ -111,6 +112,8 @@ class RealtimeSTTSession:
         self._total_samples = 0
         self._elapsed_sec = 0.0
         self._last_flush_check = 0.0
+        # 회의 중 오디오 상태 감시 — 인식이 무너질 조건이면 초반에 알린다
+        self.audio_quality = AudioQualityMonitor()
 
         # Local Agreement 스트리밍 상태 (청크가 끝나기 전에도 실시간으로 텍스트를 흘려보내기 위함)
         self._last_partial_at = 0.0
@@ -426,6 +429,7 @@ class RealtimeSTTSession:
         """
         loop = asyncio.get_event_loop()
         started = time.monotonic()
+        self._observe_audio_quality(audio)
         # 참가자 본인 스트림 기준 offset_sec에 회의 합류 시점을 더해 "회의 전체 기준
         # 절대 시각"으로 변환 (각자 PC 모드가 아니면 base_offset_sec=0이라 그대로임)
         offset_sec = offset_sec + self.base_offset_sec
@@ -477,6 +481,29 @@ class RealtimeSTTSession:
             "latency_sec": latency_sec,
             "final": {"segments": precise_segments},
         }
+
+    def _observe_audio_quality(self, audio: np.ndarray) -> None:
+        """청크의 발화/배경을 갈라 감시기에 넘긴다. 판단은 감시기가 한다."""
+        try:
+            spans = get_speech_timestamps(
+                audio, VadOptions(min_silence_duration_ms=REALTIME_SILENCE_MS),
+                sampling_rate=REALTIME_SAMPLE_RATE,
+            )
+            mask = np.zeros(len(audio), dtype=bool)
+            for span in spans:
+                mask[span["start"]:span["end"]] = True
+            self.audio_quality.observe(audio, mask)
+        except Exception:
+            # 품질 감시가 전사를 막으면 본말이 전도된다 — 실패해도 조용히 넘어간다
+            logger.exception("⚠️ 오디오 품질 관찰 실패 — 전사는 계속 진행")
+
+    def pop_audio_quality_warning(self) -> dict | None:
+        """낼 경고가 있으면 한 번만 준다. 호출부가 클라이언트로 보낸다."""
+        try:
+            return self.audio_quality.check()
+        except Exception:
+            logger.exception("⚠️ 오디오 품질 판정 실패 — 경고 생략")
+            return None
 
     def rename_speaker(self, old_name: str, new_name: str) -> bool:
         """
