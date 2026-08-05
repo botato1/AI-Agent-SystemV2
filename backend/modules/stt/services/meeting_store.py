@@ -94,13 +94,22 @@ class MeetingRecord:
         # 기준으로 잡아야 함 — 끊긴 동안의 공백 시간은 오디오 자체엔 없기 때문
         # (믹싱 모드는 반대로 벽시계 기준이 맞음 — 여러 스트림을 실제 시각에 맞춰 합산하므로).
         self._written_audio_sec = 0.0
+        # 받은 오디오 총량(믹싱/스트리밍 모드 공통). 전사가 하나도 없어도
+        # 오디오가 있으면 재분석이 복구할 수 있으므로 그 판단에 쓴다.
+        self._received_audio_sec = 0.0
         self._save_json()
         logger.info(f"💾 회의 기록 시작: {self.meeting_id} (믹싱 모드={mixed_audio})")
 
     @property
     def has_content(self) -> bool:
-        """발화가 하나라도 기록됐는지 — 빈 세션엔 재분석을 걸지 않기 위한 판단용."""
-        return len(self._meta["segments"]) > 0
+        """
+        재분석을 걸 만한 내용이 있는지 — 빈 세션에 무거운 작업을 돌리지 않기 위한 판단.
+
+        **오디오만 있어도 참이다.** 전사가 하나도 없는 회의야말로 재분석이 필요하다 —
+        실시간이 소음·과부하로 전부 실패했더라도 저장된 원본으로 다시 뽑아낼 수 있다.
+        세그먼트만 보던 예전 기준은 그런 회의를 조용히 포기했다.
+        """
+        return len(self._meta["segments"]) > 0 or self._received_audio_sec > 0
 
     @property
     def finalized(self) -> bool:
@@ -123,12 +132,23 @@ class MeetingRecord:
             return
         np.savez(os.path.join(self.dir, "profiles.npz"), **profiles)
 
-    def add_chunk(
-        self, audio: np.ndarray, segments: list[dict],
+    def add_audio(
+        self, audio: np.ndarray,
         absolute_offset_sec: float | None = None, speaker: str | None = None,
     ) -> None:
         """
-        확정된 청크 하나의 오디오와 세그먼트들을 저장. (블로킹 I/O — executor에서 호출할 것)
+        **오디오만** 저장한다. 전사와 무관하게, 들어오는 즉시 부르는 용도.
+        (블로킹 I/O — executor에서 호출할 것)
+
+        왜 전사와 분리했나 (2026-08-05 실측):
+          예전에는 확정된 청크의 오디오와 세그먼트를 함께 저장했다. 그래서 **전사되지
+          않은 오디오는 파일에도 남지 않았다** — 전사가 밀리거나 연결이 끊겨 큐에 남은
+          오디오가 버려지면, 그 부분은 재분석으로도 복구할 수 없이 영구 유실됐다.
+          실측: UI가 보여준 원본은 2분 59초인데 우리 audio.wav는 2분 46초였다(13초 유실).
+
+          원본은 **무슨 일이 있어도 지켜야 한다.** 전사는 나중에 다시 할 수 있지만
+          사라진 소리는 되돌릴 수 없다.
+
         absolute_offset_sec: 믹싱 모드에서 이 오디오를 회의 시작 기준 몇 초 지점에
         합산할지. 겹치는 구간은 파형을 더해서(mix) 동시 발화도 반영됨.
         speaker: 믹싱 모드에서 이 오디오가 누구 것인지. 주면 참가자별 트랙에도 따로 쌓는다
@@ -136,6 +156,7 @@ class MeetingRecord:
         """
         if self._finalized:
             return
+        self._received_audio_sec += len(audio) / REALTIME_SAMPLE_RATE
         if self._mix_buffer is not None:
             start_sample = int((absolute_offset_sec or 0.0) * REALTIME_SAMPLE_RATE)
             end_sample = start_sample + len(audio)
@@ -155,6 +176,14 @@ class MeetingRecord:
             pcm16 = np.clip(audio * 32768.0, -32768, 32767).astype(np.int16)
             self._wav.writeframes(pcm16.tobytes())
             self._written_audio_sec += len(audio) / REALTIME_SAMPLE_RATE
+
+    def add_segments(self, segments: list[dict]) -> None:
+        """
+        전사 결과만 저장한다. 오디오는 add_audio가 이미 기록했다.
+        (블로킹 I/O — executor에서 호출할 것)
+        """
+        if self._finalized:
+            return
         self._meta["segments"].extend(segments)
         self._meta["segments"].sort(key=lambda s: s.get("start", 0))
         self._chunks_since_json_save += 1
@@ -214,11 +243,22 @@ class MeetingRecord:
             if self._tracks:
                 logger.info(f"💾 참가자별 트랙 {len(self._meta['speaker_tracks'])}개 저장: {self.meeting_id}")
 
-        if not self._meta["segments"]:
-            # 접속만 하고 발화 없이 끝난 세션 — 빈 회의 폴더가 계속 쌓이지 않게 정리
+        if not self.has_content:
+            # 접속만 하고 소리 한 번 안 들어온 세션 — 빈 회의 폴더가 쌓이지 않게 정리.
+            #
+            # ⚠️ 예전에는 **세그먼트가 없으면** 지웠다. 그래서 소음·과부하로 전사가
+            #    전부 실패한 회의는 **오디오까지 통째로 버려졌다** — 재분석으로 복구할
+            #    수 있는 상황인데 원본을 없애버린 것이다.
+            #    지금은 오디오가 조금이라도 있으면 남긴다.
             shutil.rmtree(self.dir, ignore_errors=True)
-            logger.info(f"🧹 발화 없는 회의 기록 폐기: {self.meeting_id}")
+            logger.info(f"🧹 소리가 없는 회의 기록 폐기: {self.meeting_id}")
             return
+
+        if not self._meta["segments"]:
+            logger.warning(
+                f"⚠️ 전사 결과가 하나도 없는 회의: {self.meeting_id} "
+                f"(오디오 {self._received_audio_sec:.0f}초는 저장됨 — 재분석으로 복구 시도)"
+            )
 
         self._meta["status"] = status
         self._meta["ended_at"] = datetime.now(timezone.utc).isoformat()

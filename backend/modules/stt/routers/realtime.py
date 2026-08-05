@@ -178,7 +178,10 @@ async def _stt_worker(
                 share_final(result)
             return
 
-        session.push_audio(item)
+        samples = session.push_audio(item)
+        # 원본은 전사와 무관하게 즉시 남긴다 — 전사가 밀리거나 끊겨도 소리는 지킨다
+        # (전사는 나중에 다시 할 수 있지만 사라진 소리는 되돌릴 수 없다)
+        await session.record_incoming(samples)
 
         # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
         partial = await session.maybe_stream_partial()

@@ -119,11 +119,36 @@ class RealtimeSTTSession:
         self._last_partial_at = 0.0
         self._prev_partial_words: list[str] = []
 
-    def push_audio(self, pcm16_bytes: bytes) -> None:
-        """프론트에서 받은 PCM16LE(16kHz, mono) 오디오 바이트를 버퍼에 누적."""
+    def push_audio(self, pcm16_bytes: bytes) -> np.ndarray:
+        """
+        프론트에서 받은 PCM16LE(16kHz, mono) 오디오 바이트를 버퍼에 누적.
+        누적한 샘플을 돌려준다 — 호출부가 이걸 원본 저장에도 쓴다(record_incoming).
+        """
         samples = np.frombuffer(pcm16_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         self._pending.append(samples)
         self._total_samples += len(samples)
+        return samples
+
+    async def record_incoming(self, samples: np.ndarray) -> None:
+        """
+        받은 오디오를 **전사와 무관하게 즉시** 원본 파일에 남긴다.
+
+        왜 전사와 분리했나 (2026-08-05 실측): 예전에는 확정된 청크의 오디오와 세그먼트를
+        함께 저장해서, **전사되지 않은 오디오는 파일에도 남지 않았다.** 전사가 밀리거나
+        연결이 끊겨 처리 못 한 오디오는 재분석으로도 복구할 수 없이 영구 유실됐다
+        (UI 원본 2분 59초 vs 우리 audio.wav 2분 46초 — 13초 유실).
+
+        **전사는 나중에 다시 할 수 있지만 사라진 소리는 되돌릴 수 없다.**
+        """
+        if self.recorder is None or not len(samples):
+            return
+        # 이 프레임이 회의 시작 기준 몇 초 지점인지 — 누적 직후이므로 방금 더한 만큼 뺀다
+        offset_sec = self.base_offset_sec + (self._total_samples - len(samples)) / REALTIME_SAMPLE_RATE
+        loop = asyncio.get_event_loop()
+        # NAS 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로
+        await loop.run_in_executor(
+            None, self.recorder.add_audio, samples, offset_sec, self.fixed_speaker,
+        )
 
     def _materialize_buffer(self) -> np.ndarray:
         """조각 리스트를 하나의 배열로 합침. 합친 결과를 캐시해 반복 호출 비용을 줄임."""
@@ -465,7 +490,7 @@ class RealtimeSTTSession:
             # speaker를 함께 넘겨 각자 PC 모드에서 참가자별 트랙을 따로 남기게 한다
             # (믹스본은 목소리가 겹쳐 있어 회의 후 재전사에 쓸 수 없음).
             await loop.run_in_executor(
-                None, self.recorder.add_chunk, audio, precise_segments, offset_sec, speaker_label
+                None, self.recorder.add_segments, precise_segments
             )
 
         logger.info(
