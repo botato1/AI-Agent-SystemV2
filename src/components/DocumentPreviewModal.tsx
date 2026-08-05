@@ -9,6 +9,7 @@ interface DocumentPreviewModalProps {
   documentId: string;
   documentName: string;
   onClose: () => void;
+  t: any;
 }
 
 type DetailTab = "summary" | "original";
@@ -24,6 +25,7 @@ export default function DocumentPreviewModal({
   documentId,
   documentName,
   onClose,
+  t,
 }: DocumentPreviewModalProps) {
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [figures, setFigures] = useState<DocumentFigure[]>([]);
@@ -82,19 +84,19 @@ export default function DocumentPreviewModal({
                   {!!detail.analysis.page_count && (
                     <>
                       <span className="opacity-50">·</span>
-                      <span>{detail.analysis.page_count}페이지</span>
+                      <span>{t.doc_preview_page_count(detail.analysis.page_count)}</span>
                     </>
                   )}
                   {!!detail.analysis.table_count && (
                     <>
                       <span className="opacity-50">·</span>
-                      <span>표 {detail.analysis.table_count}개</span>
+                      <span>{t.doc_preview_table_count(detail.analysis.table_count)}</span>
                     </>
                   )}
                   {!!detail.analysis.graph_count && (
                     <>
                       <span className="opacity-50">·</span>
-                      <span>차트/그래프 {detail.analysis.graph_count}개</span>
+                      <span>{t.doc_preview_graph_count(detail.analysis.graph_count)}</span>
                     </>
                   )}
                 </div>
@@ -110,8 +112,8 @@ export default function DocumentPreviewModal({
           <div className="flex gap-0.5 border-b border-recall-border px-6">
             {(
               [
-                { key: "summary", label: "요약" },
-                { key: "original", label: "원문" },
+                { key: "summary", label: t.doc_tab_summary },
+                { key: "original", label: t.doc_tab_original },
               ] as { key: DetailTab; label: string }[]
             ).map((tab) => (
               <button
@@ -131,21 +133,21 @@ export default function DocumentPreviewModal({
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {isLoading ? (
-            <p className="text-base text-recall-textMuted">불러오는 중...</p>
+            <p className="text-base text-recall-textMuted">{t.common_loading}</p>
           ) : !detail ? (
-            <p className="text-base text-recall-danger">문서를 불러오지 못했습니다.</p>
+            <p className="text-base text-recall-danger">{t.doc_preview_load_failed}</p>
           ) : detail.analysis_status !== "completed" ? (
             <p className="text-base text-recall-textMuted">
-              {detail.analysis_status === "failed" ? "문서 분석에 실패했습니다." : "아직 분석이 완료되지 않았습니다."}
+              {detail.analysis_status === "failed" ? t.doc_analysis_failed_msg : t.doc_preview_not_analyzed}
             </p>
           ) : !hasSummary && !hasOriginal ? (
-            <p className="text-base text-recall-textMuted">표시할 내용이 없습니다.</p>
+            <p className="text-base text-recall-textMuted">{t.doc_preview_empty}</p>
           ) : (
             <>
               {visibleTab === "summary" && hasSummary && (
                 <div className="rounded-xl border border-recall-border bg-recall-bgMain p-4">
                   <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                    요약
+                    {t.doc_tab_summary}
                   </p>
                   <p className="whitespace-pre-wrap text-base leading-relaxed text-recall-text">
                     {cleanExtractedText(detail.analysis.summary!)}

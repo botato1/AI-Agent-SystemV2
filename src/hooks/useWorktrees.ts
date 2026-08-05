@@ -6,6 +6,7 @@ import {
   getWorktreeFilesApi,
   uploadWorktreeApi,
   deleteWorktreeApi,
+  deleteWorktreeFileApi,
 } from "../services/worktree";
 
 const PENDING_STATUSES = new Set(["pending", "processing"]);
@@ -71,6 +72,20 @@ export function useWorktrees(workspaceId: string) {
     }
   }
 
+  async function deleteFile(fileId: string) {
+    if (!selectedWorktreeId) return;
+    const res = await deleteWorktreeFileApi(workspaceId, selectedWorktreeId, fileId);
+    if (res.status === "success") {
+      setFiles((prev) => prev.filter((f) => f.id !== fileId));
+      if (res.worktree) {
+        const updated = res.worktree;
+        setWorktrees((prev) => prev.map((w) => (w.id === updated.id ? updated : w)));
+      }
+    } else {
+      alert(`파일 삭제 실패: ${res.message}`);
+    }
+  }
+
   async function deleteWorktree(worktreeId: string) {
     const res = await deleteWorktreeApi(workspaceId, worktreeId);
     if (res.status === "success") {
@@ -95,5 +110,6 @@ export function useWorktrees(workspaceId: string) {
     isUploading,
     uploadFolder,
     deleteWorktree,
+    deleteFile,
   };
 }

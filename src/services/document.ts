@@ -69,7 +69,9 @@ export interface DeleteDocumentResponse {
 
 export interface RetryDocumentResponse {
   status: "success" | "error";
-  summary: string | null;
+  documentId: string | null;
+  analysisStatus: string | null;
+  retryCount: number | null;
   message: string;
   error: string | null;
 }
@@ -406,7 +408,7 @@ export async function deleteDocumentApi(
 /**
  * 5. 문서 재분석 요청 API (POST /api/workspaces/{workspace_id}/documents/{document_id}/retry)
  *
- * 주의: 실제 응답엔 문서에 있는 analysis_status/retry_count 필드가 없다 (성공 시 summary만 옴).
+ * failed 상태인 문서만 재분석 가능 (완료/처리중인 문서는 400 not_failed로 거부됨).
  */
 export async function retryDocumentApi(
   workspaceId: string,
@@ -418,7 +420,9 @@ export async function retryDocumentApi(
   if (!token) {
     return {
       status: "error",
-      summary: null,
+      documentId: null,
+      analysisStatus: null,
+      retryCount: null,
       message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
       error: "UNAUTHORIZED",
     };
@@ -446,7 +450,9 @@ export async function retryDocumentApi(
 
       return {
         status: "error",
-        summary: null,
+        documentId: null,
+        analysisStatus: null,
+        retryCount: null,
         message: data.message || defaultMsg,
         error: data.error || `HTTP_${response.status}`,
       };
@@ -454,15 +460,19 @@ export async function retryDocumentApi(
 
     return {
       status: "success",
-      summary: data.summary ?? null,
-      message: data.message || "재분석이 완료되었습니다.",
+      documentId: data.document_id ?? documentId,
+      analysisStatus: data.analysis_status ?? null,
+      retryCount: data.retry_count ?? null,
+      message: data.message || "재분석이 요청되었습니다.",
       error: null,
     };
   } catch (error) {
     console.error("retryDocumentApi error:", error);
     return {
       status: "error",
-      summary: null,
+      documentId: null,
+      analysisStatus: null,
+      retryCount: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };
