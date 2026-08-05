@@ -314,6 +314,11 @@ export const translations = {
 
     // === 실시간 모순/결정 변경 감지 팝업 ===
     meeting_live_alert_decision_title: "결정 변경 감지",
+    meeting_live_alert_count: (count: number) => `${count}건`,
+    meeting_live_alert_next_btn: "다음",
+    meeting_live_alert_edit_btn: "직접 수정하기",
+    meeting_live_alert_edit_title: "발화 내용 수정",
+    meeting_live_alert_edit_failed: "수정에 실패했어요. 다시 시도해 주세요.",
     meeting_live_alert_reasoned: "근거 있는 변경",
     meeting_live_alert_unreasoned: "근거 없는 변경",
 
@@ -582,6 +587,10 @@ export const translations = {
     meeting_new_meeting_word: "새 회의",
     meeting_joinable_notice: (title: string) => `"${title}" 회의가 각자 PC 모드로 진행 중이에요`,
     meeting_join_btn: "참가하기",
+    meeting_viewable_notice: (title: string) => `"${title}" 회의가 진행 중이에요. 실시간 스크립트를 볼 수 있어요`,
+    meeting_view_live_btn: "실시간으로 보기",
+    meeting_view_only_badge: "보기 전용",
+    meeting_leave_btn: "나가기",
     meeting_attendees_btn: "참석자",
     meeting_short_summary_label: "한 줄 요약",
     meeting_contradiction_list_expand: "모순 목록 펼치기",
@@ -950,6 +959,11 @@ export const translations = {
 
     // === Live contradiction/decision-change alert ===
     meeting_live_alert_decision_title: "Decision Change Detected",
+    meeting_live_alert_count: (count: number) => `${count}`,
+    meeting_live_alert_next_btn: "Next",
+    meeting_live_alert_edit_btn: "Edit statement",
+    meeting_live_alert_edit_title: "Edit statement",
+    meeting_live_alert_edit_failed: "Failed to save. Please try again.",
     meeting_live_alert_reasoned: "Reasoned Change",
     meeting_live_alert_unreasoned: "Unreasoned Change",
 
@@ -1218,6 +1232,10 @@ export const translations = {
     meeting_new_meeting_word: "new meeting",
     meeting_joinable_notice: (title: string) => `"${title}" is running in individual-device mode`,
     meeting_join_btn: "Join",
+    meeting_viewable_notice: (title: string) => `"${title}" is in progress. You can watch the live transcript`,
+    meeting_view_live_btn: "Watch live",
+    meeting_view_only_badge: "View only",
+    meeting_leave_btn: "Leave",
     meeting_attendees_btn: "Attendees",
     meeting_short_summary_label: "One-line Summary",
     meeting_contradiction_list_expand: "Expand contradiction list",
