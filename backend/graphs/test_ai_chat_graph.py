@@ -1,6 +1,7 @@
 # backend/graphs/test_ai_chat_graph.py
 
 from backend.graphs.nodes.ai_chat_answer import (
+    candidate_score,
     merge_and_rank_candidates,
     filter_by_relevance,
     clamp_similarity_score,
@@ -10,12 +11,72 @@ from backend.graphs.nodes.ai_chat_answer import (
 
 
 def test_merge_and_rank_candidates_orders_by_score():
+    """최소 보장을 끄면(min_per_collection=0) 순수 점수순으로 동작한다."""
     doc_results = [{"id": "d1", "score": 0.9}, {"id": "d2", "score": 0.3}]
     meeting_results = [{"id": "m1", "score": 0.95}, {"id": "m2", "score": 0.5}]
 
-    result = merge_and_rank_candidates(doc_results, meeting_results, top_k=3)
+    result = merge_and_rank_candidates(
+        doc_results, meeting_results, top_k=3, min_per_collection=0
+    )
 
     assert [r["id"] for r in result] == ["m1", "d1", "m2"]
+
+
+def test_merge_and_rank_candidates_guarantees_minimum_per_collection():
+    """한 컬렉션이 상위 점수를 독식해도 다른 컬렉션 후보가 살아남아야 한다."""
+    doc_results = [{"id": "d1", "score": 0.30}, {"id": "d2", "score": 0.25}]
+    meeting_results = [{"id": f"m{i}", "score": 0.9 - i * 0.01} for i in range(5)]
+
+    result = merge_and_rank_candidates(
+        doc_results, meeting_results, top_k=4, min_per_collection=2
+    )
+
+    ids = [r["id"] for r in result]
+    # 점수만 보면 meeting이 4자리를 다 가져가지만, doc 2개가 보장되어야 한다
+    assert "d1" in ids and "d2" in ids
+    assert len([i for i in ids if i.startswith("m")]) == 2
+    # 반환 순서는 점수순
+    assert ids == sorted(ids, key=lambda i: candidate_score(
+        next(r for r in result if r["id"] == i)), reverse=True)
+
+
+def test_merge_and_rank_candidates_quota_exceeds_top_k_distributes_evenly():
+    """min_per_collection * 컬렉션수 > top_k면 라운드로빈으로 균등 분배한다."""
+    doc_results = [{"id": "d1", "score": 0.1}, {"id": "d2", "score": 0.09}]
+    meeting_results = [{"id": "m1", "score": 0.2}, {"id": "m2", "score": 0.19}]
+    decision_results = [{"id": "x1", "score": 0.3}, {"id": "x2", "score": 0.29}]
+
+    result = merge_and_rank_candidates(
+        doc_results, meeting_results, decision_results, top_k=3, min_per_collection=2
+    )
+
+    # 3자리를 한 컬렉션이 독식하지 않고 컬렉션당 1개씩 가져간다
+    assert sorted(r["id"] for r in result) == ["d1", "m1", "x1"]
+
+
+def test_merge_and_rank_candidates_prefers_reranker_score():
+    """reranker_score가 있으면 하이브리드 score 대신 그것으로 랭킹한다."""
+    doc_results = [{"id": "d1", "score": 0.9, "reranker_score": 0.1}]
+    meeting_results = [{"id": "m1", "score": 0.2, "reranker_score": 0.95}]
+
+    result = merge_and_rank_candidates(
+        doc_results, meeting_results, top_k=2, min_per_collection=0
+    )
+
+    assert [r["id"] for r in result] == ["m1", "d1"]
+
+
+def test_merge_and_rank_candidates_no_duplicates():
+    """보장 단계와 잔여 채움 단계에서 같은 후보가 중복 선택되면 안 된다."""
+    doc_results = [{"id": "d1", "score": 0.9}, {"id": "d2", "score": 0.8}]
+    meeting_results = [{"id": "m1", "score": 0.7}]
+
+    result = merge_and_rank_candidates(
+        doc_results, meeting_results, top_k=5, min_per_collection=2
+    )
+
+    ids = [r["id"] for r in result]
+    assert sorted(ids) == ["d1", "d2", "m1"]
 
 
 def test_merge_and_rank_candidates_empty_inputs():
@@ -61,6 +122,27 @@ def test_filter_by_relevance_empty_when_all_below_threshold():
 def test_filter_by_relevance_missing_score_treated_as_zero():
     candidates = [{"id": "a"}]
     assert filter_by_relevance(candidates, min_score=0.4) == []
+
+
+def test_filter_by_relevance_uses_reranker_score_when_present():
+    """리랭킹을 거쳤으면 하이브리드 score가 아니라 reranker_score로 걸러야 한다.
+
+    오타 등으로 BM25 항이 0이 되어 하이브리드 점수가 낮아도, 리랭커가 높게
+    평가한 후보는 살아남아야 한다 (지수 리포트: "베포" → "배포" 케이스).
+    """
+    candidates = [
+        {"id": "a", "score": 0.35, "reranker_score": 0.88},
+        {"id": "b", "score": 0.95, "reranker_score": 0.10},
+    ]
+    result = filter_by_relevance(candidates, min_score=0.4)
+    assert [c["id"] for c in result] == ["a"]
+
+
+def test_candidate_score_falls_back_to_hybrid_score():
+    """리랭커 미적용/실패로 reranker_score가 없으면 하이브리드 score를 쓴다."""
+    assert candidate_score({"score": 0.7}) == 0.7
+    assert candidate_score({"score": 0.7, "reranker_score": 0.2}) == 0.2
+    assert candidate_score({}) == 0.0
 
 
 def test_clamp_similarity_score_within_range():
