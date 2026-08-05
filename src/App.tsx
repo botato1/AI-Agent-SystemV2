@@ -23,6 +23,7 @@ import {
   getProfileApi,
   logoutApi,
   uploadProfileImageApi,
+  updateProfileApi,
   resolveAvatarUrl,
   deleteAccountApi,
   DeleteAccountResponse,
@@ -116,7 +117,9 @@ export default function App() {
 
       if (profileResult.status === "success" && profileResult.user) {
         const fixedAvatarColor =
-          loadAvatarColor(profileResult.user.username) || hashAvatarColor(profileResult.user.username);
+          profileResult.user.avatar_color ||
+          loadAvatarColor(profileResult.user.username) ||
+          hashAvatarColor(profileResult.user.username);
         saveAvatarColor(profileResult.user.username, fixedAvatarColor);
 
         setCurrentUser({
@@ -230,6 +233,13 @@ export default function App() {
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
   const activeRecorderName = voiceMeetingStatus ? liveMeeting.startedByName : null;
 
+  // 회의 화자 인식은 speaker_user_id 없이 이름 문자열로만 오기 때문에(백엔드 미구현),
+  // 워크스페이스 멤버 이름 -> 프로필 사진 맵으로 우회해서 찾는다.
+  const avatarUrlByName: Record<string, string | null> = {};
+  Object.entries(memberNameById).forEach(([userId, name]) => {
+    avatarUrlByName[name] = memberAvatarById[userId] ?? null;
+  });
+
   const realTasks = useRealTasks(currentWorkspaceId, memberNameById);
 
   // 회원가입
@@ -276,6 +286,11 @@ export default function App() {
       if (!prev) return prev;
       saveAvatarColor(prev.username, color);
       return { ...prev, avatarColor: color, avatarImageUrl: null };
+    });
+    updateProfileApi({ avatarColor: color }).then((res) => {
+      if (res.status !== "success") {
+        console.error("아바타 색상 서버 저장 실패:", res.message);
+      }
     });
   }
 
@@ -435,6 +450,7 @@ export default function App() {
           window.history.replaceState(null, "", window.location.pathname);
           setPasswordResetToken(null);
         }}
+        t={t}
       />
     );
   }
@@ -442,7 +458,7 @@ export default function App() {
   if (isAuthChecking) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
-        로그인 정보를 확인 중입니다...
+        {t.auth_checking_login}
       </div>
     );
   }
@@ -454,6 +470,7 @@ export default function App() {
         onSignUp={handleSignUp}
         onLogIn={handleLogIn}
         inviteToken={inviteToken}
+        t={t}
       />
     );
   }
@@ -461,7 +478,7 @@ export default function App() {
   if (!workspacesLoaded) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
-        워크스페이스 정보를 불러오는 중입니다...
+        {t.auth_loading_workspace}
       </div>
     );
   }
@@ -545,20 +562,29 @@ export default function App() {
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView
           workspaceId={currentWorkspaceId}
+          avatarUrlByName={avatarUrlByName}
           status={liveMeeting.status}
           meeting={liveMeeting.meeting}
           segments={liveMeeting.segments}
           partial={liveMeeting.partial}
           contradictionAlerts={liveMeeting.contradictionAlerts}
+          onClearContradictionAlert={liveMeeting.clearContradictionAlert}
+          audioQualityAlerts={liveMeeting.audioQualityAlerts}
+          onClearAudioQualityAlert={liveMeeting.clearAudioQualityAlert}
+          agendaReminder={liveMeeting.agendaReminder}
+          onClearAgendaReminder={liveMeeting.clearAgendaReminder}
           errorMessage={liveMeeting.errorMessage}
           joinableMeeting={liveMeeting.joinableMeeting}
+          isViewer={liveMeeting.isViewer}
           onStart={liveMeeting.start}
           onJoin={liveMeeting.join}
           onPause={liveMeeting.pause}
           onResume={liveMeeting.resume}
           onStop={liveMeeting.stop}
+          onLeave={liveMeeting.leave}
           onReset={liveMeeting.reset}
           onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
+          onEditLiveSegment={liveMeeting.editSegmentContent}
           onRenameLive={liveMeeting.renameMeeting}
           t={t}
         />

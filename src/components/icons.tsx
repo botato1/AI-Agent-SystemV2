@@ -39,4 +39,5 @@ export {
   LayoutGrid as GridIcon,
   Search as SearchIcon,
   Calendar as CalendarIcon,
+  Headphones as HeadphoneIcon,
 } from "lucide-react";

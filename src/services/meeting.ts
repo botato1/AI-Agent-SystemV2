@@ -38,8 +38,22 @@ export interface Meeting {
   updated_at: string;
 }
 
+export interface AgendaReminderItem {
+  id: string;
+  title: string;
+  decision_text: string;
+  reason: string | null;
+}
+
+export interface AgendaReminderPopup {
+  type: "agenda_reminder";
+  message: string;
+  items: AgendaReminderItem[];
+}
+
 export interface MeetingStart extends Meeting {
   ws_ticket: string;
+  agenda_reminder?: AgendaReminderPopup;
 }
 
 export interface MeetingSegment {
@@ -487,7 +501,7 @@ export async function updateMeetingSegmentApi(
   workspaceId: string,
   meetingId: string,
   segmentId: string,
-  content: string
+  updates: { content?: string; speakerLabel?: string }
 ): Promise<UpdateMeetingSegmentResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -502,12 +516,16 @@ export async function updateMeetingSegmentApi(
   }
 
   try {
+    const body: { content?: string; speaker_label?: string } = {};
+    if (updates.content !== undefined) body.content = updates.content;
+    if (updates.speakerLabel !== undefined) body.speaker_label = updates.speakerLabel;
+
     const response = await authFetch(
       `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/segments/${segmentId}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify(body),
       }
     );
 
@@ -609,7 +627,7 @@ export async function getMeetingSummaryApi(
 export async function updateMeetingSummaryApi(
   workspaceId: string,
   meetingId: string,
-  shortSummary: string
+  updates: { shortSummary?: string; fullSummary?: string }
 ): Promise<GetMeetingSummaryResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -624,12 +642,16 @@ export async function updateMeetingSummaryApi(
   }
 
   try {
+    const body: { short_summary?: string; full_summary?: string } = {};
+    if (updates.shortSummary !== undefined) body.short_summary = updates.shortSummary;
+    if (updates.fullSummary !== undefined) body.full_summary = updates.fullSummary;
+
     const response = await authFetch(
       `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/summary`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ short_summary: shortSummary }),
+        body: JSON.stringify(body),
       }
     );
 
@@ -796,6 +818,230 @@ export async function uploadMeetingAudioApi(
     return {
       status: "error",
       meeting: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 7-1. 회의 원본 음성 조회 API (GET /api/workspaces/{workspace_id}/meetings/{meeting_id}/audio)
+ * 실시간 녹음 회의는 서버가 WAV로 변환해서, 업로드 회의는 원본 그대로 내려준다.
+ * 실시간 녹음 회의는 후처리가 끝나야(completed/failed) source_file_id가 채워지므로,
+ * 그 전엔 404("원본 음성 파일이 아직 없습니다.")가 난다.
+ */
+export interface GetMeetingAudioResponse {
+  status: "success" | "error";
+  blob: Blob | null;
+  contentType: string;
+  message: string;
+  error: string | null;
+}
+
+export async function getMeetingAudioApi(
+  workspaceId: string,
+  meetingId: string
+): Promise<GetMeetingAudioResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      blob: null,
+      contentType: "",
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/audio`,
+      { method: "GET" }
+    );
+
+    if (!response.ok) {
+      let defaultMsg = "원본 음성을 불러오지 못했습니다.";
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        // 바이너리가 아닌 에러 응답이 아닐 수도 있음 - 무시
+      }
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = data?.detail || "원본 음성 파일을 찾을 수 없습니다.";
+
+      return {
+        status: "error",
+        blob: null,
+        contentType: "",
+        message: defaultMsg,
+        error: `HTTP_${response.status}`,
+      };
+    }
+
+    const contentType = response.headers.get("Content-Type") || "audio/wav";
+    const blob = await response.blob();
+
+    return {
+      status: "success",
+      blob,
+      contentType,
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getMeetingAudioApi error:", error);
+    return {
+      status: "error",
+      blob: null,
+      contentType: "",
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 7-2. 회의록 PDF 내보내기 저장 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/export)
+ * 프론트에서 생성한 PDF 파일을 서버에 업로드해서 저장한다.
+ */
+export interface MeetingExportRecord {
+  export_id: string;
+  meeting_id: string;
+  meeting_title: string;
+  filename: string;
+  created_at: string;
+}
+
+export interface ExportMeetingPdfResponse {
+  status: "success" | "error";
+  record: MeetingExportRecord | null;
+  message: string;
+  error: string | null;
+}
+
+export async function exportMeetingPdfApi(
+  workspaceId: string,
+  meetingId: string,
+  file: Blob,
+  filename: string
+): Promise<ExportMeetingPdfResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      record: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file, filename);
+
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/export`,
+      { method: "POST", body: formData }
+    );
+
+    let data: any = null;
+    try {
+      data = await response.json();
+    } catch {
+      // 본문 없는 에러 응답일 수 있음 - 무시
+    }
+
+    if (!response.ok) {
+      let defaultMsg = "회의록 PDF 저장에 실패했습니다.";
+      if (response.status === 400) defaultMsg = "PDF 파일만 업로드할 수 있습니다.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 회의입니다.";
+
+      return {
+        status: "error",
+        record: null,
+        message: data?.message || defaultMsg,
+        error: data?.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      record: data,
+      message: "회의록 PDF가 저장되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("exportMeetingPdfApi error:", error);
+    return {
+      status: "error",
+      record: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 7-3. 회의록 PDF 내보내기 이력 조회 API (GET /api/workspaces/{workspace_id}/meeting-exports)
+ * 워크스페이스 전체 내보내기 이력 - 여러 회의의 export가 섞여서 최신순으로 내려온다.
+ */
+export interface GetMeetingExportsResponse {
+  status: "success" | "error";
+  exports: MeetingExportRecord[];
+  message: string;
+  error: string | null;
+}
+
+export async function getMeetingExportsApi(workspaceId: string): Promise<GetMeetingExportsResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      exports: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/meeting-exports`, {
+      method: "GET",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      let defaultMsg = "회의록 내보내기 이력을 불러오지 못했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+
+      return {
+        status: "error",
+        exports: [],
+        message: data?.message || defaultMsg,
+        error: data?.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      exports: data.exports || [],
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getMeetingExportsApi error:", error);
+    return {
+      status: "error",
+      exports: [],
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };
