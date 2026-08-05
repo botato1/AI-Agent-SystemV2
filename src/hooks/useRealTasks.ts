@@ -18,7 +18,9 @@ function toBackendStatus(status: TaskStatus): BackendTaskStatus {
 }
 
 function toLocalStatus(status: BackendTaskStatus): TaskStatus {
-  return status === "open" ? "todo" : status;
+  // "suggested"(제안됨)는 일반 할 일 목록 조회 API에서 제외되므로 여기 들어올 일이 없다 - 방어적으로만 처리
+  if (status === "open" || status === "suggested") return "todo";
+  return status;
 }
 
 // 서버가 주는 due_at(UTC ISO)을 로컬 시간 기준 "YYYY-MM-DDTHH:mm" 문자열로 바꾼다.
