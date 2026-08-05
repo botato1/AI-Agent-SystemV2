@@ -184,7 +184,10 @@ def get_ai_chat_message_sources(
 
     sources = ai_chat_crud.get_message_sources(db, message_id)
     return AIMessageSourceListResponse(
-        sources=[AIMessageSourceSchema.model_validate(s) for s in sources]
+        sources=[
+            AIMessageSourceSchema.model_validate(s).model_copy(update={"file_name": filename})
+            for s, filename in sources
+        ]
     )
 
 
@@ -329,5 +332,8 @@ def get_standalone_ai_chat_message_sources(
 
     sources = ai_chat_crud.get_message_sources(db, message_id)
     return AIMessageSourceListResponse(
-        sources=[AIMessageSourceSchema.model_validate(s) for s in sources]
+        sources=[
+            AIMessageSourceSchema.model_validate(s).model_copy(update={"file_name": filename})
+            for s, filename in sources
+        ]
     )

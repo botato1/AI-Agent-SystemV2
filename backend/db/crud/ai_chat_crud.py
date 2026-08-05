@@ -10,8 +10,7 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.db.modules import AiChatMessage, AiChatSession, AiMessageSource
-
+from backend.db.modules import AiChatMessage, AiChatSession, AiMessageSource, WorkspaceFile
 
 def get_or_create_session(
     db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
@@ -221,9 +220,10 @@ def get_session_history(db: Session, session_id: uuid.UUID) -> list[AiChatMessag
     )
 
 
-def get_message_sources(db: Session, ai_message_id: uuid.UUID) -> list[AiMessageSource]:
+def get_message_sources(db: Session, ai_message_id: uuid.UUID) -> list[tuple[AiMessageSource, str | None]]:
     return (
-        db.query(AiMessageSource)
+        db.query(AiMessageSource, WorkspaceFile.original_filename)
+        .outerjoin(WorkspaceFile, AiMessageSource.file_id == WorkspaceFile.id)
         .filter(AiMessageSource.ai_message_id == ai_message_id)
         .order_by(AiMessageSource.display_order)
         .all()
