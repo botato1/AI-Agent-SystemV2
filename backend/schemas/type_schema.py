@@ -241,6 +241,7 @@ TaskStatus = Literal[
     "in_progress",
     "done",
     "cancelled",
+    "suggested",
 ]
 
 TaskPriority = Literal[
@@ -294,6 +295,7 @@ AIChatRole = Literal[
 AIMessageSourceType = Literal[
     "content_chunk",
     "code_fact",
+    "decision",
 ]
 
 

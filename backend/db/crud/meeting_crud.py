@@ -224,6 +224,17 @@ def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, ti
         db.flush()
     return row
 
+def list_suggested_tasks_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Task]:
+    return (
+        db.query(Task)
+        .filter(
+            Task.meeting_id == meeting_id,
+            Task.status == "suggested",
+            Task.deleted_at.is_(None),
+        )
+        .all()
+    )
+
 
 def list_open_tasks(db: Session, workspace_id: uuid.UUID) -> list[Task]:
     return (

@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from sqlalchemy.orm import Session
 
-from backend.db.modules import RoomFileLink, Worktree, WorkspaceFile
+from backend.db.modules import RoomFileLink, Worktree, WorkspaceFile, Meeting
 
 class FileVersionError(ValueError):
     """파일 버전 연결 요청이 유효하지 않을 때 발생한다."""
@@ -179,14 +179,14 @@ def get_file(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
 
 
 def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str) -> list[WorkspaceFile]:
-    """일반 문서 목록 조회용. 워크트리(코드 폴더) 업로드로 들어온 파일은
-    워크트리 화면에서만 보여야 하므로 제외한다."""
+    """일반 문서 목록 조회용. 워크트리(코드 폴더) 업로드 파일, 회의 요약 문서, 회의록 내보내기 PDF는
+    각각 워크트리/회의 화면에서만 보여야 하므로 제외한다."""
     return (
         db.query(WorkspaceFile)
         .filter(
             WorkspaceFile.workspace_id == workspace_id,
             WorkspaceFile.file_kind == file_kind,
-            WorkspaceFile.origin_type != "worktree",
+            WorkspaceFile.origin_type.notin_(["worktree", "meeting_summary", "meeting_export"]),
             WorkspaceFile.is_latest.is_(True),
             WorkspaceFile.deleted_at.is_(None),
         )
@@ -200,6 +200,7 @@ def list_graph_eligible_files(
     q = db.query(WorkspaceFile).filter(
         WorkspaceFile.workspace_id == workspace_id,
         WorkspaceFile.file_kind == "document",
+        WorkspaceFile.origin_type.notin_(["meeting_summary", "meeting_export"]),
         WorkspaceFile.analysis_status == "completed",
         WorkspaceFile.is_latest.is_(True),
         WorkspaceFile.deleted_at.is_(None),
@@ -349,3 +350,36 @@ def delete_worktree(db: Session, worktree_id: uuid.UUID) -> None:
     if worktree:
         db.delete(worktree)
         db.commit()
+
+def create_meeting_export(
+    db: Session, *, workspace_id: uuid.UUID, category_id: uuid.UUID, meeting_id: uuid.UUID,
+    uploaded_by: uuid.UUID, original_filename: str, stored_filename: str, storage_path: str,
+    file_size_bytes: int, sha256_hash: str,
+) -> WorkspaceFile:
+    row = WorkspaceFile(
+        workspace_id=workspace_id, category_id=category_id, related_meeting_id=meeting_id,
+        uploaded_by=uploaded_by, original_filename=original_filename, stored_filename=stored_filename,
+        storage_path=storage_path, mime_type="application/pdf", extension="pdf",
+        file_kind="document", origin_type="meeting_export",
+        file_size_bytes=file_size_bytes, sha256_hash=sha256_hash,
+        version_group_id=uuid.uuid4(), analysis_status="completed",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_meeting_exports(db: Session, workspace_id: uuid.UUID) -> list[tuple[WorkspaceFile, str]]:
+    """(WorkspaceFile, meeting_title) 튜플 목록, 최신순."""
+    return (
+        db.query(WorkspaceFile, Meeting.title)
+        .join(Meeting, Meeting.id == WorkspaceFile.related_meeting_id)
+        .filter(
+            WorkspaceFile.workspace_id == workspace_id,
+            WorkspaceFile.origin_type == "meeting_export",
+            WorkspaceFile.deleted_at.is_(None),
+        )
+        .order_by(WorkspaceFile.created_at.desc())
+        .all()
+    )
