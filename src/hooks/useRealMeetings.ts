@@ -13,8 +13,11 @@ import {
   getMeetingAttendeesApi,
   uploadMeetingAudioApi,
   mapSpeakerNamesApi,
+  updateMeetingSegmentApi,
+  updateMeetingSummaryApi,
   renameMeetingApi,
 } from "../services/meeting";
+import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
 
 const PENDING_STATUSES = new Set(["created", "processing"]);
 
@@ -27,6 +30,7 @@ export function useRealMeetings(workspaceId: string) {
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [attendees, setAttendees] = useState<MeetingAttendee[]>([]);
+  const [suggestedTasks, setSuggestedTasks] = useState<BackendTask[]>([]);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -61,15 +65,17 @@ export function useRealMeetings(workspaceId: string) {
         setSummary(null);
         setDecisions([]);
         setAttendees([]);
+        setSuggestedTasks([]);
         return;
       }
 
       setIsDetailLoading(true);
-      const [segRes, sumRes, decRes, attRes] = await Promise.all([
+      const [segRes, sumRes, decRes, attRes, suggestedRes] = await Promise.all([
         getMeetingSegmentsApi(workspaceId, selectedMeetingId),
         getMeetingSummaryApi(workspaceId, selectedMeetingId),
         getMeetingDecisionsApi(workspaceId, selectedMeetingId),
         getMeetingAttendeesApi(workspaceId, selectedMeetingId),
+        getSuggestedTasksApi(workspaceId, selectedMeetingId),
       ]);
       setIsDetailLoading(false);
 
@@ -77,6 +83,7 @@ export function useRealMeetings(workspaceId: string) {
       setSummary(sumRes.status === "success" ? sumRes.summary : null);
       setDecisions(decRes.status === "success" ? decRes.decisions : []);
       setAttendees(attRes.status === "success" ? attRes.attendees : []);
+      setSuggestedTasks(suggestedRes.status === "success" ? suggestedRes.tasks : []);
     }
 
     loadDetail();
@@ -117,6 +124,59 @@ export function useRealMeetings(workspaceId: string) {
     }
   }
 
+  async function assignSegmentSpeaker(segmentId: string, name: string) {
+    if (!selectedMeetingId) return;
+    const res = await updateMeetingSegmentApi(workspaceId, selectedMeetingId, segmentId, { speakerLabel: name });
+    if (res.status === "success" && res.segment) {
+      const updated = res.segment;
+      setSegments((prev) => prev.map((s) => (s.id === segmentId ? updated : s)));
+    } else {
+      alert(`화자 이름 지정 실패: ${res.message}`);
+    }
+  }
+
+  // STT가 잘못 알아들은 발화(예: "9월"을 "구월"로 인식)를 스크립트 탭에서 바로 고칠 수 있게.
+  // 성공 여부를 boolean으로 돌려줘서 호출한 쪽(인라인 편집 UI)이 실패 시 편집 모드를 유지하게 한다.
+  async function updateSegmentContent(segmentId: string, content: string): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await updateMeetingSegmentApi(workspaceId, selectedMeetingId, segmentId, { content });
+    if (res.status === "success" && res.segment) {
+      const updated = res.segment;
+      setSegments((prev) => prev.map((s) => (s.id === segmentId ? updated : s)));
+      return true;
+    }
+    alert(`회의록 내용 수정 실패: ${res.message}`);
+    return false;
+  }
+
+  async function updateFullSummary(fullSummary: string) {
+    if (!selectedMeetingId) return;
+    const res = await updateMeetingSummaryApi(workspaceId, selectedMeetingId, { fullSummary });
+    if (res.status === "success" && res.summary) {
+      setSummary(res.summary);
+    } else {
+      alert(`회의록 내용 수정 실패: ${res.message}`);
+    }
+  }
+
+  async function approveSuggestedTask(taskId: string) {
+    const res = await updateTaskStatusApi(workspaceId, taskId, "open");
+    if (res.status === "success") {
+      setSuggestedTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } else {
+      alert(`할 일 추가 실패: ${res.message}`);
+    }
+  }
+
+  async function rejectSuggestedTask(taskId: string) {
+    const res = await deleteTaskApi(workspaceId, taskId);
+    if (res.status === "success") {
+      setSuggestedTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } else {
+      alert(`제안 삭제 실패: ${res.message}`);
+    }
+  }
+
   async function renameMeeting(id: string, title: string) {
     const res = await renameMeetingApi(workspaceId, id, title);
     if (res.status === "success" && res.meeting) {
@@ -148,6 +208,9 @@ export function useRealMeetings(workspaceId: string) {
     summary,
     decisions,
     attendees,
+    suggestedTasks,
+    approveSuggestedTask,
+    rejectSuggestedTask,
     reloadAttendees,
     isDetailLoading,
     isUploading,
@@ -155,6 +218,9 @@ export function useRealMeetings(workspaceId: string) {
     removeMeeting,
     renameMeeting,
     mapSpeakerNames,
+    assignSegmentSpeaker,
+    updateSegmentContent,
+    updateFullSummary,
     reload: loadMeetings,
   };
 }
