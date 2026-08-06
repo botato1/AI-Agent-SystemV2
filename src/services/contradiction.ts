@@ -3,15 +3,13 @@ import { authFetch } from "./auth";
 // --- 타입 정의 ---
 
 export type ContradictionSourceType = "meeting_segment" | "room_message";
-export type ContradictionReferenceType = "content_chunk" | "code_fact";
+// "decision"이면 결정 변경 감지(judgment_case로 Case2/3 구분), 그 외는 문서-발화 모순 감지.
+export type ContradictionReferenceType = "content_chunk" | "code_fact" | "decision";
 export type ContradictionSeverity = "low" | "medium" | "high";
 export type ContradictionStatus = "unresolved" | "resolved" | "dismissed";
 export type ContradictionResolutionType = "change_acknowledged" | "keep_reference";
 export type GenerationStatus = "pending" | "processing" | "completed" | "failed";
-// 문서-발화 모순 감지("document")와 결정 변경 감지("decision")를 구분하는 필드 -
-// 백엔드에 아직 없어서 별도로 추가 요청해둔 상태. 없으면(예전 응답) "document"로 취급한다.
-export type ContradictionAlertSource = "document" | "decision";
-// decision 소스 전용 - 근거 있는 변경(Case2)/근거 없는 변경(Case3) 구분. 마찬가지로 추가 요청 중.
+// decision 소스 전용 - 근거 있는 변경(Case2)/근거 없는 변경(Case3) 구분.
 export type ContradictionJudgmentCase = "reasoned_change" | "unreasoned_change";
 
 export interface ReferenceLocation {
@@ -42,12 +40,11 @@ export interface Contradiction {
   reason?: string | null;
   confidence_score: number;
   severity: ContradictionSeverity;
-  // decision/document 구분, 결정 변경의 근거 유무 - 둘 다 아직 백엔드 응답에 없어서 옵셔널.
-  source?: ContradictionAlertSource | null;
+  // 결정 변경의 근거 유무(Case2/3 구분) - reference_type이 "decision"일 때만 의미 있음
   judgment_case?: ContradictionJudgmentCase | null;
   status: ContradictionStatus;
-  // 백엔드에 아직 없는 필드 - 되돌리기 가능 여부를 판단하려면 필요해서 요청해둔 것.
-  // 값이 없으면(예전 응답) "유지"로 해결된 것도 판별을 못 하므로 되돌리기 버튼을 우선 보여준다.
+  // 되돌리기 가능 여부 판단용 - 값이 없으면(예전 응답) "유지"로 해결된 것도 판별을 못 하므로
+  // 되돌리기 버튼을 우선 보여준다.
   resolution_type?: ContradictionResolutionType | null;
   detected_at: string;
   updated_at: string;

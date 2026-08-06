@@ -2019,7 +2019,7 @@ export default function MeetingsPanel({
             ) : (
               contradictions.map((c) => {
                 const isExpanded = expandedContradictionIds.has(c.id);
-                const isDecisionCard = c.source === "decision";
+                const isDecisionCard = c.reference_type === "decision";
                 const caseDisplay = isDecisionCard && c.judgment_case ? decisionCaseDisplay(t, c.judgment_case) : null;
                 return (
                   <div
