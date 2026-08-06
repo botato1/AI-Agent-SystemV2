@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
 
-from backend.db.crud import ai_chat_crud, content_chunk_crud, contradiction_crud, document_crud, file_crud, room_crud, similarity_crud
+from backend.db.crud import ai_chat_crud, content_chunk_crud, contradiction_crud, document_crud, file_crud, meeting_crud, room_crud, similarity_crud
 from backend.modules.rag.document_loader import load_document
 from backend.modules.rag.chroma_client import delete_document as chroma_delete_document
 from backend.services import similarity_service
@@ -306,21 +306,16 @@ def _make_fallback_summary(original_text: str, max_length: int = 500) -> str:
 
 
 # 문서 업로드 처리
+# 문서 업로드 처리
 
 async def upload_and_process_document(
-    db: Session,
-    file: UploadFile,
-    workspace_id: UUID,
-    background_tasks: BackgroundTasks,
-    room_id: str | None = None,
-    document_type: str = "document",
-    user_id: str | None = None,
-    previous_file_id: UUID | None = None,
-) -> dict:
+    db, workspace_id, file, room_id=None, meeting_id=None, document_type="document",
+    previous_file_id=None, current_user_id=None, background_tasks=None,
+):
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
     try:
-        if not user_id:
+        if not current_user_id:
             raise PermissionError("인증 정보가 없습니다.")
 
         if _is_audio_file(file):
@@ -348,6 +343,17 @@ async def upload_and_process_document(
             room = room_crud.get_room_by_id(db, UUID(room_id), workspace_id)
             if not room:
                 raise PermissionError("채팅방을 찾을 수 없습니다.")
+
+        # meeting_id가 있으면 워크스페이스 소속인지 확인
+        meeting_uuid = None
+        if meeting_id:
+            meeting_uuid = UUID(meeting_id)
+            meeting = meeting_crud.get_meeting(db, meeting_uuid)
+            if not meeting or meeting.workspace_id != workspace_id:
+                return _build_error_response(
+                    room_id, filename, document_type,
+                    "회의를 찾을 수 없습니다.", "meeting_not_found",
+                )
 
         file_content = await file.read()
         sha256_hash = _compute_sha256(file_content)
@@ -392,13 +398,14 @@ async def upload_and_process_document(
             original_filename=filename,
             previous_file_id=previous_file_id,
             category_id=category.id,
-            uploaded_by=UUID(user_id),
+            uploaded_by=UUID(current_user_id),
             stored_filename=stored_filename,
             storage_path=storage_path,
             mime_type=file.content_type,
             extension=Path(filename).suffix.lstrip("."),
             file_kind="document",
-            origin_type="room_upload" if room_id else "document_analysis",
+            origin_type="meeting_reference" if meeting_uuid else ("room_upload" if room_id else "document_analysis"),
+            related_meeting_id=meeting_uuid,
             file_size_bytes=len(file_content),
             sha256_hash=sha256_hash,
             analysis_status="processing",
@@ -443,13 +450,14 @@ async def upload_and_process_document(
         # 4. room에 연결 (room_id가 있을 때만)
         link_status = "not_applicable"
         if room:
-            file_crud.link_file_to_room(db, room.id, workspace_file.id, UUID(user_id))
+            file_crud.link_file_to_room(db, room.id, workspace_file.id, UUID(current_user_id))
             link_status = "success"
 
         return {
             "status": "success",
             "workspace_id": str(workspace_id),
             "room_id": room_id,
+            "meeting_id": meeting_id,
             "document_id": str(workspace_file.id),
             "filename": filename,
             "type": document_type,

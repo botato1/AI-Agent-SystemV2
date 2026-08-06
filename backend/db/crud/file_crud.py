@@ -383,3 +383,15 @@ def list_meeting_exports(db: Session, workspace_id: uuid.UUID) -> list[tuple[Wor
         .order_by(WorkspaceFile.created_at.desc())
         .all()
     )
+
+def list_files_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[WorkspaceFile]:
+    return (
+        db.query(WorkspaceFile)
+        .filter(
+            WorkspaceFile.related_meeting_id == meeting_id,
+            WorkspaceFile.deleted_at.is_(None),
+            WorkspaceFile.is_latest.is_(True),
+        )
+        .order_by(WorkspaceFile.created_at.desc())
+        .all()
+    )

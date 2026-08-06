@@ -35,6 +35,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from backend.schemas.common_schema import (
+    ORMBaseSchema,
     SoftDeleteSchema,
     TimestampSchema,
 )
@@ -471,3 +472,14 @@ class MeetingSegmentSplitRequest(BaseModel):
 class MeetingSegmentSplitResponse(BaseModel):
     first: MeetingSegmentResponse
     second: MeetingSegmentResponse
+
+class MeetingDocumentResponse(ORMBaseSchema):
+    id: UUID
+    original_filename: str
+    file_kind: str
+    analysis_status: str
+    created_at: datetime
+
+
+class MeetingDocumentListResponse(BaseModel):
+    documents: list[MeetingDocumentResponse] = Field(default_factory=list)

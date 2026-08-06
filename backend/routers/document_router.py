@@ -107,10 +107,8 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     room_id: str | None = Form(None),
-    document_type: Literal["document", "meeting"] = Form(
-        "document",
-        alias="type",
-    ),
+    meeting_id: str | None = Form(None),
+    document_type: Literal["document", "meeting"] = Form("document", alias="type"),
     previous_file_id: UUID | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
@@ -147,8 +145,9 @@ async def upload_document(
             workspace_id=workspace_id,
             background_tasks=background_tasks,
             room_id=room_id,
+            meeting_id=meeting_id,
             document_type=document_type,
-            user_id=current_user_id,
+            current_user_id=current_user_id,
             previous_file_id=previous_file_id,
         )
 

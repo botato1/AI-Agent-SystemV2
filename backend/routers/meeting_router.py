@@ -53,6 +53,8 @@ from backend.schemas.meeting_schema import (
     MeetingSummaryUpdateRequest,
     MeetingSegmentSplitRequest,
     MeetingSegmentSplitResponse,
+    MeetingDocumentResponse,
+    MeetingDocumentListResponse,
 )
 
 
@@ -1079,3 +1081,19 @@ def get_workspace_decisions_api(
         results.append(item)
 
     return DecisionWithHistoryListResponse(decisions=results)
+
+# 회의에 첨부된 참고 문서 목록 조회
+@router.get("/{meeting_id}/documents", response_model=MeetingDocumentListResponse)
+def get_meeting_documents_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    files = file_crud.list_files_by_meeting(db, meeting_id)
+    return MeetingDocumentListResponse(
+        documents=[MeetingDocumentResponse.model_validate(f) for f in files]
+    )
