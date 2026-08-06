@@ -196,12 +196,12 @@ export async function getDocumentListApi(workspaceId: string): Promise<GetDocume
  *
  * 주의: 8003 문서 처리 서버를 동기 호출하므로 응답이 오기까지 최대 5분 정도 걸릴 수 있다.
  * roomId를 넘기면 백엔드가 업로드와 동시에 해당 채팅방에도 자동으로 연결한다.
+ * 지원 포맷은 pdf/hwpx/png/jpg/jpeg/docx/txt다(백엔드 ALLOWED_DOCUMENT_EXTENSIONS 확인 완료).
  */
 export async function uploadDocumentApi(
   workspaceId: string,
   file: File,
-  roomId?: string,
-  documentType: "document" | "meeting" = "document"
+  roomId?: string
 ): Promise<UploadDocumentResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -221,7 +221,6 @@ export async function uploadDocumentApi(
   try {
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("type", documentType);
     if (roomId) {
       formData.append("room_id", roomId);
     }
@@ -236,7 +235,7 @@ export async function uploadDocumentApi(
     if (!response.ok || data.status === "error") {
       let defaultMsg = "문서 업로드에 실패했습니다.";
       if (data.error === "unsupported_file_type" || data.error === "unsupported_document_type") {
-        defaultMsg = "지원하지 않는 파일 형식입니다. (pdf/hwpx/png/jpg/jpeg)";
+        defaultMsg = "지원하지 않는 파일 형식입니다. (pdf/hwpx/png/jpg/jpeg/docx/txt)";
       } else if (data.error === "use_stt_upload_api") {
         defaultMsg = "음성 파일은 회의 업로드 기능을 이용해 주세요.";
       } else if (response.status === 401) {
