@@ -49,6 +49,9 @@ def main():
     parser.add_argument("--audio", default="audio.wav")
     parser.add_argument("--a", required=True, help="화자 A 구간 '시작-끝'")
     parser.add_argument("--b", required=True, help="화자 B 구간 '시작-끝' (A와 다른 사람)")
+    parser.add_argument("--part-sec", type=float, default=10.0,
+                        help="각 구간(A단독/겹침/B단독)의 길이. 겹침 모델이 10초 창으로 보므로 "
+                             "너무 짧으면 창 하나도 못 채워 아무것도 못 잡는다")
     parser.add_argument("--save", default=None, help="만든 오디오를 이 경로에 저장(들어보려면)")
     args = parser.parse_args()
 
@@ -60,21 +63,23 @@ def main():
     b_start, b_end = span(args.b)
     a = audio[int(a_start * sr):int(a_end * sr)]
     b = audio[int(b_start * sr):int(b_end * sr)]
-    length = min(len(a), len(b))
-    if length < sr * 3:
-        raise SystemExit("❌ 두 구간 모두 3초 이상이어야 한다")
-    a, b = a[:length], b[:length]
+    if len(a) < sr or len(b) < sr:
+        raise SystemExit("❌ 두 구간 모두 1초 이상이어야 한다")
+
+    # 각 구간을 원하는 길이만큼 채운다(짧으면 반복해서 이어붙임).
+    #
+    # ⚠️ 길이가 중요하다. 이 모델은 10초 창 단위로 보기 때문에, 전체가 몇 초뿐이면
+    #    창 하나도 못 채워 아무것도 못 잡는다 — 실제로 6.7초로 시험했다가 0%가 나왔고
+    #    그건 감지기 문제가 아니라 시험 설계 문제였다.
+    need = int(args.part_sec * sr)
+    tile = lambda x: np.tile(x, int(np.ceil(need / len(x))))[:need]
+    a, b = tile(a), tile(b)
 
     # [A 단독] [A+B 겹침] [B 단독] — 겹친 구간만 정확히 집어내는지 보려는 배치.
     # 앞뒤 단독 구간은 대조군이다: 거기까지 겹침이라고 하면 오탐이다.
-    third = length // 3
-    mixed = np.concatenate([
-        a[:third],
-        np.clip(a[third:2 * third] + b[third:2 * third], -1.0, 1.0),
-        b[2 * third:],
-    ])
-    overlap_from = third / sr
-    overlap_to = 2 * third / sr
+    mixed = np.concatenate([a, np.clip(a + b, -1.0, 1.0), b])
+    overlap_from = need / sr
+    overlap_to = 2 * need / sr
 
     print(f"인공 오디오 {len(mixed)/sr:.1f}초 구성:")
     print(f"  {0:5.1f}~{overlap_from:5.1f}초  A 단독")
