@@ -235,10 +235,11 @@ async def process_pdf(
         )
 
     try:
-        # 원본 파일 저장
+        # 원본 파일 저장 (suffix는 검증에 쓴 소문자 버전을 그대로 유지 - 대문자 확장자가
+        # 여기서 원본 대소문자로 재할당되면 아래 _TEXT_ONLY_SUFFIXES 분기가 안 걸려서
+        # docx/txt 파일이 PDF 전용 파이프라인으로 잘못 흘러간다)
         _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
         stem = Path(file.filename).stem
-        suffix = Path(file.filename).suffix
         saved_pdf = _STORAGE_DIR / file.filename
         if saved_pdf.exists():
             saved_pdf = _STORAGE_DIR / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
