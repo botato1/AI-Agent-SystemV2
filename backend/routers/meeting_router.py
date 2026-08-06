@@ -51,6 +51,10 @@ from backend.schemas.meeting_schema import (
     MeetingJoinResponse,
     MeetingSegmentUpdateRequest,
     MeetingSummaryUpdateRequest,
+    MeetingSegmentSplitRequest,
+    MeetingSegmentSplitResponse,
+    MeetingDocumentResponse,
+    MeetingDocumentListResponse,
 )
 
 
@@ -268,6 +272,11 @@ def end_meeting_api(
             detail="녹음 중인 회의가 아닙니다.",
         )
     meeting = transitioned
+
+    # 각자 PC 모드는 참가자별로 별도 파일에 녹음되므로, 후처리가 찾는 단일 파일로
+    # 미리 합쳐둬야 한다 (다른 참가자 소켓이 아직 연결돼 있어도 여기까지 기록된 만큼만 합침).
+    if meeting.recording_mode == "individual":
+        meeting_ws_router._merge_individual_recordings(meeting_id)
 
     # 응답은 바로 내려주고, 요약/결정사항/할 일 생성(LLM 호출 포함)은 백그라운드에서 처리.
     background_tasks.add_task(
@@ -651,6 +660,43 @@ def update_meeting_segment_api(
     )    
     return MeetingSegmentResponse.model_validate(updated)
 
+# 발화 세그먼트 분할 (한 세그먼트에 두 사람 발언이 섞였을 때)
+@router.post("/{meeting_id}/segments/{segment_id}/split", response_model=MeetingSegmentSplitResponse)
+def split_meeting_segment_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    request: MeetingSegmentSplitRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    segment = meeting_crud.get_segment(db, segment_id)
+    if not segment or segment.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="발화 세그먼트를 찾을 수 없습니다.",
+        )
+    if segment.end_ms - segment.start_ms < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="구간이 너무 짧아 분할할 수 없습니다.",
+        )
+
+    result = meeting_crud.split_segment(
+        db, segment_id,
+        first_content=request.first_content,
+        second_content=request.second_content,
+        first_speaker_label=request.first_speaker_label,
+        second_speaker_label=request.second_speaker_label,
+    )
+    first, second = result
+    return MeetingSegmentSplitResponse(
+        first=MeetingSegmentResponse.model_validate(first),
+        second=MeetingSegmentResponse.model_validate(second),
+    )
 
 # 회의 요약 조회
 @router.get("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
@@ -942,7 +988,7 @@ def update_meeting_speakers_api(
         "message": "화자 이름이 매핑되었습니다.",
     }
 
-# 진행 중인 "각자 PC에서" 모드 회의에 참가 — 본인 몫의 ws_ticket 발급
+# 진행 중인 회의에 참가 — individual 모드는 본인 마이크로, 그 외엔 보기 전용으로 ws_ticket 발급
 @router.post("/{meeting_id}/join", response_model=MeetingJoinResponse)
 def join_meeting_api(
     workspace_id: uuid.UUID,
@@ -953,18 +999,16 @@ def join_meeting_api(
     require_workspace_member(db, workspace_id, current_user_id)
     meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
 
-    if meeting.recording_mode != "individual":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="'각자 PC에서' 모드 회의만 참가할 수 있습니다.",
-        )
     if meeting.status != "recording":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="녹음 중인 회의가 아닙니다.",
         )
 
-    ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
+    # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가. 그 외(single_device,
+    # 한 대의 PC) 모드는 오디오는 이미 호스트 연결이 담당하므로 보기 전용으로만 참가시킨다.
+    view_only = meeting.recording_mode != "individual"
+    ws_ticket = create_ws_ticket(current_user_id, str(meeting_id), view_only=view_only)
     return MeetingJoinResponse(ws_ticket=ws_ticket)
 
 # 참석 인원 조회
@@ -1037,3 +1081,19 @@ def get_workspace_decisions_api(
         results.append(item)
 
     return DecisionWithHistoryListResponse(decisions=results)
+
+# 회의에 첨부된 참고 문서 목록 조회
+@router.get("/{meeting_id}/documents", response_model=MeetingDocumentListResponse)
+def get_meeting_documents_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    files = file_crud.list_files_by_meeting(db, meeting_id)
+    return MeetingDocumentListResponse(
+        documents=[MeetingDocumentResponse.model_validate(f) for f in files]
+    )

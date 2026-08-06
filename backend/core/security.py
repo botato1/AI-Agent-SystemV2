@@ -173,7 +173,9 @@ def get_user_id_from_password_reset_token(token: str) -> str:
     return payload["sub"]
 
 # WebSocket 연결용 일회용 티켓 발급 (기본 만료 60초 — 발급 직후 바로 연결한다는 전제)
-def create_ws_ticket(user_id: str, meeting_id: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_ws_ticket(
+    user_id: str, meeting_id: str, expires_delta: Optional[timedelta] = None, view_only: bool = False,
+) -> str:
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
     )
@@ -182,6 +184,7 @@ def create_ws_ticket(user_id: str, meeting_id: str, expires_delta: Optional[time
         "sub": user_id,
         "meeting_id": meeting_id,
         "type": "ws_ticket",
+        "view_only": view_only,
         "jti": str(uuid_lib.uuid4()),
         "exp": expire,
     }
