@@ -66,7 +66,7 @@ def find_overlap_spans_from_audio(audio, inference, sample_rate: int = REALTIME_
         return []
 
     chunks = output.sliding_window
-    frames = model.receptive_field
+    frames = inference.model.receptive_field
     offsets = np.array([
         frames.start + frames.step * i + frames.duration / 2 for i in range(data.shape[1])
     ])
