@@ -434,6 +434,9 @@ OVERLAP_SEGMENT_RATIO = float(os.getenv("OVERLAP_SEGMENT_RATIO", "0.6"))
 # 모델이라 이미 받아져 있다. 화자분리 결과에서 겹침을 역산하던 방식은 오탐이 많아
 # 폐기했다 — 그 방식이 찾은 11개 구간을 이 모델로 재보니 하나도 겹침이 아니었다.
 OVERLAP_MODEL = os.getenv("OVERLAP_MODEL", "pyannote/segmentation-3.0")
+# multilabel 출력에서 "이 사람이 지금 말한다"로 볼 확률 문턱.
+# 낮추면 겹침을 더 잡지만 오탐(멀쩡한 발언에 '여러 명' 표시)도 늘어난다.
+OVERLAP_ACTIVE_THRESHOLD = float(os.getenv("OVERLAP_ACTIVE_THRESHOLD", "0.5"))
 
 # 겹친 세그먼트의 화자 이름을 지울지.
 #

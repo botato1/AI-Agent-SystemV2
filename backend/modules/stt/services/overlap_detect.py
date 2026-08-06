@@ -29,7 +29,7 @@ import numpy as np
 
 from ..core.config import (
     logger, OVERLAP_MIN_SEC, OVERLAP_SEGMENT_RATIO, OVERLAP_CLEAR_SPEAKER,
-    REALTIME_SAMPLE_RATE,
+    OVERLAP_ACTIVE_THRESHOLD, REALTIME_SAMPLE_RATE,
 )
 
 _TIME_BIN_SEC = 0.1
@@ -61,14 +61,9 @@ def find_overlap_spans_from_audio(audio, inference, sample_rate: int = REALTIME_
         logger.warning(f"⚠️ 겹침 모델 출력 형태가 예상과 다름 {data.shape} — 겹침 감지 생략")
         return []
 
-    model = inference.model
-    sizes = _powerset_cardinality(
-        data.shape[-1], len(model.specifications.classes),
-        getattr(model.specifications, "powerset_max_classes", 2),
-    )
-    if sizes is None:
+    counts = _speaker_counts(data, inference.model)
+    if counts is None:
         return []
-    counts = sizes[data.argmax(axis=-1)]        # (청크수, 프레임수)
 
     chunks = output.sliding_window
     frames = model.receptive_field
@@ -92,6 +87,39 @@ def find_overlap_spans_from_audio(audio, inference, sample_rate: int = REALTIME_
                 spans.append((start, i * _TIME_BIN_SEC))
             start = None
     return _merge(spans)
+
+
+def _speaker_counts(data, model):
+    """
+    모델 출력에서 프레임별 **동시 발화자 수**를 뽑는다. (청크수, 프레임수) 또는 None.
+
+    ⚠️ 출력 형식이 두 가지다. 이걸 잘못 보면 겹침이 **영원히 0으로** 나온다.
+
+      multilabel — 채널 수 = 화자 수. 각 채널이 "이 사람이 지금 말하는가"의 확률.
+                   몇 채널이 켜졌는지 **세면** 된다.
+      powerset   — 채널 수 > 화자 수. 채널 하나가 "화자 조합"을 뜻한다
+                   ({}, {0}, {1}, {0,1} ...). argmax로 조합을 고르고 그 크기를 본다.
+
+    실측(2026-08-06): 이 모델은 (청크, 프레임, **3**)을 내놓는데 화자도 3명이므로
+    multilabel이다. 그런데 powerset으로 가정해 7칸짜리 매핑에 넣고 argmax를 했다.
+    3개짜리 인덱스가 [0,1,1]에만 닿아 **2명이 나올 수가 없는 구조**였고, 그래서
+    인공 겹침조차 0%로 나왔다. 감지기가 아니라 해석이 틀렸던 것.
+    """
+    import numpy as np
+    num_classes = data.shape[-1]
+    num_speakers = len(model.specifications.classes)
+
+    if num_classes == num_speakers:
+        # multilabel — 활성 채널 수를 센다
+        return (data > OVERLAP_ACTIVE_THRESHOLD).sum(axis=-1)
+
+    sizes = _powerset_cardinality(
+        num_classes, num_speakers,
+        getattr(model.specifications, "powerset_max_classes", 2),
+    )
+    if sizes is None:
+        return None
+    return sizes[data.argmax(axis=-1)]
 
 
 def _powerset_cardinality(num_classes: int, max_speakers: int, max_concurrent: int):

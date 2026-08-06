@@ -89,12 +89,13 @@ def main():
                 print(f"  후: {seg['text']}")
 
     if args.truth:
-        with open(os.path.expanduser(args.truth), encoding="utf-8") as f:
-            # 대본에서 "이름: 발화" 형태의 화자 표기를 떼어낸다
-            reference = " ".join(
-                line.split(":", 1)[-1].strip()
-                for line in f if line.strip()
-            )
+        # 대본 파서를 공유한다 — 여기서 따로 읽었더니 주석(#) 줄까지 정답으로 세어
+        # CER이 7.41%인 회의가 28.63%로 나왔다. 채점 기준은 한 곳에만 둬야 한다.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from evaluate_against_script import load_script
+        reference = " ".join(
+            line["text"] for line in load_script(os.path.expanduser(args.truth))
+        )
         cer_before = cer(reference, " ".join(before))
         cer_after = cer(reference, " ".join(seg["text"] for seg in segments))
         print(f"\n{'=' * 70}")
