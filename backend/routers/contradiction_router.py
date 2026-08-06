@@ -84,7 +84,19 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
 
     excerpt = " ".join((contradiction.reference_text_snapshot or "").split())[:100]
 
-    if source_name and excerpt:
+    if contradiction.reference_type == "decision" and contradiction.judgment_case:
+        reason_text = contradiction.reason or "사유 미기재"
+        if contradiction.judgment_case == "reasoned_change":
+            display_message = (
+                f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{contradiction.statement_text_snapshot}'"
+                f" (기존: '{contradiction.reference_text_snapshot}', 사유: {reason_text})."
+            )
+        else:  # unreasoned_change
+            display_message = (
+                f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{contradiction.statement_text_snapshot}'"
+                f" (기존: '{contradiction.reference_text_snapshot}', 사유: {reason_text})."
+            )
+    elif source_name and excerpt:
         display_message = (
             f"'{contradiction.statement_text_snapshot}'라고 하셨는데, "
             f"기존 자료({source_name})의 '{excerpt}'와 다릅니다."
