@@ -21,7 +21,7 @@ DOCUMENT_PROCESS_URL = "http://61.81.98.86:8003/api/document"
 DOCUMENT_PROCESS_BASE_URL = DOCUMENT_PROCESS_URL.rsplit("/api/document", 1)[0]
 
 
-ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".png", ".jpg", ".jpeg"}
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".png", ".jpg", ".jpeg", ".docx", ".txt"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
 # TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (stt_upload_service.py와 동일한 임시 조치)

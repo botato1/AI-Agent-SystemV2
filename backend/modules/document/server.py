@@ -1,4 +1,4 @@
-"""FastAPI 서버 — PDF 업로드 → 문서처리 파이프라인 → JSON 반환"""
+"""FastAPI 서버 — 문서(PDF/DOCX/TXT) 업로드 → 문서처리 파이프라인 → JSON 반환"""
 from __future__ import annotations
 
 import os
@@ -29,6 +29,11 @@ from fastapi.staticfiles import StaticFiles
 
 from doc_processor.core.pipeline import DocumentPipeline
 from doc_processor.output.assembler import assemble
+
+# txt/docx는 OCR/레이아웃 분석이 필요 없는 순수 텍스트라, PDF용 DocumentPipeline을
+# 태우지 않고 별도로 가볍게 텍스트만 추출한다.
+_TEXT_ONLY_SUFFIXES = {".txt", ".docx"}
+_ALLOWED_SUFFIXES = {".pdf"} | _TEXT_ONLY_SUFFIXES
 
 app = FastAPI(title="Document Processor API", version="1.0.0")
 
@@ -148,6 +153,66 @@ async def delete_document(document_id: str):
     )
 
 
+def _extract_txt_text(path: Path) -> str:
+    """.txt - 인코딩을 모르니 utf-8 우선, 실패하면 cp949(한글 레거시)로 재시도."""
+    raw = path.read_bytes()
+    for encoding in ("utf-8", "cp949"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _extract_docx_text(path: Path) -> str:
+    """.docx - 문단 텍스트만 추출한다 (표/이미지는 이번 범위에서 제외)."""
+    from docx import Document as DocxDocument
+
+    doc = DocxDocument(str(path))
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            if any(cells):
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def _build_text_only_result(path: Path, suffix: str) -> dict:
+    """txt/docx 전용 - OCR 파이프라인 없이 content/chunks만 채운 최소 결과.
+
+    document_service.py가 실제로 읽는 필드(content, chunks, metadata의 일부)만
+    맞춰주면 되고, 나머지(tables/charts/diagrams)는 빈 배열로 충분하다.
+    """
+    content = _extract_txt_text(path) if suffix == ".txt" else _extract_docx_text(path)
+    content = content.strip()
+
+    chunks = [
+        {"text": line.strip(), "style": "text", "page_number": 1}
+        for line in content.split("\n")
+        if line.strip()
+    ]
+
+    return {
+        "id": "doc_" + uuid.uuid4().hex[:12],
+        "title": path.stem,
+        "source": suffix.lstrip("."),
+        "content": content,
+        "tables": [],
+        "charts": [],
+        "diagrams": [],
+        "chunks": chunks,
+        "tags": [suffix.lstrip(".")],
+        "status": "processed" if content else "error",
+        "metadata": {
+            "page_count": 1,
+            "engines": ["python-docx"] if suffix == ".docx" else ["plain-text"],
+            "fallback_used": False,
+            "confidence_score": 1.0,
+        },
+    }
+
+
 @app.post("/api/document")
 async def process_pdf(
     file: UploadFile = File(...),
@@ -155,17 +220,22 @@ async def process_pdf(
     type: str = Form("document"),
 ):
     """
-    PDF 파일을 업로드하면 문서처리 결과를 JSON으로 반환합니다.
+    문서 파일을 업로드하면 문서처리 결과를 JSON으로 반환합니다.
 
-    - **file**: PDF 파일
+    - **file**: PDF / DOCX / TXT 파일
     - **room_id**: 채팅방 ID
     - **type**: 문서 타입 (document / meeting / voice)
     """
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
+    filename_lower = (file.filename or "").lower()
+    suffix = Path(filename_lower).suffix
+    if not file.filename or suffix not in _ALLOWED_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail="지원하지 않는 파일 형식입니다. (pdf/docx/txt)",
+        )
 
     try:
-        # 원본 PDF 저장
+        # 원본 파일 저장
         _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
         stem = Path(file.filename).stem
         suffix = Path(file.filename).suffix
@@ -175,13 +245,17 @@ async def process_pdf(
         saved_pdf.write_bytes(await file.read())
 
         start = time.time()
-        pipeline = get_pipeline()
 
-        doc_result = pipeline.run(str(saved_pdf))
-        assembled  = assemble(doc_result)
-        elapsed    = round(time.time() - start, 2)
+        if suffix in _TEXT_ONLY_SUFFIXES:
+            # txt/docx - OCR/레이아웃 분석 없이 텍스트만 추출
+            out = _build_text_only_result(saved_pdf, suffix)
+        else:
+            pipeline = get_pipeline()
+            doc_result = pipeline.run(str(saved_pdf))
+            assembled = assemble(doc_result)
+            out = assembled.model_dump(mode="json") if hasattr(assembled, "model_dump") else assembled.__dict__
 
-        out = assembled.model_dump(mode="json") if hasattr(assembled, "model_dump") else assembled.__dict__
+        elapsed = round(time.time() - start, 2)
 
         # 처리 시간 추가
         if isinstance(out.get("metadata"), dict):
