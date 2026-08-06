@@ -488,16 +488,14 @@ def split_segment(
     midpoint_ms = start_ms + (end_ms - start_ms) // 2
     midpoint_ms = max(start_ms + 1, min(midpoint_ms, end_ms - 1))
 
-    # 앞부분은 기존 세그먼트를 그대로 갱신 (id 유지)
-    segment.content = first_content
-    segment.end_ms = midpoint_ms
-    if first_speaker_label is not None:
-        segment.speaker_label = first_speaker_label
-    segment.is_edited = True
-
-    # 뒷부분은 신규 세그먼트 - 정렬 기준이 start_ms라 segment_index는
-    # 유니크하기만 하면 되고(add_segment_safe와 동일한 재시도 패턴), 순서 밀어낼 필요 없음.
     for _ in range(5):
+        # rollback되면 세션 객체가 expire되므로, segment 변경도 매 시도마다 다시 적용한다.
+        segment.content = first_content
+        segment.end_ms = midpoint_ms
+        if first_speaker_label is not None:
+            segment.speaker_label = first_speaker_label
+        segment.is_edited = True
+
         current_max = (
             db.query(func.max(MeetingSegment.segment_index))
             .filter(MeetingSegment.meeting_id == segment.meeting_id)
