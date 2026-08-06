@@ -388,7 +388,14 @@ REFINE_WEBHOOK_RETRY_DELAY_SEC = float(os.getenv("REFINE_WEBHOOK_RETRY_DELAY_SEC
 # 재분석(백그라운드)에서만 돈다. 실시간 자막에 물리면 응답성이 무너진다.
 # 미설정이면 꺼져 있다 — LLM 서버가 없는 환경에서도 재분석은 그대로 동작해야 한다.
 REFINE_LLM_ENABLED = os.getenv("REFINE_LLM_ENABLED", "0").strip().lower() not in ("0", "false", "no")
+# 교정을 어디에 맡길지. "ollama"는 팀이 띄운 서버(주소 필요, 그쪽에 부하),
+# "local"은 이 서버에 받아둔 모델을 직접 돌린다(남에게 안 기대지만 GPU 메모리를 씀).
+REFINE_LLM_BACKEND = os.getenv("REFINE_LLM_BACKEND", "ollama").strip().lower()
 REFINE_LLM_URL = os.getenv("REFINE_LLM_URL", "http://127.0.0.1:11434")
+# local 백엔드가 쓸 모델. 4bit 기본 — STT 모델들과 GPU를 나눠 써야 한다.
+REFINE_LLM_LOCAL_MODEL = os.getenv(
+    "REFINE_LLM_LOCAL_MODEL", "unsloth/Qwen2.5-7B-Instruct-unsloth-bnb-4bit",
+)
 REFINE_LLM_MODEL = os.getenv("REFINE_LLM_MODEL", "qwen2.5:14b")
 REFINE_LLM_TIMEOUT = float(os.getenv("REFINE_LLM_TIMEOUT", "120"))
 # 한 번에 고칠 줄 수. 너무 크면 모델이 뒤쪽 줄을 대충 보고, 너무 작으면 호출이 잦아진다.

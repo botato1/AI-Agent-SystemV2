@@ -36,6 +36,8 @@ import urllib.request
 from ..core.config import (
     logger,
     REFINE_LLM_ENABLED,
+    REFINE_LLM_BACKEND,
+    REFINE_LLM_LOCAL_MODEL,
     REFINE_LLM_URL,
     REFINE_LLM_MODEL,
     REFINE_LLM_TIMEOUT,
@@ -90,7 +92,60 @@ def _parse_corrections(raw: str) -> list[dict]:
     return parsed if isinstance(parsed, list) else []
 
 
-def _ask_llm(prompt: str) -> str | None:
+_local_pipe = None
+_local_failed = False
+
+
+def _ask_local(prompt: str) -> str | None:
+    """
+    같은 서버에 받아둔 모델을 직접 돌린다.
+
+    왜 이 경로가 있나: Ollama는 다른 팀원이 띄운 서버라 주소를 받아야 하고, 우리
+    재분석이 그쪽에 부하를 준다. 서버에 이미 받아둔 모델이 있으면 남에게 기대지 않고
+    끝낼 수 있다. 다만 GPU 메모리를 STT 모델과 나눠 쓰므로 4bit 모델을 기본으로 둔다.
+
+    재분석은 백그라운드이고 락으로 직렬화돼 한 번에 하나만 도므로, 여기서 잠깐
+    메모리를 더 쓰는 것은 실시간 자막에 영향을 주지 않는다.
+    """
+    global _local_pipe, _local_failed
+    if _local_failed:
+        return None
+    if _local_pipe is None:
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            logger.info(f"🧠 교정용 LLM 로딩 중... ({REFINE_LLM_LOCAL_MODEL})")
+            tokenizer = AutoTokenizer.from_pretrained(REFINE_LLM_LOCAL_MODEL)
+            model = AutoModelForCausalLM.from_pretrained(
+                REFINE_LLM_LOCAL_MODEL, dtype="auto", device_map="auto",
+            )
+            _local_pipe = (tokenizer, model)
+            logger.info("✅ 교정용 LLM 로딩 완료")
+        except Exception as e:
+            _local_failed = True
+            logger.warning(f"⚠️ 교정용 LLM을 못 씀 — 원문 유지: {e}")
+            return None
+
+    tokenizer, model = _local_pipe
+    try:
+        import torch
+        messages = [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+        inputs = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_tensors="pt", return_dict=True,
+        ).to(model.device)
+        with torch.no_grad():
+            # 교정은 창의성이 필요 없다. 샘플링을 켜면 멀쩡한 문장을 건드린다.
+            out = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
+        return tokenizer.decode(out[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
+    except Exception:
+        logger.exception("⚠️ 교정용 LLM 추론 실패 — 원문 유지")
+        return None
+
+
+def _ask_ollama(prompt: str) -> str | None:
     """Ollama /api/chat 호출. 새 의존성을 늘리지 않으려고 stdlib만 쓴다."""
     payload = json.dumps({
         "model": REFINE_LLM_MODEL,
@@ -115,6 +170,13 @@ def _ask_llm(prompt: str) -> str | None:
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
         logger.warning(f"⚠️ LLM 교정 호출 실패 — 원문 유지: {e}")
         return None
+
+
+def _ask_llm(prompt: str) -> str | None:
+    """설정된 경로로 LLM에 묻는다. 어느 쪽이든 실패하면 None(원문 유지)."""
+    if REFINE_LLM_BACKEND == "local":
+        return _ask_local(prompt)
+    return _ask_ollama(prompt)
 
 
 def _build_prompt(segments: list[dict], start: int, end: int, terms: str | None) -> str:
