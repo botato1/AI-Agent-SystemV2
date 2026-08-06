@@ -12,7 +12,7 @@ import uuid
 
 import httpx
 
-from backend.db.crud import content_chunk_crud, contradiction_crud
+from backend.db.crud import content_chunk_crud, contradiction_crud, file_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.contradiction_state import (
     ContradictionState,
@@ -163,6 +163,15 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
             chunk = content_chunk_crud.get_chunk_by_chroma_id(db, candidate["id"])
             if not chunk:
                 # ChromaDB엔 있는데 Postgres 쪽 원본 청크가 없는 경우(고아 데이터) — 스킵
+                continue
+
+            # 회의 요약 문서(meeting_service.save_summary_as_document)는 방금 그 회의에서
+            # decision_judgment.py가 이미 실시간으로 판정한 변경사항을 그대로 담고 있다.
+            # 이 문서를 여기서 다시 DOCUMENT_COLLECTION으로 스캔하면, 같은 변경이 정보가
+            # 훨씬 부실한(결정 제목/사유/Case 타입 없이 severity만 있는) 카드로 중복
+            # 생성된다 (가동현 리포트). 원본 업로드 문서만 이 노드의 대상으로 삼는다.
+            workspace_file = file_crud.get_file(db, chunk.file_id)
+            if workspace_file and workspace_file.origin_type == "meeting_summary":
                 continue
 
             judgment = _judge_contradiction(statement_text, chunk.chunk_text)
