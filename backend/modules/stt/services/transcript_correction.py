@@ -62,21 +62,24 @@ _SYSTEM = """너는 한국어 회의록 교정기다. 음성 인식이 잘못 �
 
 def _edit_ratio(before: str, after: str) -> float:
     """
-    글자 단위 변경 비율(0~1). 문장 재작성을 걸러내기 위한 값이라
-    정밀한 편집거리는 필요 없고, 빠르고 보수적이면 된다.
+    글자 단위 변경 비율(0~1) — 실제 편집거리로 잰다.
+
+    처음엔 공통 접두/접미만 잘라내는 방식으로 대충 셌는데, **앞부분이 바뀌면 뒤가
+    다 같아도 전부 '바뀐 것'으로 세는** 결함이 있었다. 실측에서 두 곳만 고친 교정
+    ("범위하면 범위는 ... 동마크" → "범위는 ... 북마크")이 96%로 계산돼 거부됐다.
+
+    이 값이 곧 "문장을 다시 썼는가"의 판정 기준이므로, 부정확하면 멀쩡한 교정을
+    막거나(위 사례) 반대로 재작성을 통과시킨다. 정확하게 재는 편이 맞다.
     """
     if not before:
         return 1.0
-    # 공통 접두/접미를 제외한 나머지를 '바뀐 부분'으로 본다
-    head = 0
-    while head < len(before) and head < len(after) and before[head] == after[head]:
-        head += 1
-    tail = 0
-    while (tail < len(before) - head and tail < len(after) - head
-           and before[-1 - tail] == after[-1 - tail]):
-        tail += 1
-    changed = max(len(before) - head - tail, len(after) - head - tail)
-    return changed / len(before)
+    previous = list(range(len(after) + 1))
+    for i, b in enumerate(before, 1):
+        current = [i]
+        for j, a in enumerate(after, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (b != a)))
+        previous = current
+    return previous[-1] / len(before)
 
 
 def _parse_corrections(raw: str) -> list[dict]:

@@ -91,7 +91,32 @@ def main():
         print(f"  저장: {args.save}")
 
     print("\n겹침 감지 실행 중...")
-    spans = find_overlap_spans_from_audio(mixed, load_overlap_inference(), sr)
+    inference = load_overlap_inference()
+
+    # 왜 못 잡는지 보려면 중간 값을 봐야 한다. 겹침 구간에서 모델이 실제로 몇 명이라고
+    # 예측하는지, powerset 클래스→인원수 매핑이 맞는지 — 둘 중 하나가 틀리면 0개가 나온다.
+    if inference is not None:
+        import torch
+        from stt.services.overlap_detect import _powerset_cardinality
+        out = inference({"waveform": torch.from_numpy(mixed.reshape(1, -1)), "sample_rate": sr})
+        data = np.asarray(out.data)
+        spec = inference.model.specifications
+        sizes = _powerset_cardinality(
+            data.shape[-1], len(spec.classes), getattr(spec, "powerset_max_classes", 2),
+        )
+        print(f"\n[진단] 출력 형태 {data.shape} / 클래스별 인원수 매핑 {list(sizes)}")
+        counts = sizes[data.argmax(axis=-1)]
+        uniq, freq = np.unique(counts, return_counts=True)
+        print("[진단] 예측된 동시 발화자 수 분포: "
+              + ", ".join(f"{u}명 {f/counts.size:.0%}" for u, f in zip(uniq, freq)))
+        # 겹침 구간에 해당하는 청크만 따로
+        mid = data.shape[0] // 2
+        mid_counts = counts[max(mid-1, 0):mid+2]
+        u2, f2 = np.unique(mid_counts, return_counts=True)
+        print("[진단] 겹침 구간 근처만: "
+              + ", ".join(f"{u}명 {f/mid_counts.size:.0%}" for u, f in zip(u2, f2)))
+
+    spans = find_overlap_spans_from_audio(mixed, inference, sr)
 
     print(f"\n감지된 겹침 구간 {len(spans)}개")
     for start, end in spans:
