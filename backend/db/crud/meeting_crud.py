@@ -50,10 +50,25 @@ def get_segments(db: Session, meeting_id: uuid.UUID) -> list[MeetingSegment]:
     return (
         db.query(MeetingSegment)
         .filter(MeetingSegment.meeting_id == meeting_id)
-        .order_by(MeetingSegment.segment_index)
+        .order_by(MeetingSegment.start_ms, MeetingSegment.segment_index)
         .all()
     )
 
+def update_segment_content(
+    db: Session, segment_id: uuid.UUID,
+    content: Optional[str] = None, speaker_label: Optional[str] = None,
+) -> Optional[MeetingSegment]:
+    segment = db.get(MeetingSegment, segment_id)
+    if not segment:
+        return None
+    if content is not None:
+        segment.content = content
+    if speaker_label is not None:
+        segment.speaker_label = speaker_label
+    segment.is_edited = True
+    db.commit()
+    db.refresh(segment)
+    return segment
 
 def upsert_summary(db: Session, meeting_id: uuid.UUID, commit: bool = True, **fields) -> MeetingSummary:
     """
@@ -208,6 +223,17 @@ def create_task(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, ti
     else:
         db.flush()
     return row
+
+def list_suggested_tasks_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Task]:
+    return (
+        db.query(Task)
+        .filter(
+            Task.meeting_id == meeting_id,
+            Task.status == "suggested",
+            Task.deleted_at.is_(None),
+        )
+        .all()
+    )
 
 
 def list_open_tasks(db: Session, workspace_id: uuid.UUID) -> list[Task]:
@@ -447,3 +473,51 @@ def add_segment_safe(db: Session, meeting_id: uuid.UUID, content: str, start_ms:
             db.rollback()
             continue
     raise RuntimeError(f"세그먼트 저장 재시도 초과 (meeting_id={meeting_id})")
+
+def split_segment(
+    db: Session, segment_id: uuid.UUID,
+    first_content: str, second_content: str,
+    first_speaker_label: str | None = None,
+    second_speaker_label: str | None = None,
+) -> Optional[tuple[MeetingSegment, MeetingSegment]]:
+    segment = db.get(MeetingSegment, segment_id)
+    if not segment:
+        return None
+
+    start_ms, end_ms = segment.start_ms, segment.end_ms
+    midpoint_ms = start_ms + (end_ms - start_ms) // 2
+    midpoint_ms = max(start_ms + 1, min(midpoint_ms, end_ms - 1))
+
+    for _ in range(5):
+        # rollback되면 세션 객체가 expire되므로, segment 변경도 매 시도마다 다시 적용한다.
+        segment.content = first_content
+        segment.end_ms = midpoint_ms
+        if first_speaker_label is not None:
+            segment.speaker_label = first_speaker_label
+        segment.is_edited = True
+
+        current_max = (
+            db.query(func.max(MeetingSegment.segment_index))
+            .filter(MeetingSegment.meeting_id == segment.meeting_id)
+            .scalar()
+        )
+        next_index = (current_max or 0) + 1
+        second = MeetingSegment(
+            meeting_id=segment.meeting_id,
+            speaker_label=second_speaker_label,
+            content=second_content,
+            start_ms=midpoint_ms,
+            end_ms=end_ms,
+            segment_index=next_index,
+            is_edited=True,
+        )
+        db.add(second)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            continue
+        db.refresh(segment)
+        db.refresh(second)
+        return segment, second
+    raise RuntimeError(f"세그먼트 분할 재시도 초과 (meeting_id={segment.meeting_id})")

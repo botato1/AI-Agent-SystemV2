@@ -13,7 +13,7 @@ from backend.db.crud import meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.modules.judgment import decision_judgment, document_judgment, priority
 
-_SKIP_NOTIFICATION_POPUP_TYPES = {"contradiction"}
+_SKIP_NOTIFICATION_POPUP_TYPES = {"reasoned_change", "unreasoned_change"}
 
 _POPUP_TITLE = {
     "decision_reminder": "이전 결정 리마인더",
@@ -78,17 +78,15 @@ def run_judgment_pipeline(
         if not popup:
             return None
 
-        if popup["type"] == "contradiction":
-            # decision 기반이든 document 기반이든, priority.select_popup()이 이미
-            # 최종 선택한 popup을 그대로 쓴다 (decision_result["popup"]는 document_judgment가
-            # 대신 판단한 경우 None이라 인덱싱하면 TypeError).
+        if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
+            # decision 기반 근거있음/근거없음 변경(Case 2/3) - 실시간 WS 알림으로 바로
+            # push하고, 일반 Notification은 중복이라 생략한다.
             return {
                 "contradiction_id": popup["contradiction_id"],
                 "message": popup["message"],
+                "judgment_case": popup["type"],
+                "actions": popup.get("actions", []),
             }
-
-        if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
-            return None
 
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
             if not notification_crud.is_notification_enabled(db, uuid.UUID(workspace_id), member.user_id, popup["type"]):

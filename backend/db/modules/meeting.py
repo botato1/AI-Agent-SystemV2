@@ -167,7 +167,7 @@ class Task(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('open','in_progress','done','cancelled')", name="chk_tasks_status"
+            "status IN ('open','in_progress','done','cancelled','suggested')", name="chk_tasks_status"
         ),
         CheckConstraint(
             "priority IS NULL OR priority IN ('low','medium','high')",
