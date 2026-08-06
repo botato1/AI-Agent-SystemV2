@@ -1111,9 +1111,15 @@ def delete_meeting_document_api(
     _get_meeting_or_404(db, meeting_id, workspace_id)
 
     try:
-        document_service.unlink_or_delete_meeting_document(db, document_id, meeting_id)
+        result = document_service.unlink_or_delete_meeting_document(db, document_id, meeting_id)
     except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="회의에 첨부된 문서를 찾을 수 없습니다.",
+        )
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"문서 삭제 중 오류가 발생했습니다: {result.get('error')}",
         )
