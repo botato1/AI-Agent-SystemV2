@@ -21,6 +21,8 @@ import {
   RepeatIcon,
   CloseIcon,
   HeadphoneIcon,
+  SplitIcon,
+  CheckIcon,
 } from "./icons";
 import ContradictionMessage from "./ContradictionMessage";
 import ChangeSummaryModal from "./ChangeSummaryModal";
@@ -28,12 +30,13 @@ import DocumentPreviewModal from "./DocumentPreviewModal";
 import MeetingAttendeesModal from "./MeetingAttendeesModal";
 import MeetingExportModal from "./MeetingExportModal";
 import MeetingStartModal from "./MeetingStartModal";
+import SplitSegmentModal from "./SplitSegmentModal";
 import MeetingAudioPlayer, { MeetingAudioPlayerHandle } from "./MeetingAudioPlayer";
 import Avatar from "./Avatar";
 import { hashAvatarColor } from "../data/avatarColors";
 import { getVoiceProfileListApi } from "../services/voice";
-import { getMeetingExportsApi, MeetingExportRecord } from "../services/meeting";
-import { getDocumentFileApi } from "../services/document";
+import { getMeetingExportsApi, MeetingExportRecord, SplitSegmentParams } from "../services/meeting";
+import { getDocumentFileApi, uploadDocumentApi } from "../services/document";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -175,6 +178,9 @@ function SegmentRow({
   onAssignSpeaker,
   onEditContent,
   onSeekAudio,
+  onSplit,
+  bulkEditValue,
+  onBulkEditChange,
   t,
 }: {
   speakerLabel: string | null | undefined;
@@ -187,12 +193,19 @@ function SegmentRow({
   onAssignSpeaker?: (segmentId: string, name: string) => void;
   onEditContent?: (segmentId: string, content: string) => Promise<boolean>;
   onSeekAudio?: (timeMs: number) => void;
+  onSplit?: (segmentId: string) => void;
+  // 전체 수정 모드 - 값이 주어지면(undefined가 아니면) 개별 수정/분할 UI 대신 항상 열려있는
+  // textarea 하나만 보여준다. 저장/취소는 상위(MeetingsPanel)에서 한 번에 처리한다.
+  bulkEditValue?: string;
+  onBulkEditChange?: (value: string) => void;
   t: any;
 }) {
   const name = speakerLabel || t.speaker_unknown;
   const isIdentified = !!speakerLabel && !isRawSpeakerLabel(speakerLabel);
   const canAssign = !speakerLabel && !!segmentId && !!onAssignSpeaker;
   const canEditContent = !!segmentId && !!onEditContent;
+  const canSplit = !!segmentId && !!onSplit;
+  const isBulkEditing = bulkEditValue !== undefined;
 
   const [isEditingContent, setIsEditingContent] = useState(false);
   const [draft, setDraft] = useState(content);
@@ -251,7 +264,14 @@ function SegmentRow({
             />
           )}
         </p>
-        {isEditingContent ? (
+        {isBulkEditing ? (
+          <textarea
+            value={bulkEditValue}
+            onChange={(e) => onBulkEditChange?.(e.target.value)}
+            rows={2}
+            className="mt-1 w-full rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-xs text-recall-text outline-none focus:border-recall-accent"
+          />
+        ) : isEditingContent ? (
           <div className="mt-1 flex flex-col gap-1.5">
             <textarea
               autoFocus
@@ -283,6 +303,15 @@ function SegmentRow({
         ) : (
           <p className="flex items-start gap-1.5 text-recall-textMuted">
             <span className="flex-1">{content}</span>
+            {canSplit && (
+              <button
+                onClick={() => onSplit!(segmentId!)}
+                title={t.meeting_split_btn}
+                className="flex-shrink-0 rounded p-0.5 text-recall-textMuted opacity-0 transition hover:text-recall-text group-hover:opacity-100"
+              >
+                <SplitIcon size={11} />
+              </button>
+            )}
             {canEditContent && (
               <button
                 onClick={() => {
@@ -568,6 +597,25 @@ function judgmentCaseLabel(t: any, judgmentCase: string): string {
     unreasoned_change: t.meeting_live_alert_unreasoned,
   };
   return map[judgmentCase] ?? judgmentCase;
+}
+
+// 결정 변경 감지 카드(Case2 근거있는 변경 / Case3 근거없는 변경)를 한눈에 구분할 수 있도록
+// 아이콘·타이틀·색을 판단 케이스별로 다르게 준다. Case3(근거 없음)이 제일 눈에 띄어야 한다.
+function decisionCaseDisplay(t: any, judgmentCase: "reasoned_change" | "unreasoned_change") {
+  if (judgmentCase === "unreasoned_change") {
+    return {
+      Icon: WarningIcon,
+      title: t.meeting_decision_case_unreasoned_title,
+      colorClass: "text-recall-danger",
+      borderClass: "border-recall-danger/30 bg-recall-danger/5",
+    };
+  }
+  return {
+    Icon: CheckIcon,
+    title: t.meeting_decision_case_reasoned_title,
+    colorClass: "text-emerald-400",
+    borderClass: "border-emerald-500/30 bg-emerald-500/5",
+  };
 }
 
 function actionLabel(t: any, action: string): string {
@@ -994,10 +1042,13 @@ export default function MeetingsPanel({
     summary,
     decisions,
     attendees,
+    documents,
     suggestedTasks,
     approveSuggestedTask,
     rejectSuggestedTask,
     reloadAttendees,
+    reloadDocuments,
+    removeDocument,
     isDetailLoading,
     isUploading,
     uploadAudio,
@@ -1006,9 +1057,64 @@ export default function MeetingsPanel({
     mapSpeakerNames,
     assignSegmentSpeaker,
     updateSegmentContent,
+    splitSegment,
     updateFullSummary,
     reload,
   } = useRealMeetings(workspaceId);
+
+  // 회의록 탭 관련 자료 - 조회/업로드 모두 회의 ID 기준 전용 API를 사용한다(채팅방 연결 여부와 무관).
+  const meetingDocInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingMeetingDoc, setIsUploadingMeetingDoc] = useState(false);
+  const [splitTargetSegmentId, setSplitTargetSegmentId] = useState<string | null>(null);
+
+  // 스크립트 전체 수정 - 줄마다 수정 버튼을 따로 누르지 않고, 한 번에 전부 편집 가능한 상태로 켰다가
+  // 바뀐 줄만 모아서 한 번에 저장한다. 백엔드는 여전히 줄 단위 PATCH라 프론트에서만 모아서 처리.
+  const [bulkEditDrafts, setBulkEditDrafts] = useState<Record<string, string> | null>(null);
+  const [isBulkSaving, setIsBulkSaving] = useState(false);
+
+  useEffect(() => {
+    setBulkEditDrafts(null);
+  }, [selectedMeetingId]);
+
+  function startBulkEdit() {
+    const drafts: Record<string, string> = {};
+    segments.forEach((s) => {
+      drafts[s.id] = s.content;
+    });
+    setBulkEditDrafts(drafts);
+  }
+
+  function cancelBulkEdit() {
+    setBulkEditDrafts(null);
+  }
+
+  async function saveBulkEdit() {
+    if (!bulkEditDrafts) return;
+    const changed = segments.filter((s) => {
+      const draft = bulkEditDrafts[s.id]?.trim();
+      return draft !== undefined && draft.length > 0 && draft !== s.content;
+    });
+    if (changed.length === 0) {
+      setBulkEditDrafts(null);
+      return;
+    }
+    setIsBulkSaving(true);
+    await Promise.all(changed.map((s) => updateSegmentContent(s.id, bulkEditDrafts[s.id].trim())));
+    setIsBulkSaving(false);
+    setBulkEditDrafts(null);
+  }
+
+  async function handleMeetingDocUpload(file: File) {
+    if (!selectedRealMeeting) return;
+    setIsUploadingMeetingDoc(true);
+    const res = await uploadDocumentApi(workspaceId, file, undefined, "document", selectedRealMeeting.id);
+    setIsUploadingMeetingDoc(false);
+    if (res.status === "success") {
+      reloadDocuments();
+    } else {
+      alert(`문서 업로드 실패: ${res.message}`);
+    }
+  }
 
   const [registeredSpeakerNames, setRegisteredSpeakerNames] = useState<string[]>([]);
   useEffect(() => {
@@ -1703,6 +1809,71 @@ export default function MeetingsPanel({
                               <p className="text-recall-textMuted">{t.meeting_minutes_content_empty}</p>
                             )}
                           </div>
+
+                          <div className="border-t border-recall-border pt-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <p className="font-semibold text-recall-textMuted">
+                                {t.meeting_minutes_related_docs_label}
+                              </p>
+                              <>
+                                <input
+                                  ref={meetingDocInputRef}
+                                  type="file"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    e.target.value = "";
+                                    if (file) handleMeetingDocUpload(file);
+                                  }}
+                                />
+                                <button
+                                  onClick={() => meetingDocInputRef.current?.click()}
+                                  disabled={isUploadingMeetingDoc}
+                                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2 py-1 text-[11px] text-recall-text hover:bg-white/5 disabled:opacity-50"
+                                >
+                                  <UploadIcon size={11} />
+                                  {isUploadingMeetingDoc ? t.doc_uploading : t.meeting_minutes_upload_doc_btn}
+                                </button>
+                              </>
+                            </div>
+
+                            {documents.length === 0 ? (
+                              <p className="text-recall-textMuted">{t.meeting_minutes_related_docs_empty}</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {documents.map((f) => (
+                                  <div
+                                    key={f.id}
+                                    className="flex items-center justify-between gap-2 rounded-lg border border-recall-border/60 bg-white/5 px-2.5 py-1.5"
+                                  >
+                                    <span className="flex min-w-0 items-center gap-1.5 text-recall-text">
+                                      <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
+                                      <span className="truncate">{f.original_filename}</span>
+                                    </span>
+                                    <span className="flex flex-shrink-0 items-center gap-2">
+                                      <button
+                                        onClick={() => setPreviewDoc({ id: f.id, name: f.original_filename })}
+                                        className="text-[11px] text-recall-accent underline hover:opacity-80"
+                                      >
+                                        {t.meeting_minutes_view_doc_btn}
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          if (window.confirm(t.meeting_minutes_delete_doc_confirm)) {
+                                            removeDocument(f.id);
+                                          }
+                                        }}
+                                        title={t.meeting_minutes_delete_doc_btn}
+                                        className="text-recall-textMuted hover:text-recall-danger"
+                                      >
+                                        <TrashIcon size={12} />
+                                      </button>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       );
                     })()
@@ -1710,11 +1881,41 @@ export default function MeetingsPanel({
                     <p className="text-xs text-recall-textMuted">{t.meeting_no_script}</p>
                   ) : (
                     <div className="space-y-3 text-xs text-recall-textMuted">
-                      <UnmappedSpeakerChips
-                        labels={uniqueRawSpeakerLabels(segments.map((s) => s.speaker_label))}
-                        onAssign={mapSpeakerNames}
-                        t={t}
-                      />
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1">
+                          <UnmappedSpeakerChips
+                            labels={uniqueRawSpeakerLabels(segments.map((s) => s.speaker_label))}
+                            onAssign={mapSpeakerNames}
+                            t={t}
+                          />
+                        </div>
+                        {bulkEditDrafts ? (
+                          <div className="flex flex-shrink-0 gap-1.5">
+                            <button
+                              onClick={cancelBulkEdit}
+                              disabled={isBulkSaving}
+                              className="rounded-lg border border-recall-border px-2.5 py-1 text-[11px] text-recall-textMuted hover:bg-white/5 disabled:opacity-50"
+                            >
+                              {t.task_cancel}
+                            </button>
+                            <button
+                              onClick={saveBulkEdit}
+                              disabled={isBulkSaving}
+                              className="rounded-lg bg-recall-accent px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                            >
+                              {isBulkSaving ? t.meeting_export_saving : t.task_save}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={startBulkEdit}
+                            className="flex flex-shrink-0 items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1 text-[11px] text-recall-text hover:bg-white/5"
+                          >
+                            <PencilIcon size={11} />
+                            {t.meeting_bulk_edit_btn}
+                          </button>
+                        )}
+                      </div>
                       {segments
                         .slice()
                         .sort((a, b) => a.segment_index - b.segment_index)
@@ -1730,6 +1931,11 @@ export default function MeetingsPanel({
                             onAssignSpeaker={assignSegmentSpeaker}
                             onEditContent={updateSegmentContent}
                             onSeekAudio={(ms) => audioPlayerRef.current?.seekTo(ms)}
+                            onSplit={(id) => setSplitTargetSegmentId(id)}
+                            bulkEditValue={bulkEditDrafts ? bulkEditDrafts[s.id] ?? s.content : undefined}
+                            onBulkEditChange={(value) =>
+                              setBulkEditDrafts((prev) => (prev ? { ...prev, [s.id]: value } : prev))
+                            }
                             t={t}
                           />
                         ))}
@@ -1813,22 +2019,36 @@ export default function MeetingsPanel({
             ) : (
               contradictions.map((c) => {
                 const isExpanded = expandedContradictionIds.has(c.id);
+                const isDecisionCard = c.source === "decision";
+                const caseDisplay = isDecisionCard && c.judgment_case ? decisionCaseDisplay(t, c.judgment_case) : null;
                 return (
                   <div
                     key={c.id}
                     onClick={() => toggleContradictionExpanded(c.id)}
-                    className="cursor-pointer rounded-xl border border-recall-border/80 bg-recall-bgSoft/40 p-2.5 hover:border-recall-accent/50 transition"
+                    className={`cursor-pointer rounded-xl border p-2.5 transition ${
+                      caseDisplay
+                        ? `${caseDisplay.borderClass} hover:opacity-90`
+                        : "border-recall-border/80 bg-recall-bgSoft/40 hover:border-recall-accent/50"
+                    }`}
                   >
                     <div className="mb-1 flex items-center justify-between gap-1">
-                      <span className="flex items-center gap-1 text-[11px] font-medium text-recall-textMuted">
-                        {c.source_type === "meeting_segment" ? (
-                          <MicIcon size={11} className="flex-shrink-0" />
-                        ) : (
-                          <DocumentIcon size={11} className="flex-shrink-0" />
-                        )}
-                        {c.source_type === "meeting_segment" ? t.contradiction_source_meeting : t.contradiction_source_chat}
-                      </span>
-                      {severityBadge(c.severity, t)}
+                      {caseDisplay ? (
+                        <span className={`flex items-center gap-1 text-[11px] font-bold ${caseDisplay.colorClass}`}>
+                          <caseDisplay.Icon size={12} className="flex-shrink-0" />
+                          {caseDisplay.title}
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[11px] font-medium text-recall-textMuted">
+                          {c.source_type === "meeting_segment" ? (
+                            <MicIcon size={11} className="flex-shrink-0" />
+                          ) : (
+                            <DocumentIcon size={11} className="flex-shrink-0" />
+                          )}
+                          {c.source_type === "meeting_segment" ? t.contradiction_source_meeting : t.contradiction_source_chat}
+                        </span>
+                      )}
+                      {/* severity(모순 심각도)는 문서-발화 모순 감지 전용 개념이라 decision 카드에서는 숨긴다 */}
+                      {!isDecisionCard && severityBadge(c.severity, t)}
                     </div>
                     <ContradictionMessage
                       contradiction={c}
@@ -1910,6 +2130,19 @@ export default function MeetingsPanel({
           t={t}
         />
       )}
+
+      {splitTargetSegmentId && (() => {
+        const target = segments.find((s) => s.id === splitTargetSegmentId);
+        if (!target) return null;
+        return (
+          <SplitSegmentModal
+            segment={target}
+            onClose={() => setSplitTargetSegmentId(null)}
+            onSplit={(id, params: SplitSegmentParams) => splitSegment(id, params)}
+            t={t}
+          />
+        );
+      })()}
 
       {showAttendeesModal && selectedRealMeeting && (
         <MeetingAttendeesModal

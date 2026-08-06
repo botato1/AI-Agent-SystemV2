@@ -252,6 +252,42 @@ export interface SearchMeetingsResponse {
   error: string | null;
 }
 
+export interface MeetingDocumentItem {
+  id: string;
+  original_filename: string;
+  file_kind: string;
+  analysis_status: string;
+  created_at: string;
+}
+
+export interface GetMeetingDocumentsResponse {
+  status: "success" | "error";
+  documents: MeetingDocumentItem[];
+  message: string;
+  error: string | null;
+}
+
+export interface DeleteMeetingDocumentResponse {
+  status: "success" | "error";
+  message: string;
+  error: string | null;
+}
+
+export interface SplitSegmentParams {
+  firstContent: string;
+  firstSpeakerLabel?: string;
+  secondContent: string;
+  secondSpeakerLabel?: string;
+}
+
+export interface SplitMeetingSegmentResponse {
+  status: "success" | "error";
+  first: MeetingSegment | null;
+  second: MeetingSegment | null;
+  message: string;
+  error: string | null;
+}
+
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -2043,6 +2079,196 @@ export async function searchMeetingsApi(
       status: "error",
       meetings: [],
       total_count: 0,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 회의 첨부 참고 문서 목록 조회 API (GET /api/workspaces/{workspace_id}/meetings/{meeting_id}/documents)
+ */
+export async function getMeetingDocumentsApi(
+  workspaceId: string,
+  meetingId: string
+): Promise<GetMeetingDocumentsResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      documents: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/documents`,
+      { method: "GET" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "참고 문서 목록을 불러오지 못했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 회의입니다.";
+
+      return {
+        status: "error",
+        documents: [],
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      documents: data.documents || [],
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getMeetingDocumentsApi error:", error);
+    return {
+      status: "error",
+      documents: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 회의 첨부 문서 삭제(또는 연결 해제) API
+ * (DELETE /api/workspaces/{workspace_id}/meetings/{meeting_id}/documents/{document_id})
+ */
+export async function deleteMeetingDocumentApi(
+  workspaceId: string,
+  meetingId: string,
+  documentId: string
+): Promise<DeleteMeetingDocumentResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/documents/${documentId}`,
+      { method: "DELETE" }
+    );
+
+    if (response.status === 204) {
+      return {
+        status: "success",
+        message: "문서가 삭제되었습니다.",
+        error: null,
+      };
+    }
+
+    const textData = await response.text();
+    const data = textData ? JSON.parse(textData) : {};
+
+    let defaultMsg = "문서 삭제에 실패했습니다.";
+    if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+    else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 삭제할 수 있습니다.";
+    else if (response.status === 404) defaultMsg = "존재하지 않는 회의이거나 첨부된 문서입니다.";
+
+    return {
+      status: "error",
+      message: data.message || defaultMsg,
+      error: data.error || `HTTP_${response.status}`,
+    };
+  } catch (error) {
+    console.error("deleteMeetingDocumentApi error:", error);
+    return {
+      status: "error",
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 발화 세그먼트 분할 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/segments/{segment_id}/split)
+ */
+export async function splitMeetingSegmentApi(
+  workspaceId: string,
+  meetingId: string,
+  segmentId: string,
+  params: SplitSegmentParams
+): Promise<SplitMeetingSegmentResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      first: null,
+      second: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/segments/${segmentId}/split`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          first_content: params.firstContent,
+          first_speaker_label: params.firstSpeakerLabel || undefined,
+          second_content: params.secondContent,
+          second_speaker_label: params.secondSpeakerLabel || undefined,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "발화 분할에 실패했습니다.";
+      if (response.status === 400) defaultMsg = "분할할 내용을 입력하거나, 원본 구간이 너무 짧지 않은지 확인해 주세요.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 분할할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 회의이거나 발화 세그먼트입니다.";
+      else if (response.status === 422) defaultMsg = "요청 형식을 확인해 주세요.";
+
+      return {
+        status: "error",
+        first: null,
+        second: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      first: data.first || null,
+      second: data.second || null,
+      message: "발화가 분할되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("splitMeetingSegmentApi error:", error);
+    return {
+      status: "error",
+      first: null,
+      second: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

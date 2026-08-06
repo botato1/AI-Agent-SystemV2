@@ -5,15 +5,20 @@ import {
   MeetingSummary,
   Decision,
   MeetingAttendee,
+  MeetingDocumentItem,
+  SplitSegmentParams,
   getMeetingListApi,
   deleteMeetingApi,
   getMeetingSegmentsApi,
   getMeetingSummaryApi,
   getMeetingDecisionsApi,
   getMeetingAttendeesApi,
+  getMeetingDocumentsApi,
+  deleteMeetingDocumentApi,
   uploadMeetingAudioApi,
   mapSpeakerNamesApi,
   updateMeetingSegmentApi,
+  splitMeetingSegmentApi,
   updateMeetingSummaryApi,
   renameMeetingApi,
 } from "../services/meeting";
@@ -30,6 +35,7 @@ export function useRealMeetings(workspaceId: string) {
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [attendees, setAttendees] = useState<MeetingAttendee[]>([]);
+  const [documents, setDocuments] = useState<MeetingDocumentItem[]>([]);
   const [suggestedTasks, setSuggestedTasks] = useState<BackendTask[]>([]);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -66,16 +72,18 @@ export function useRealMeetings(workspaceId: string) {
         setDecisions([]);
         setAttendees([]);
         setSuggestedTasks([]);
+        setDocuments([]);
         return;
       }
 
       setIsDetailLoading(true);
-      const [segRes, sumRes, decRes, attRes, suggestedRes] = await Promise.all([
+      const [segRes, sumRes, decRes, attRes, suggestedRes, docRes] = await Promise.all([
         getMeetingSegmentsApi(workspaceId, selectedMeetingId),
         getMeetingSummaryApi(workspaceId, selectedMeetingId),
         getMeetingDecisionsApi(workspaceId, selectedMeetingId),
         getMeetingAttendeesApi(workspaceId, selectedMeetingId),
         getSuggestedTasksApi(workspaceId, selectedMeetingId),
+        getMeetingDocumentsApi(workspaceId, selectedMeetingId),
       ]);
       setIsDetailLoading(false);
 
@@ -84,6 +92,7 @@ export function useRealMeetings(workspaceId: string) {
       setDecisions(decRes.status === "success" ? decRes.decisions : []);
       setAttendees(attRes.status === "success" ? attRes.attendees : []);
       setSuggestedTasks(suggestedRes.status === "success" ? suggestedRes.tasks : []);
+      setDocuments(docRes.status === "success" ? docRes.documents : []);
     }
 
     loadDetail();
@@ -93,6 +102,22 @@ export function useRealMeetings(workspaceId: string) {
     if (!workspaceId || !selectedMeetingId) return;
     const res = await getMeetingAttendeesApi(workspaceId, selectedMeetingId);
     if (res.status === "success") setAttendees(res.attendees);
+  }
+
+  async function reloadDocuments() {
+    if (!workspaceId || !selectedMeetingId) return;
+    const res = await getMeetingDocumentsApi(workspaceId, selectedMeetingId);
+    if (res.status === "success") setDocuments(res.documents);
+  }
+
+  async function removeDocument(documentId: string) {
+    if (!selectedMeetingId) return;
+    const res = await deleteMeetingDocumentApi(workspaceId, selectedMeetingId, documentId);
+    if (res.status === "success") {
+      setDocuments((prev) => prev.filter((d) => d.id !== documentId));
+    } else {
+      alert(`문서 삭제 실패: ${res.message}`);
+    }
   }
 
   async function uploadAudio(file: File, title: string) {
@@ -146,6 +171,19 @@ export function useRealMeetings(workspaceId: string) {
       return true;
     }
     alert(`회의록 내용 수정 실패: ${res.message}`);
+    return false;
+  }
+
+  // 한 세그먼트에 서로 다른 화자의 발언이 섞여 있을 때, 특정 지점에서 둘로 나누고 화자를 재지정
+  async function splitSegment(segmentId: string, params: SplitSegmentParams): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await splitMeetingSegmentApi(workspaceId, selectedMeetingId, segmentId, params);
+    if (res.status === "success" && res.first && res.second) {
+      const { first, second } = res;
+      setSegments((prev) => [...prev.map((s) => (s.id === segmentId ? first : s)), second]);
+      return true;
+    }
+    alert(`발화 분할 실패: ${res.message}`);
     return false;
   }
 
@@ -208,10 +246,13 @@ export function useRealMeetings(workspaceId: string) {
     summary,
     decisions,
     attendees,
+    documents,
     suggestedTasks,
     approveSuggestedTask,
     rejectSuggestedTask,
     reloadAttendees,
+    reloadDocuments,
+    removeDocument,
     isDetailLoading,
     isUploading,
     uploadAudio,
@@ -220,6 +261,7 @@ export function useRealMeetings(workspaceId: string) {
     mapSpeakerNames,
     assignSegmentSpeaker,
     updateSegmentContent,
+    splitSegment,
     updateFullSummary,
     reload: loadMeetings,
   };

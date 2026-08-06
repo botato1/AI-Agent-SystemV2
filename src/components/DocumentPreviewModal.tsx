@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { DocumentDetail, DocumentFigure, getDocumentApi, getDocumentFiguresApi } from "../services/document";
+import { DocumentDetail, getDocumentApi } from "../services/document";
 import { CloseIcon, DocumentIcon } from "./icons";
 import { cleanExtractedText } from "./DocumentContentBlocks";
 import DocumentOriginalViewer from "./DocumentOriginalViewer";
@@ -28,7 +28,6 @@ export default function DocumentPreviewModal({
   t,
 }: DocumentPreviewModalProps) {
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
-  const [figures, setFigures] = useState<DocumentFigure[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<DetailTab>("summary");
 
@@ -37,13 +36,9 @@ export default function DocumentPreviewModal({
 
     async function load() {
       setIsLoading(true);
-      const [detailRes, figuresRes] = await Promise.all([
-        getDocumentApi(workspaceId, documentId),
-        getDocumentFiguresApi(workspaceId, documentId),
-      ]);
+      const detailRes = await getDocumentApi(workspaceId, documentId);
       if (!cancelled) {
         setDetail(detailRes.status === "success" ? detailRes.document : null);
-        setFigures(figuresRes.status === "success" ? figuresRes.figures : []);
         setIsLoading(false);
         setActiveTab("summary");
       }
@@ -55,7 +50,9 @@ export default function DocumentPreviewModal({
     };
   }, [workspaceId, documentId]);
 
-  const hasOriginal = !!(detail?.raw.chunks?.length || detail?.raw.original_text || figures.length);
+  // 원본 파일 보기는 분석 결과(청크/요약)가 아니라 파일 원본을 그대로 다시 받아오는 것이라
+  // 분석이 끝나기 전(pending/processing)이어도 항상 볼 수 있다.
+  const hasOriginal = !!detail;
   const hasSummary = !!detail?.analysis.summary;
   // 요약/원문 둘 다 있을 때만 탭으로 전환하고, 하나만 있으면 그냥 그거 하나만 보여준다
   const showTabs = hasSummary && hasOriginal;
@@ -136,24 +133,25 @@ export default function DocumentPreviewModal({
             <p className="text-base text-recall-textMuted">{t.common_loading}</p>
           ) : !detail ? (
             <p className="text-base text-recall-danger">{t.doc_preview_load_failed}</p>
-          ) : detail.analysis_status !== "completed" ? (
-            <p className="text-base text-recall-textMuted">
-              {detail.analysis_status === "failed" ? t.doc_analysis_failed_msg : t.doc_preview_not_analyzed}
-            </p>
           ) : !hasSummary && !hasOriginal ? (
             <p className="text-base text-recall-textMuted">{t.doc_preview_empty}</p>
           ) : (
             <>
-              {visibleTab === "summary" && hasSummary && (
-                <div className="rounded-xl border border-recall-border bg-recall-bgMain p-4">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                    {t.doc_tab_summary}
+              {visibleTab === "summary" &&
+                (hasSummary ? (
+                  <div className="rounded-xl border border-recall-border bg-recall-bgMain p-4">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                      {t.doc_tab_summary}
+                    </p>
+                    <p className="whitespace-pre-wrap text-base leading-relaxed text-recall-text">
+                      {cleanExtractedText(detail.analysis.summary!)}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-base text-recall-textMuted">
+                    {detail.analysis_status === "failed" ? t.doc_analysis_failed_msg : t.doc_preview_not_analyzed}
                   </p>
-                  <p className="whitespace-pre-wrap text-base leading-relaxed text-recall-text">
-                    {cleanExtractedText(detail.analysis.summary!)}
-                  </p>
-                </div>
-              )}
+                ))}
 
               {visibleTab === "original" && (
                 <div className="h-[500px] rounded-xl border border-recall-border bg-recall-bgMain p-2">
