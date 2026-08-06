@@ -311,6 +311,7 @@ def judge(
         reference_decision_id=decision.id,
         statement_text_snapshot=statement,
         reference_text_snapshot=decision.decision_text,
+        reason=decision.reason,  # [추가] 기존 결정의 사유 - Contradiction 모델의 실제 컬럼
         confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
         deduplication_key=dedup_key,
         judgment_case=judgment_case,
