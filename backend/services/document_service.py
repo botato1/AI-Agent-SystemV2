@@ -9,6 +9,7 @@ from fastapi import UploadFile, BackgroundTasks
 import httpx
 from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
+from backend.db.modules import RoomFileLink
 
 from backend.db.crud import ai_chat_crud, content_chunk_crud, contradiction_crud, document_crud, file_crud, meeting_crud, room_crud, similarity_crud
 from backend.modules.rag.document_loader import load_document
@@ -728,3 +729,20 @@ def delete_processed_document(db: Session, file_id: UUID) -> dict:
             "deleted": None,
             "error": repr(e),
         }
+    
+def unlink_or_delete_meeting_document(db: Session, file_id: UUID, meeting_id: UUID) -> dict:
+    """회의 첨부 문서를 삭제한다. 채팅방에도 연결된 문서면 회의 연결만 해제하고,
+    그 회의만을 위해 올라온 문서면 완전히 삭제(RAG/모순 참조 정리 포함)한다."""
+    workspace_file = file_crud.get_file(db, file_id)
+    if not workspace_file or workspace_file.related_meeting_id != meeting_id:
+        raise PermissionError("회의에 첨부된 문서를 찾을 수 없습니다.")
+
+    has_room_link = (
+        db.query(RoomFileLink).filter(RoomFileLink.file_id == file_id).first() is not None
+    )
+    if has_room_link:
+        workspace_file.related_meeting_id = None
+        db.commit()
+        return {"status": "unlinked", "file_id": str(file_id)}
+
+    return delete_processed_document(db, file_id)

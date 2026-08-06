@@ -52,6 +52,7 @@ class ContradictionSchema(ORMBaseSchema):
     reference_chunk_id: Optional[UUID] = None
     reference_code_fact_id: Optional[UUID] = None
     reference_decision_id: Optional[UUID] = None
+    judgment_case: Optional[str] = None  # "reasoned_change" | "unreasoned_change" (decision 기반일 때만)
 
     statement_text_snapshot: str = Field(
         ...,
