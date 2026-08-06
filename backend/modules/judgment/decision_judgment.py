@@ -311,6 +311,9 @@ def judge(
         reference_decision_id=decision.id,
         statement_text_snapshot=statement,
         reference_text_snapshot=decision.decision_text,
+        display_message=message,  # [추가 - UI 카드용] 조합해둔 자연어 설명 그대로 전달
+        reference_source_name=decision.title,  # [추가] 결정 제목 - "논의 주제"로 표시됨
+        reason=decision.reason,  # [추가] 기존 결정의 사유
         confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
         deduplication_key=dedup_key,
         judgment_case=judgment_case,
