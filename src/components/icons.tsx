@@ -40,4 +40,5 @@ export {
   Search as SearchIcon,
   Calendar as CalendarIcon,
   Headphones as HeadphoneIcon,
+  Scissors as SplitIcon,
 } from "lucide-react";
