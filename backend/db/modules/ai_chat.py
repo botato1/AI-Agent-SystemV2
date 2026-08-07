@@ -24,12 +24,10 @@ class AiChatSession(Base):
     __table_args__ = (
         Index(
             "idx_ai_chat_sessions_owner_room", "workspace_id", "room_id", "user_id",
-            unique=True,
             postgresql_where=text("deleted_at IS NULL AND room_id IS NOT NULL"),
         ),
         Index(
             "idx_ai_chat_sessions_owner_workspace", "workspace_id", "user_id",
-            unique=True,
             postgresql_where=text("deleted_at IS NULL AND room_id IS NULL"),
         ),
     )

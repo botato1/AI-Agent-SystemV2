@@ -61,6 +61,7 @@ class WorkspaceFile(Base):
     file_size_bytes = Column(BigInteger, nullable=False)
     sha256_hash = Column(String(64), nullable=False)
     external_ref = Column(String(255), nullable=True)
+    related_meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=True)
 
     version_group_id = Column(UUID(as_uuid=True), nullable=False)
     version_no = Column(Integer, nullable=False, server_default="1")
@@ -86,7 +87,7 @@ class WorkspaceFile(Base):
         ),
         CheckConstraint(
             "origin_type IN ('worktree','document_analysis','room_upload',"
-            "'meeting_upload','live_recording','meeting_summary')",
+            "'meeting_upload','live_recording','meeting_summary','meeting_export','meeting_reference')",
             name="chk_workspace_files_origin",
         ),
         CheckConstraint(

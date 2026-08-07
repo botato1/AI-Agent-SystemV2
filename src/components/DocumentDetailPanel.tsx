@@ -1,7 +1,6 @@
-import { DocumentIcon } from "./icons";
+// src/components/DocumentDetailPanel.tsx
 import { DocumentDetail, DocumentFigure } from "../services/document";
-import { cleanExtractedText } from "./DocumentContentBlocks";
-import DocumentOriginalPages from "./DocumentOriginalPages";
+import ContentBlocks, { cleanExtractedText } from "./DocumentContentBlocks";
 
 interface DocumentDetailPanelProps {
   detail: DocumentDetail | null;
@@ -10,7 +9,6 @@ interface DocumentDetailPanelProps {
   t: any;
 }
 
-// 문서 상세(원본 + 분석정보 + 이미지 + 요약) 그리드 — "개별 문서"와 워크트리 파일 미리보기가 공유한다.
 export default function DocumentDetailPanel({ detail, figures, isLoading, t }: DocumentDetailPanelProps) {
   if (isLoading) {
     return (
@@ -20,32 +18,28 @@ export default function DocumentDetailPanel({ detail, figures, isLoading, t }: D
     );
   }
 
+  const originalText = detail?.raw.original_text ?? "";
+
   return (
     <div className="grid flex-1 grid-cols-3 gap-4 overflow-hidden">
-      {/* 원본 패널 (메인, 2/3 폭) */}
+      {/* 실제 파일이 아니라, AI가 추출/정리한 원본 텍스트 (실제 원본 파일은 [원본 파일] 탭에서 확인) */}
+      {/* 표 구조를 보존해야 하므로 여기서 미리 cleanExtractedText를 돌리면 안 됨 (ContentBlocks가 표/문단을 나눠서 문단만 정리함) */}
       <div className="col-span-2 flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft p-4 overflow-hidden">
         <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
           {t.doc_tab_original}
         </p>
-        {detail?.raw.original_text || detail?.raw.chunks?.length || figures.length ? (
-          <div className="flex-1 space-y-2 overflow-y-auto text-sm leading-relaxed text-recall-textMuted">
-            <DocumentOriginalPages
-              chunks={detail?.raw.chunks ?? []}
-              originalText={detail?.raw.original_text ?? null}
-              figures={figures}
-            />
+        {originalText ? (
+          <div className="flex-1 space-y-3 overflow-y-auto custom-scrollbar pr-1">
+            <ContentBlocks text={originalText} />
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-recall-border bg-recall-bgMain p-4 text-center">
-            <div>
-              <DocumentIcon size={24} className="mx-auto mb-2 text-recall-textMuted" />
-              <p className="text-sm text-recall-textMuted">{t.original_not_supported}</p>
-            </div>
+            <p className="text-sm text-recall-textMuted">{t.original_not_supported}</p>
           </div>
         )}
       </div>
 
-      {/* 분석 정보 / 이미지 / 요약 패널 (보조, 1/3 폭) */}
+      {/* 분석 정보 / 요약 패널 (1/3 폭) */}
       <div className="flex flex-col gap-4 overflow-hidden">
         <div className="rounded-xl border border-recall-border bg-recall-bgSoft p-4">
           <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">분석 정보</p>
@@ -62,7 +56,7 @@ export default function DocumentDetailPanel({ detail, figures, isLoading, t }: D
           </div>
         </div>
 
-        <div className="max-h-48 flex-shrink-0 overflow-y-auto rounded-xl border border-recall-border bg-recall-bgSoft p-4">
+        <div className="flex-1 overflow-y-auto rounded-xl border border-recall-border bg-recall-bgSoft p-4">
           <p className="mb-2 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
             {t.doc_tab_summary}
           </p>

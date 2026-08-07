@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useNotifications } from "../hooks/useNotifications";
 import { AppNotification, NotificationType } from "../services/notification";
+import { Channel } from "../types";
+import { PlaceholderKey } from "./Sidebar";
 import {
   BellIcon,
   WarningIcon,
@@ -9,10 +11,14 @@ import {
   MicIcon,
   ClockIcon,
   RepeatIcon,
+  CloseIcon,
 } from "./icons";
 
 interface NotificationBellProps {
   workspaceId: string;
+  channels: Channel[];
+  onSelectChannel: (channel: Channel) => void;
+  onSelectPlaceholder: (key: PlaceholderKey) => void;
 }
 
 const TYPE_META: Record<NotificationType, { label: string; icon: typeof BellIcon; className: string }> = {
@@ -26,6 +32,10 @@ const TYPE_META: Record<NotificationType, { label: string; icon: typeof BellIcon
   file_analysis_failed: { label: "파일 분석 실패", icon: WarningIcon, className: "text-recall-danger" },
 };
 
+// 읽은 알림을 화면에서 치우기 전까지 보여주는 시간 - 바로 사라지면 "읽음" 표시를
+// 확인할 새도 없이 없어져서, 잠깐 흐리게 보여준 뒤에 치운다.
+const HIDE_AFTER_READ_MS = 3000;
+
 function formatRelativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const diffMin = Math.floor(diffMs / 60000);
@@ -37,9 +47,34 @@ function formatRelativeTime(iso: string): string {
   return `${diffDay}일 전`;
 }
 
-export default function NotificationBell({ workspaceId }: NotificationBellProps) {
+// 알림 종류/참조 정보로 "관련 내용"이 어딘지 판단한다. room_id가 있으면 그 채팅방이
+// 제일 정확한 목적지이고, 없으면 알림 종류에 맞는 화면으로 대략 안내한다.
+function resolveNavigateTarget(
+  n: AppNotification
+): { kind: "channel"; roomId: string } | { kind: "placeholder"; key: PlaceholderKey } | null {
+  if (n.room_id) return { kind: "channel", roomId: n.room_id };
+  if (n.ref_type === "meeting_segment") return { kind: "placeholder", key: "voiceMeeting" };
+  if (n.type === "document_recommendation" || n.type === "file_analysis_completed" || n.type === "file_analysis_failed") {
+    return { kind: "placeholder", key: "docAnalysis" };
+  }
+  if (n.type === "meeting_summary_ready" || n.type === "decision_reminder" || n.type === "repeat_discussion") {
+    return { kind: "placeholder", key: "voiceMeeting" };
+  }
+  return null;
+}
+
+export default function NotificationBell({
+  workspaceId,
+  channels,
+  onSelectChannel,
+  onSelectPlaceholder,
+}: NotificationBellProps) {
   const { notifications, unreadCount, isLoading, markRead } = useNotifications(workspaceId);
   const [isOpen, setIsOpen] = useState(false);
+  // 이번 세션에서 클릭해서 읽음 처리된 것들만 잠깐 보여주고 치운다. 예전부터 읽혀있던
+  // 알림은(서버가 처음부터 is_read=true로 내려준 것) 애초에 목록에 안 보이게 한다.
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const hideTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,9 +88,49 @@ export default function NotificationBell({ workspaceId }: NotificationBellProps)
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
-  function handleItemClick(n: AppNotification) {
+  useEffect(() => {
+    const timers = hideTimersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
+
+  function scheduleHide(id: string) {
+    if (hideTimersRef.current.has(id)) return;
+    const timer = setTimeout(() => {
+      setHiddenIds((prev) => new Set(prev).add(id));
+      hideTimersRef.current.delete(id);
+    }, HIDE_AFTER_READ_MS);
+    hideTimersRef.current.set(id, timer);
+  }
+
+  function dismiss(n: AppNotification) {
+    const timer = hideTimersRef.current.get(n.id);
+    if (timer) clearTimeout(timer);
+    hideTimersRef.current.delete(n.id);
+    setHiddenIds((prev) => new Set(prev).add(n.id));
+    // 안 읽은 채로 지우면 읽음 카운트랑 안 맞으니, 지울 때 읽음 처리도 같이 한다
     if (!n.is_read) markRead(n.id);
   }
+
+  function handleItemClick(n: AppNotification) {
+    if (!n.is_read) {
+      markRead(n.id);
+      scheduleHide(n.id);
+    }
+
+    const target = resolveNavigateTarget(n);
+    if (target?.kind === "channel") {
+      const channel = channels.find((c) => c.id === target.roomId);
+      if (channel) onSelectChannel(channel);
+    } else if (target?.kind === "placeholder") {
+      onSelectPlaceholder(target.key);
+    }
+    if (target) setIsOpen(false);
+  }
+
+  // 예전부터 읽혀있던 알림(이번 세션에서 안 읽음->읽음으로 안 바뀐 것)은 처음부터 숨긴다
+  const visibleNotifications = notifications.filter((n) => (n.is_read ? hideTimersRef.current.has(n.id) : true) && !hiddenIds.has(n.id));
 
   return (
     <div ref={containerRef} className="relative">
@@ -82,32 +157,48 @@ export default function NotificationBell({ workspaceId }: NotificationBellProps)
           <div className="flex-1 overflow-y-auto">
             {isLoading ? (
               <p className="p-4 text-center text-sm text-recall-textMuted">불러오는 중...</p>
-            ) : notifications.length === 0 ? (
+            ) : visibleNotifications.length === 0 ? (
               <p className="p-4 text-center text-sm text-recall-textMuted">알림이 없습니다.</p>
             ) : (
-              notifications.map((n) => {
+              visibleNotifications.map((n) => {
                 const meta = TYPE_META[n.type];
                 const Icon = meta?.icon || BellIcon;
+                const canNavigate = !!resolveNavigateTarget(n);
                 return (
-                  <button
+                  <div
                     key={n.id}
-                    onClick={() => handleItemClick(n)}
-                    className={`flex w-full items-start gap-2.5 border-b border-recall-border/60 px-3 py-2.5 text-left last:border-b-0 hover:bg-white/5 ${
+                    className={`group flex w-full items-start gap-2.5 border-b border-recall-border/60 px-3 py-2.5 last:border-b-0 hover:bg-white/5 ${
                       n.is_read ? "opacity-60" : ""
                     }`}
                   >
-                    <Icon size={15} className={`mt-0.5 flex-shrink-0 ${meta?.className || "text-recall-textMuted"}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        {!n.is_read && (
-                          <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-recall-accent" />
-                        )}
-                        <p className="truncate text-sm font-medium text-recall-text">{n.title}</p>
+                    <button
+                      onClick={() => handleItemClick(n)}
+                      title={canNavigate ? "관련 내용으로 이동" : undefined}
+                      className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                    >
+                      <Icon size={15} className={`mt-0.5 flex-shrink-0 ${meta?.className || "text-recall-textMuted"}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          {!n.is_read && (
+                            <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-recall-accent" />
+                          )}
+                          <p className="truncate text-sm font-medium text-recall-text">{n.title}</p>
+                        </div>
+                        <p className="mt-0.5 whitespace-pre-line text-xs text-recall-textMuted">{n.message}</p>
+                        <p className="mt-1 text-[11px] text-recall-textMuted">{formatRelativeTime(n.created_at)}</p>
                       </div>
-                      <p className="mt-0.5 line-clamp-2 text-xs text-recall-textMuted">{n.message}</p>
-                      <p className="mt-1 text-[11px] text-recall-textMuted">{formatRelativeTime(n.created_at)}</p>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        dismiss(n);
+                      }}
+                      title="목록에서 지우기"
+                      className="mt-0.5 flex-shrink-0 text-recall-textMuted opacity-0 hover:text-recall-text group-hover:opacity-100"
+                    >
+                      <CloseIcon size={13} />
+                    </button>
+                  </div>
                 );
               })
             )}

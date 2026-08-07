@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import contradiction_crud, file_crud, notification_crud, workspace_crud
+from backend.db.crud import contradiction_crud, file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
@@ -32,6 +32,45 @@ def _get_contradiction_or_404(db: Session, contradiction_id: uuid.UUID, workspac
         )
     return contradiction
 
+def _resolve_source_meeting(db: Session, contradiction):
+    """session_meeting_id(결정 기반) 우선, 없으면 meeting_segment_id로 역추적(문서 기반)."""
+    if contradiction.session_meeting_id:
+        return meeting_crud.get_meeting(db, contradiction.session_meeting_id)
+    if contradiction.meeting_segment_id:
+        segment = meeting_crud.get_segment(db, contradiction.meeting_segment_id)
+        if segment:
+            return meeting_crud.get_meeting(db, segment.meeting_id)
+    return None
+
+def _check_meeting_not_recording(db: Session, contradiction) -> None:
+    """회의가 아직 진행 중(recording)이면 모순 처리(해결/무시)를 거부한다.
+    회의 종료 후 한 번에 일괄 정리하도록 유도하기 위함 (교수님 피드백 반영)."""
+    meeting = _resolve_source_meeting(db, contradiction)
+    if meeting and meeting.status == "recording":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="회의가 진행 중일 때는 모순을 처리할 수 없습니다. 회의 종료 후 처리해주세요.",
+        )
+    
+def _check_not_chat_sourced(contradiction) -> None:
+    """채팅발 모순은 알림 전용 — resolve/dismiss 처리 자체를 막는다.
+    이유: 반영 시 RAG(decision_collection) 재인덱싱이 안 되는 문제 때문에
+    회의처럼 실제로 변경을 확정하는 액션을 아직 지원할 수 없음."""
+    if contradiction.source_type == "room_message":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="채팅에서 감지된 모순은 알림 용도로만 제공됩니다. 처리하려면 회의에서 다시 확인해주세요.",
+        )
+
+
+def _resolve_reference_meeting(db: Session, contradiction):
+    """reference_type이 decision일 때만 — 그 결정이 나온 회의."""
+    if contradiction.reference_type == "decision" and contradiction.reference_decision_id:
+        decision = db.get(Decision, contradiction.reference_decision_id)
+        if decision:
+            return meeting_crud.get_meeting(db, decision.meeting_id)
+    return None
+
 def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     """reference_type에 따라 근거 자료의 이름(파일명/결정 제목)을 채워서 반환한다.
     프론트가 '기준: system_spec.pdf' 처럼 사람이 알아볼 수 있게 표시할 수 있게 함."""
@@ -45,7 +84,19 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
 
     excerpt = " ".join((contradiction.reference_text_snapshot or "").split())[:100]
 
-    if source_name and excerpt:
+    if contradiction.reference_type == "decision" and contradiction.judgment_case:
+        reason_text = contradiction.reason or "사유 미기재"
+        if contradiction.judgment_case == "reasoned_change":
+            display_message = (
+                f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{contradiction.statement_text_snapshot}'"
+                f" (기존: '{contradiction.reference_text_snapshot}', 사유: {reason_text})."
+            )
+        else:  # unreasoned_change
+            display_message = (
+                f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{contradiction.statement_text_snapshot}'"
+                f" (기존: '{contradiction.reference_text_snapshot}', 사유: {reason_text})."
+            )
+    elif source_name and excerpt:
         display_message = (
             f"'{contradiction.statement_text_snapshot}'라고 하셨는데, "
             f"기존 자료({source_name})의 '{excerpt}'와 다릅니다."
@@ -66,6 +117,17 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     schema.reference_source_name = source_name
     schema.display_message = display_message
     schema.resolution_type = resolution.resolution_type if resolution else None
+
+    source_meeting = _resolve_source_meeting(db, contradiction)
+    if source_meeting:
+        schema.source_meeting_title = source_meeting.title
+        schema.source_meeting_time = source_meeting.started_at
+
+    reference_meeting = _resolve_reference_meeting(db, contradiction)
+    if reference_meeting:
+        schema.reference_meeting_title = reference_meeting.title
+        schema.reference_meeting_time = reference_meeting.started_at
+
     return schema
 
 
@@ -93,6 +155,20 @@ def get_contradiction_list(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     items = contradiction_crud.list_contradictions(db, workspace_id, status=status_filter)
+    return ContradictionListResponse(
+        contradictions=[_to_contradiction_schema(db, c) for c in items]
+    )
+
+# 회의 종료 후 decision 변경 후보 조회 (같은 decision당 최신 1건만)
+@router.get("/meetings/{meeting_id}/decision-changes", response_model=ContradictionListResponse)
+def get_meeting_decision_changes_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    items = contradiction_crud.list_latest_decision_changes_by_meeting(db, meeting_id)
     return ContradictionListResponse(
         contradictions=[_to_contradiction_schema(db, c) for c in items]
     )
@@ -129,6 +205,8 @@ def resolve_contradiction_api(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 처리된 모순입니다.",
         )
+    _check_meeting_not_recording(db, contradiction)
+    _check_not_chat_sourced(contradiction)    
 
     resolution = contradiction_crud.resolve_contradiction(
         db,
@@ -180,7 +258,9 @@ def dismiss_contradiction_api(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 처리된 모순입니다.",
         )
-
+    _check_meeting_not_recording(db, contradiction)
+    _check_not_chat_sourced(contradiction)
+    
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
     return _to_contradiction_schema(db, updated)
 

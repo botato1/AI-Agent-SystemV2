@@ -93,6 +93,15 @@ export interface GetDocumentGraphResponse {
   error: string | null;
 }
 
+export interface GetDocumentFileResponse {
+  status: "success" | "error";
+  blob: Blob | null;
+  filename: string;
+  contentType: string;
+  message: string;
+  error: string | null;
+}
+
 // =============================================================================
 // Re:Call: document_figures (표/차트/다이어그램 크롭 이미지)
 // =============================================================================
@@ -187,12 +196,12 @@ export async function getDocumentListApi(workspaceId: string): Promise<GetDocume
  *
  * 주의: 8003 문서 처리 서버를 동기 호출하므로 응답이 오기까지 최대 5분 정도 걸릴 수 있다.
  * roomId를 넘기면 백엔드가 업로드와 동시에 해당 채팅방에도 자동으로 연결한다.
+ * 지원 포맷은 pdf/hwpx/png/jpg/jpeg/docx/txt다(백엔드 ALLOWED_DOCUMENT_EXTENSIONS 확인 완료).
  */
 export async function uploadDocumentApi(
   workspaceId: string,
   file: File,
-  roomId?: string,
-  documentType: "document" | "meeting" = "document"
+  roomId?: string
 ): Promise<UploadDocumentResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -212,7 +221,6 @@ export async function uploadDocumentApi(
   try {
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("type", documentType);
     if (roomId) {
       formData.append("room_id", roomId);
     }
@@ -227,7 +235,7 @@ export async function uploadDocumentApi(
     if (!response.ok || data.status === "error") {
       let defaultMsg = "문서 업로드에 실패했습니다.";
       if (data.error === "unsupported_file_type" || data.error === "unsupported_document_type") {
-        defaultMsg = "지원하지 않는 파일 형식입니다. (pdf/hwpx/png/jpg/jpeg)";
+        defaultMsg = "지원하지 않는 파일 형식입니다. (pdf/hwpx/png/jpg/jpeg/docx/txt)";
       } else if (data.error === "use_stt_upload_api") {
         defaultMsg = "음성 파일은 회의 업로드 기능을 이용해 주세요.";
       } else if (response.status === 401) {
@@ -585,6 +593,82 @@ export async function getDocumentFiguresApi(
     return {
       status: "error",
       figures: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 8. 원본 파일 바이너리 스트리밍 API (GET /api/workspaces/{workspace_id}/documents/{document_id}/file)
+ */
+export async function getDocumentFileApi(
+  workspaceId: string,
+  documentId: string
+): Promise<GetDocumentFileResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      blob: null,
+      filename: "",
+      contentType: "",
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/documents/${documentId}/file`,
+      { method: "GET" }
+    );
+
+    if (!response.ok) {
+      let defaultMsg = "원본 파일을 불러오지 못했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "실제 원본 파일이 디스크에 존재하지 않습니다.";
+
+      return {
+        status: "error",
+        blob: null,
+        filename: "",
+        contentType: "",
+        message: defaultMsg,
+        error: `HTTP_${response.status}`,
+      };
+    }
+
+    const contentType = response.headers.get("Content-Type") || "application/octet-stream";
+    const disposition = response.headers.get("Content-Disposition") || "";
+    
+    // 파일명 추출 (filename*=utf-8''...)
+    let filename = "original_file";
+    const filenameMatch = disposition.match(/filename\*=utf-8''([^;]+)/i) || disposition.match(/filename="?([^";]+)"?/i);
+    if (filenameMatch && filenameMatch[1]) {
+      filename = decodeURIComponent(filenameMatch[1]);
+    }
+
+    const blob = await response.blob();
+
+    return {
+      status: "success",
+      blob,
+      filename,
+      contentType,
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getDocumentFileApi error:", error);
+    return {
+      status: "error",
+      blob: null,
+      filename: "",
+      contentType: "",
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

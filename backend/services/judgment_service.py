@@ -9,18 +9,18 @@ contradictions 테이블 + 기존 조회 경로로 노출되므로 여기서는 
 
 import uuid
 
-from backend.db.crud import notification_crud, workspace_crud
+from backend.db.crud import meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.modules.judgment import decision_judgment, document_judgment, priority
 
-_SKIP_NOTIFICATION_POPUP_TYPES = {"contradiction"}
+_SKIP_NOTIFICATION_POPUP_TYPES = {"reasoned_change", "unreasoned_change"}
 
 _POPUP_TITLE = {
     "decision_reminder": "이전 결정 리마인더",
-    "repeat_discussion": "반복 논의 알림",
     "document_recommendation": "관련 문서 추천",
 }
 
+LOW_STT_CONFIDENCE_THRESHOLD = 0.6  # 이 미만이면 판단 자체를 보류 (오탐 방지)
 
 def run_judgment_pipeline(
     *,
@@ -41,6 +41,12 @@ def run_judgment_pipeline(
     db = SessionLocal()
     try:
         source_id = uuid.UUID(meeting_segment_id) if meeting_segment_id else uuid.UUID(room_message_id)
+
+        if source_type == "meeting_segment":
+            segment = meeting_crud.get_segment(db, source_id)
+            if segment and segment.stt_confidence is not None and float(segment.stt_confidence) < LOW_STT_CONFIDENCE_THRESHOLD:
+                return None  # STT 신뢰도 낮음 - 모순/리마인더 판단 보류
+
         session_kwargs = {
             "session_meeting_id": uuid.UUID(session_meeting_id) if session_meeting_id else None,
             "session_room_id": uuid.UUID(session_room_id) if session_room_id else None,
@@ -72,17 +78,15 @@ def run_judgment_pipeline(
         if not popup:
             return None
 
-        if popup["type"] == "contradiction":
-            # decision 기반이든 document 기반이든, priority.select_popup()이 이미
-            # 최종 선택한 popup을 그대로 쓴다 (decision_result["popup"]는 document_judgment가
-            # 대신 판단한 경우 None이라 인덱싱하면 TypeError).
+        if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
+            # decision 기반 근거있음/근거없음 변경(Case 2/3) - 실시간 WS 알림으로 바로
+            # push하고, 일반 Notification은 중복이라 생략한다.
             return {
                 "contradiction_id": popup["contradiction_id"],
                 "message": popup["message"],
+                "judgment_case": popup["type"],
+                "actions": popup.get("actions", []),
             }
-
-        if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
-            return None
 
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
             if not notification_crud.is_notification_enabled(db, uuid.UUID(workspace_id), member.user_id, popup["type"]):

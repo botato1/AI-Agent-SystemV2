@@ -2,9 +2,11 @@ import React, { useState, useEffect } from "react";
 import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
+import HomeView from "./components/HomeView";
 import DashboardView from "./components/DashboardView";
 import DocumentAnalysisView from "./components/DocumentAnalysisView";
 import GraphView from "./components/GraphView";
+import AiChatView from "./components/AiChatView";
 import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
@@ -49,7 +51,7 @@ interface RegisteredAccount {
 type Selection = { type: "channel"; channel: Channel } | { type: "placeholder"; key: PlaceholderKey };
 
 const PLACEHOLDER_LABELS: Record<
-  Exclude<PlaceholderKey, "voiceMeeting" | "dashboard" | "docAnalysis" | "graph">,
+  Exclude<PlaceholderKey, "home" | "voiceMeeting" | "dashboard" | "docAnalysis" | "graph" | "aiChat">,
   string
 > = {};
 
@@ -68,6 +70,12 @@ export default function App() {
     return new URLSearchParams(window.location.search).get("token");
   });
 
+  // 워크스페이스 초대 메일 링크(?invite_token=...)로 들어온 경우 - 회원가입 시
+  // 같이 넘겨서 가입과 동시에 해당 워크스페이스에 자동으로 합류시킨다.
+  const [inviteToken] = useState<string | null>(() => {
+    return new URLSearchParams(window.location.search).get("invite_token");
+  });
+
   // 💡 워크스페이스 목록 상태 (목업 중복 방지를 위해 빈 배열로 시작)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
@@ -75,6 +83,8 @@ export default function App() {
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string>(() => {
     return localStorage.getItem("last_workspace_id") || "";
   });
+  // 백엔드 워크스페이스 목록 조회가 최소 1회 완료됐는지 (완료 전엔 "워크스페이스 없음" 화면을 보여주지 않음)
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
 
   // 워크스페이스 멤버 id → 표시 이름 매핑 (채팅 메시지 발신자 이름 표시용)
   const [memberNameById, setMemberNameById] = useState<Record<string, string>>({});
@@ -86,7 +96,7 @@ export default function App() {
 
   const [selection, setSelection] = useState<Selection>({
     type: "placeholder",
-    key: "dashboard",
+    key: "home",
   });
 
   const [showProfile, setShowProfile] = useState(false);
@@ -135,16 +145,24 @@ export default function App() {
 
       const res = await getWorkspaceListApi();
 
-      if (res.status === "success" && res.workspaces.length > 0) {
-        setWorkspaces(res.workspaces);
+      if (res.status !== "success") return;
 
-        const savedWsId = localStorage.getItem("last_workspace_id");
-        const exists = res.workspaces.find((w) => w.id === savedWsId);
+      setWorkspaces(res.workspaces);
 
-        const targetWsId = exists && savedWsId ? savedWsId : res.workspaces[0].id;
-        setCurrentWorkspaceId(targetWsId);
-        localStorage.setItem("last_workspace_id", targetWsId);
+      if (res.workspaces.length === 0) {
+        setCurrentWorkspaceId("");
+        localStorage.removeItem("last_workspace_id");
+        setWorkspacesLoaded(true);
+        return;
       }
+
+      const savedWsId = localStorage.getItem("last_workspace_id");
+      const exists = res.workspaces.find((w) => w.id === savedWsId);
+
+      const targetWsId = exists && savedWsId ? savedWsId : res.workspaces[0].id;
+      setCurrentWorkspaceId(targetWsId);
+      localStorage.setItem("last_workspace_id", targetWsId);
+      setWorkspacesLoaded(true);
     }
 
     loadRealWorkspaces();
@@ -228,13 +246,12 @@ export default function App() {
   const handleLogOut = async () => {
     await logoutApi();
     localStorage.removeItem("last_workspace_id");
+    localStorage.removeItem("recall-task-custom-order");
     setWorkspaces([]);
     setCurrentUser(null);
 
-    // 이전 계정에서 보던 화면 상태(선택된 채팅방, 캐시된 채널/멤버 정보)가
-    // 다음 로그인까지 남아있으면 workspace_id/room_id가 어긋나 404가 나므로 전부 리셋
     setCurrentWorkspaceId("");
-    setSelection({ type: "placeholder", key: "dashboard" });
+    setSelection({ type: "placeholder", key: "home" });
     setChannelsByWorkspace({});
     setMemberNameById({});
   };
@@ -247,7 +264,7 @@ export default function App() {
       setWorkspaces([]);
       setCurrentUser(null);
       setCurrentWorkspaceId("");
-      setSelection({ type: "placeholder", key: "dashboard" });
+      setSelection({ type: "placeholder", key: "home" });
       setChannelsByWorkspace({});
       setMemberNameById({});
     }
@@ -263,7 +280,6 @@ export default function App() {
   }
 
   async function handleChangeAvatarImage(file: File) {
-    // 업로드 응답 기다리는 동안에도 바로 반응이 보이도록 로컬 미리보기부터 반영
     const previewUrl = URL.createObjectURL(file);
     setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: previewUrl } : prev));
 
@@ -271,9 +287,6 @@ export default function App() {
     if (res.status === "success" && res.user) {
       const resolvedUrl = resolveAvatarUrl(res.user.profile_image_url);
       setCurrentUser((prev) => (prev ? { ...prev, avatarImageUrl: resolvedUrl } : prev));
-      // 워크스페이스 멤버 목록에서 가져온 아바타 캐시(memberAvatarById)에도 반영해야
-      // 채팅방 참가자 목록 등 다른 화면에서 바로 새 사진이 보인다 (안 그러면 워크스페이스를
-      // 다시 선택하거나 새로고침해야만 반영됨)
       if (currentUser) {
         setMemberAvatarById((prev) => ({ ...prev, [currentUser.id]: resolvedUrl }));
       }
@@ -296,7 +309,7 @@ export default function App() {
 
       setCurrentWorkspaceId(newWorkspace.id);
       localStorage.setItem("last_workspace_id", newWorkspace.id);
-      setSelection({ type: "placeholder", key: "dashboard" });
+      setSelection({ type: "placeholder", key: "home" });
     } else {
       alert(`워크스페이스 생성 실패: ${apiRes.message}`);
     }
@@ -349,7 +362,7 @@ export default function App() {
     setSelection(
       nextChannels.length > 0
         ? { type: "channel", channel: nextChannels[0] }
-        : { type: "placeholder", key: "dashboard" }
+        : { type: "placeholder", key: "home" }
     );
   }
 
@@ -403,7 +416,7 @@ export default function App() {
           if (sel.type === "channel" && sel.channel.id === id) {
             return next.length > 0
               ? { type: "channel", channel: next[0] }
-              : { type: "placeholder", key: "dashboard" };
+              : { type: "placeholder", key: "home" };
           }
           return sel;
         });
@@ -419,7 +432,6 @@ export default function App() {
       <PasswordResetConfirmView
         resetToken={passwordResetToken}
         onSuccess={() => {
-          // 링크의 토큰을 주소창에서 지우고 로그인 화면으로 돌아간다
           window.history.replaceState(null, "", window.location.pathname);
           setPasswordResetToken(null);
         }}
@@ -441,12 +453,36 @@ export default function App() {
         registeredAccounts={registeredAccounts}
         onSignUp={handleSignUp}
         onLogIn={handleLogIn}
+        inviteToken={inviteToken}
       />
     );
   }
 
+  if (!workspacesLoaded) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
+        워크스페이스 정보를 불러오는 중입니다...
+      </div>
+    );
+  }
+
+  if (!currentWorkspaceId) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-recall-bg text-recall-text">
+        <p className="text-base text-recall-textMuted">아직 소속된 워크스페이스가 없습니다.</p>
+        <button
+          type="button"
+          onClick={handleCreateWorkspace}
+          className="rounded-xl bg-recall-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 transition"
+        >
+          워크스페이스 만들기
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
+    <div key={currentUser.id} className="flex h-screen w-screen overflow-hidden">
       <Sidebar
         workspaces={workspaces}
         currentWorkspaceId={currentWorkspaceId}
@@ -488,6 +524,20 @@ export default function App() {
           activeRecorderName={activeRecorderName}
           t={t}
         />
+      ) : selection.key === "home" ? (
+        <HomeView
+          workspaceId={currentWorkspaceId}
+          userId={currentUser.id}
+          userName={currentUser.name}
+          onNavigate={(key) => setSelection({ type: "placeholder", key })}
+          onBeginScheduledMeeting={(meetingId) => {
+            liveMeeting.beginScheduled(meetingId);
+            setSelection({ type: "placeholder", key: "voiceMeeting" });
+          }}
+          t={t}
+        />
+      ) : selection.key === "aiChat" ? (
+        <AiChatView workspaceId={currentWorkspaceId} t={t} />
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView
           workspaceId={currentWorkspaceId}
@@ -497,7 +547,9 @@ export default function App() {
           partial={liveMeeting.partial}
           contradictionAlerts={liveMeeting.contradictionAlerts}
           errorMessage={liveMeeting.errorMessage}
+          joinableMeeting={liveMeeting.joinableMeeting}
           onStart={liveMeeting.start}
+          onJoin={liveMeeting.join}
           onPause={liveMeeting.pause}
           onResume={liveMeeting.resume}
           onStop={liveMeeting.stop}
@@ -545,7 +597,6 @@ export default function App() {
         />
       )}
 
-      {/* 💡 워크스페이스 정보가 반영된 Settings 모달 */}
       {showSettings && (
         <Settings
           onClose={() => setShowSettings(false)}

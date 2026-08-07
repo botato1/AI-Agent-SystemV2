@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import notification_crud
+from backend.db.crud import meeting_crud, notification_crud
 from backend.schemas.notification_schema import (
     NotificationListResponse, NotificationSchema,
     NotificationPreferencesSchema, NotificationPreferencesUpdateRequest,
@@ -45,9 +45,18 @@ def get_notification_list(
     items = notification_crud.list_notifications(
         db, UUID(current_user_id), workspace_id, unread_only=unread_only,
     )
-    return NotificationListResponse(
-        notifications=[NotificationSchema.model_validate(i) for i in items]
-    )
+
+    results = []
+    for i in items:
+        schema = NotificationSchema.model_validate(i)
+        schema.document_id = i.related_file_id
+        if i.ref_type == "meeting_segment" and i.ref_id:
+            segment = meeting_crud.get_segment(db, i.ref_id)
+            if segment:
+                schema.meeting_id = segment.meeting_id
+        results.append(schema)
+
+    return NotificationListResponse(notifications=results)
 
 
 # 알림 읽음 처리
