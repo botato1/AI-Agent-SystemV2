@@ -261,13 +261,28 @@ def save_summary_as_document(
         decisions = decisions or []
         action_items = action_items or []
 
+        # [수정 - 리뷰 반영] decisions엔 status="reopened_no_conclusion"(재논의했지만
+        # 결론 안 남)인 항목도 섞여 들어온다. decision_text가 이 경우 "확정된 내용"이
+        # 아니라 "논의 중이던 내용"이라, 전부 "결정사항"에 넣으면 아직 안 정해진 걸
+        # 정해진 것처럼 보여주게 된다. status로 갈라서 별도 섹션으로 분리한다.
+        confirmed_decisions = [d for d in decisions if d.get("status") != "reopened_no_conclusion"]
+        pending_decisions = [d for d in decisions if d.get("status") == "reopened_no_conclusion"]
+
         decisions_text = (
             "\n".join(
                 f"- **{d.get('title', '')}**: {d.get('decision_text', '')}"
                 + (f" (사유: {d['reason']})" if d.get("reason") else "")
-                for d in decisions
+                for d in confirmed_decisions
             )
-            if decisions else "(이번 회의에서 새로 확정된 결정사항 없음)"
+            if confirmed_decisions else "(이번 회의에서 새로 확정된 결정사항 없음)"
+        )
+        pending_decisions_text = (
+            "\n".join(
+                f"- **{d.get('title', '')}**: {d.get('decision_text', '')}"
+                + (f" (사유: {d['reason']})" if d.get("reason") else "")
+                for d in pending_decisions
+            )
+            if pending_decisions else "(이번 회의에서 결론 안 난 안건 없음)"
         )
         action_items_text = (
             "\n".join(
@@ -285,6 +300,7 @@ def save_summary_as_document(
             f"## 핵심 요약\n{short_summary}\n\n"
             f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points) + "\n\n"
             f"## 결정사항\n{decisions_text}\n\n"
+            f"## 논의 중/미결 안건\n{pending_decisions_text}\n\n"
             f"## 할 일\n{action_items_text}"
         )
         content_bytes = content.encode("utf-8")
@@ -322,6 +338,8 @@ def save_summary_as_document(
             {"style": "body", "content": "\n".join(f"- {p}" for p in discussion_points), "page_number": 1},
             {"style": "heading", "content": "결정사항", "page_number": 1},
             {"style": "body", "content": decisions_text, "page_number": 1},
+            {"style": "heading", "content": "논의 중/미결 안건", "page_number": 1},
+            {"style": "body", "content": pending_decisions_text, "page_number": 1},
             {"style": "heading", "content": "할 일", "page_number": 1},
             {"style": "body", "content": action_items_text, "page_number": 1},
         ]
