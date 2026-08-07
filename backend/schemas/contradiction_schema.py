@@ -43,6 +43,7 @@ class ContradictionSchema(ORMBaseSchema):
 
     source_type: ContradictionSourceType
     meeting_segment_id: Optional[UUID] = None
+    meeting_id: Optional[UUID] = None  # source_type='meeting_segment'일 때만 채워짐
     room_message_id: Optional[UUID] = None
     session_meeting_id: Optional[UUID] = None
     session_room_id: Optional[UUID] = None

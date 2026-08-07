@@ -128,6 +128,8 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     if source_meeting:
         schema.source_meeting_title = source_meeting.title
         schema.source_meeting_time = source_meeting.started_at
+        if contradiction.source_type == "meeting_segment":
+            schema.meeting_id = source_meeting.id
 
     reference_meeting = _resolve_reference_meeting(db, contradiction)
     if reference_meeting:
