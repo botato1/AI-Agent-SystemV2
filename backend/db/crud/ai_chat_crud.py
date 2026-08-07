@@ -7,11 +7,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.db.modules import AiChatMessage, AiChatSession, AiMessageSource
-
+from backend.db.modules import AiChatMessage, AiChatSession, AiMessageSource, Decision, WorkspaceFile
 
 def get_or_create_session(
     db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
@@ -52,6 +52,46 @@ def get_or_create_session(
 
     db.refresh(row)
     return row
+
+def create_session(
+    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
+) -> AiChatSession:
+    row = AiChatSession(workspace_id=workspace_id, room_id=room_id, user_id=user_id)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_sessions(
+    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
+) -> list[AiChatSession]:
+    query = db.query(AiChatSession).filter(
+        AiChatSession.workspace_id == workspace_id,
+        AiChatSession.user_id == user_id,
+        AiChatSession.deleted_at.is_(None),
+    )
+    query = (
+        query.filter(AiChatSession.room_id == room_id)
+        if room_id is not None
+        else query.filter(AiChatSession.room_id.is_(None))
+    )
+    return query.order_by(AiChatSession.updated_at.desc()).all()
+
+
+def get_session(db: Session, session_id: uuid.UUID) -> Optional[AiChatSession]:
+    return (
+        db.query(AiChatSession)
+        .filter(AiChatSession.id == session_id, AiChatSession.deleted_at.is_(None))
+        .first()
+    )
+
+
+def delete_session(db: Session, session_id: uuid.UUID) -> None:
+    row = db.query(AiChatSession).filter(AiChatSession.id == session_id).first()
+    if row:
+        row.deleted_at = datetime.now(timezone.utc)
+        db.commit()
 
 
 def add_message(
@@ -104,6 +144,12 @@ def add_ai_exchange(
     """
 
     try:
+        session = db.query(AiChatSession).filter(AiChatSession.id == session_id).first()
+        if session and not session.title:
+            session.title = user_content.strip()[:40]
+        if session:
+            session.updated_at = datetime.now(timezone.utc)
+
         user_created_at = datetime.now(timezone.utc)
         assistant_created_at = user_created_at + timedelta(
             microseconds=1
@@ -175,9 +221,22 @@ def get_session_history(db: Session, session_id: uuid.UUID) -> list[AiChatMessag
     )
 
 
-def get_message_sources(db: Session, ai_message_id: uuid.UUID) -> list[AiMessageSource]:
+def get_message_sources(db: Session, ai_message_id: uuid.UUID) -> list[tuple[AiMessageSource, str | None]]:
+    """근거자료 표시 이름을 함께 반환한다.
+
+    [수정] decision 타입 소스는 file_id가 NULL이라, WorkspaceFile만 outerjoin하던
+    기존 쿼리에서는 이름이 항상 None으로 나와 프론트가 "결정사항"이라는 구분 안 되는
+    라벨만 표시할 수밖에 없었다. Decision도 같이 outerjoin해서, content_chunk/code_fact는
+    원본 파일명을, decision은 결정 제목을 이름으로 채운다 (둘 중 하나만 채워지는 배타적
+    관계라 coalesce로 안전하게 합칠 수 있다).
+    """
     return (
-        db.query(AiMessageSource)
+        db.query(
+            AiMessageSource,
+            func.coalesce(WorkspaceFile.original_filename, Decision.title),
+        )
+        .outerjoin(WorkspaceFile, AiMessageSource.file_id == WorkspaceFile.id)
+        .outerjoin(Decision, AiMessageSource.decision_id == Decision.id)
         .filter(AiMessageSource.ai_message_id == ai_message_id)
         .order_by(AiMessageSource.display_order)
         .all()
