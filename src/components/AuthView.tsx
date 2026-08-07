@@ -26,11 +26,12 @@ interface AuthViewProps {
   onSignUp: (account: RegisteredAccount) => void;
   onLogIn: (user: User) => void;
   inviteToken?: string | null;
+  t: any;
 }
 
 type Mode = "login" | "signup";
 
-export default function AuthView({ registeredAccounts, onSignUp, onLogIn, inviteToken }: AuthViewProps) {
+export default function AuthView({ registeredAccounts, onSignUp, onLogIn, inviteToken, t }: AuthViewProps) {
   const [mode, setMode] = useState<Mode>(inviteToken ? "signup" : "login");
 
   // 폼 입력 상태
@@ -104,7 +105,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
     }
 
     if (trimmedUsername.length > 50) {
-      setUserIdMessage("아이디는 50자 이내로 입력해 주세요.");
+      setUserIdMessage(t.auth_error_username_too_long);
       setIsUserIdAvailable(false);
       setIsUserIdChecking(false);
       return;
@@ -180,19 +181,19 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
     setError(null);
 
     if (!name.trim() || !username.trim() || !fullEmail || !password.trim() || !confirmPassword.trim()) {
-      setError("모든 정보를 올바르게 입력해주세요.");
+      setError(t.auth_error_all_fields);
       return;
     }
     if (isUserIdAvailable === false) {
-      setError("사용 가능한 아이디를 입력해주세요.");
+      setError(t.auth_error_username_unavailable);
       return;
     }
     if (isEmailAvailable === false) {
-      setError("사용 가능한 이메일을 입력해주세요.");
+      setError(t.auth_error_email_unavailable);
       return;
     }
     if (password !== confirmPassword) {
-      setError("비밀번호가 일치하지 않아요.");
+      setError(t.auth_password_confirm_mismatch);
       return;
     }
     const policyError = validatePassword(password);
@@ -223,9 +224,9 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
       window.history.replaceState(null, "", window.location.pathname);
 
       if (signUpResult.inviteStatus === "invite_expired") {
-        alert("초대 링크가 만료됐어요. 워크스페이스 관리자에게 다시 초대를 요청해 주세요.");
+        alert(t.auth_invite_expired);
       } else if (signUpResult.inviteStatus === "invite_invalid") {
-        alert("초대 링크가 유효하지 않아요. 워크스페이스 관리자에게 다시 초대를 요청해 주세요.");
+        alert(t.auth_invite_invalid);
       }
     }
 
@@ -250,7 +251,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
     if (!applyLoginSuccess(loginResult)) {
       // 자동 로그인만 실패한 경우 - 계정은 이미 만들어졌으니 로그인 화면으로 안내
       switchMode("login");
-      setError("회원가입은 완료됐지만 자동 로그인에 실패했어요. 다시 로그인해 주세요.");
+      setError(t.auth_autologin_failed);
     }
   }
 
@@ -285,7 +286,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
     setError(null);
 
     if (!username.trim() || !password.trim()) {
-      setError("아이디와 비밀번호를 모두 입력해주세요.");
+      setError(t.auth_error_login_fields);
       return;
     }
 
@@ -305,7 +306,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
 
     if (!resetEmail.trim()) {
       setIsResetError(true);
-      setResetMessage("이메일 주소를 입력해 주세요.");
+      setResetMessage(t.auth_reset_email_required);
       return;
     }
 
@@ -329,12 +330,12 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
       <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-lg">
         <p className="mb-1 text-xl font-semibold text-recall-text">Re:Call</p>
         <p className="mb-5 text-base text-recall-textMuted">
-          {mode === "login" ? "다시 오셨네요! 로그인해주세요." : "회원가입하고 팀과 함께 시작해보세요."}
+          {mode === "login" ? t.auth_welcome_login : t.auth_welcome_signup}
         </p>
 
         {mode === "signup" && inviteToken && (
           <p className="mb-5 rounded-xl border border-recall-accent/40 bg-recall-accent/10 px-3.5 py-2.5 text-sm text-recall-text">
-            워크스페이스 초대 링크로 오셨네요! 가입을 완료하면 자동으로 참여됩니다.
+            {t.auth_invite_banner}
           </p>
         )}
 
@@ -345,7 +346,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
               <Avatar user={{ name, avatarColor, avatarImageUrl }} size={80} />
               <button
                 onClick={() => setShowAvatarMenu((v) => !v)}
-                aria-label="프로필 변경"
+                aria-label={t.profile_change_avatar_aria}
                 className="absolute -bottom-1 -left-1 flex h-7 w-7 items-center justify-center rounded-full border border-recall-border bg-recall-bgSoft text-recall-textMuted shadow-sm hover:text-recall-text"
               >
                 <PencilIcon size={13} />
@@ -364,9 +365,9 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                     onClick={() => fileInputRef.current?.click()}
                     className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-sm text-recall-text hover:bg-white/5"
                   >
-                    내 사진 업로드
+                    {t.profile_upload_photo}
                   </button>
-                  <p className="mb-1.5 text-xs text-recall-textMuted">또는 색상 선택</p>
+                  <p className="mb-1.5 text-xs text-recall-textMuted">{t.profile_or_color}</p>
                   <div className="flex flex-wrap gap-1.5">
                     {AVATAR_COLORS.map((color) => (
                       <button
@@ -382,7 +383,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                             ? "ring-2 ring-recall-accent ring-offset-2 ring-offset-recall-bgSoft"
                             : "opacity-80 hover:opacity-100"
                         }`}
-                        aria-label={`색상 ${color}`}
+                        aria-label={t.profile_color_aria(color)}
                       />
                     ))}
                   </div>
@@ -396,12 +397,12 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
           {/* 이름 입력 (회원가입) */}
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-sm text-recall-textMuted">이름</label>
+              <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_name}</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="이름을 입력하세요"
+                placeholder={t.auth_name_placeholder}
                 className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
               />
             </div>
@@ -409,18 +410,18 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
 
           {/* 아이디 입력 */}
           <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">아이디</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_id}</label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="아이디를 입력하세요"
+              placeholder={t.auth_username_placeholder}
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
             />
             {mode === "signup" && (
               <div className="mt-1 min-h-[18px]">
                 {isUserIdChecking ? (
-                  <p className="text-sm text-recall-textMuted">중복 확인 중...</p>
+                  <p className="text-sm text-recall-textMuted">{t.auth_checking_dup}</p>
                 ) : userIdMessage ? (
                   <p className={`text-sm ${isUserIdAvailable ? "text-emerald-400" : "text-recall-danger"}`}>
                     {userIdMessage}
@@ -433,13 +434,13 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
           {/* 이메일 입력 (회원가입 분할 드롭다운) */}
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-sm text-recall-textMuted">이메일</label>
+              <label className="mb-1 block text-sm text-recall-textMuted">{t.auth_email_label}</label>
               <div className="flex items-center gap-1.5">
                 <input
                   type="text"
                   value={emailUser}
                   onChange={(e) => setEmailUser(e.target.value)}
-                  placeholder="이메일 주소"
+                  placeholder={t.auth_email_placeholder}
                   className="w-1/2 rounded-lg border border-recall-border bg-transparent px-2.5 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
                 />
                 <span className="text-sm text-recall-textMuted">@</span>
@@ -451,7 +452,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                   <option value="gmail.com">gmail.com</option>
                   <option value="naver.com">naver.com</option>
                   <option value="outlook.com">outlook.com</option>
-                  <option value="custom">직접 입력</option>
+                  <option value="custom">{t.auth_email_custom_option}</option>
                 </select>
               </div>
 
@@ -460,14 +461,14 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                   type="text"
                   value={customDomain}
                   onChange={(e) => setCustomDomain(e.target.value)}
-                  placeholder="도메인 입력 (예: company.com)"
+                  placeholder={t.auth_email_custom_placeholder}
                   className="mt-1.5 w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
                 />
               )}
 
               <div className="mt-1 min-h-[18px]">
                 {isEmailChecking ? (
-                  <p className="text-sm text-recall-textMuted">중복 확인 중...</p>
+                  <p className="text-sm text-recall-textMuted">{t.auth_checking_dup}</p>
                 ) : emailMessage ? (
                   <p className={`text-sm ${isEmailAvailable ? "text-emerald-400" : "text-recall-danger"}`}>
                     {emailMessage}
@@ -479,7 +480,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
 
           {/* 비밀번호 입력 */}
           <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">비밀번호</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.auth_password_label}</label>
             <input
               type="password"
               value={password}
@@ -492,7 +493,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
               <p className={`mt-1 text-xs ${password && validatePassword(password) ? "text-recall-danger" : "text-recall-textMuted"}`}>
                 {password && validatePassword(password)
                   ? validatePassword(password)
-                  : "8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합"}
+                  : t.profile_password_policy_hint}
               </p>
             )}
             {mode === "login" && (
@@ -505,7 +506,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                 }}
                 className="mt-1.5 text-sm text-recall-textMuted hover:text-recall-accent hover:underline transition"
               >
-                비밀번호를 잊으셨습니까?
+                {t.auth_forgot_password}
               </button>
             )}
           </div>
@@ -513,7 +514,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
           {/* 비밀번호 확인 (회원가입) */}
           {mode === "signup" && (
             <div>
-              <label className="mb-1 block text-sm text-recall-textMuted">비밀번호 확인</label>
+              <label className="mb-1 block text-sm text-recall-textMuted">{t.auth_password_confirm_label}</label>
               <input
                 type="password"
                 value={confirmPassword}
@@ -523,7 +524,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                 className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base text-recall-text placeholder:text-recall-textMuted focus:outline-none focus:border-recall-accent"
               />
               {confirmPassword && password !== confirmPassword && (
-                <p className="mt-1 text-sm text-recall-danger">비밀번호가 일치하지 않아요.</p>
+                <p className="mt-1 text-sm text-recall-danger">{t.auth_password_confirm_mismatch}</p>
               )}
             </div>
           )}
@@ -537,37 +538,37 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
           className="mt-5 w-full rounded-lg bg-recall-accent py-2 text-base font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
         >
           {isSubmitting
-            ? "처리 중..."
+            ? t.settings_account_deleting
             : mode === "login"
-            ? "로그인"
-            : "가입하기"}
+            ? t.auth_login_btn
+            : t.auth_signup_btn}
         </button>
 
         <div className="my-4 flex items-center gap-3">
           <div className="h-px flex-1 bg-recall-border" />
-          <span className="text-sm text-recall-textMuted">또는</span>
+          <span className="text-sm text-recall-textMuted">{t.auth_or_divider}</span>
           <div className="h-px flex-1 bg-recall-border" />
         </div>
 
         {/* 하단 모드 전환 영역 */}
         {mode === "login" ? (
           <p className="text-center text-base text-recall-textMuted">
-            계정이 없으신가요?{" "}
+            {t.auth_no_account}{" "}
             <button
               onClick={() => switchMode("signup")}
               className="text-recall-accent hover:underline font-medium"
             >
-              회원가입
+              {t.auth_go_signup}
             </button>
           </p>
         ) : (
           <p className="text-center text-base text-recall-textMuted">
-            이미 계정이 있으신가요?{" "}
+            {t.auth_have_account}{" "}
             <button
               onClick={() => switchMode("login")}
               className="text-recall-accent hover:underline font-medium"
             >
-              로그인
+              {t.auth_login_btn}
             </button>
           </p>
         )}
@@ -578,7 +579,7 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-xl text-recall-text">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">비밀번호 재설정</h2>
+              <h2 className="text-lg font-bold">{t.auth_reset_title}</h2>
               <button
                 onClick={() => setShowResetModal(false)}
                 className="text-recall-textMuted hover:text-recall-text"
@@ -588,13 +589,13 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
             </div>
 
             <p className="mb-4 text-sm text-recall-textMuted leading-relaxed">
-              가입하신 이메일 주소를 입력하시면 비밀번호 재설정 링크를 보내드립니다.
+              {t.auth_reset_desc}
             </p>
 
             <form onSubmit={handlePasswordResetSubmit} className="flex flex-col gap-3">
               <div>
                 <label className="mb-1 block text-sm text-recall-textMuted">
-                  이메일 주소
+                  {t.auth_reset_email_label}
                 </label>
                 <input
                   type="email"
@@ -622,14 +623,14 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
                   onClick={() => setShowResetModal(false)}
                   className="rounded-lg border border-recall-border px-3.5 py-1.5 text-sm text-recall-textMuted hover:bg-white/5"
                 >
-                  취소
+                  {t.task_cancel}
                 </button>
                 <button
                   type="submit"
                   disabled={isResetSubmitting}
                   className="rounded-lg bg-recall-accent px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
                 >
-                  {isResetSubmitting ? "전송 중..." : "재설정 링크 발송"}
+                  {isResetSubmitting ? t.auth_reset_sending : t.auth_reset_submit}
                 </button>
               </div>
             </form>

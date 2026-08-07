@@ -71,11 +71,14 @@ function loadCustomOrder(workspaceId: string | undefined, columnId: string): str
 
 function formatDeadline(deadline: string | null): string {
   if (!deadline) return "-";
-  const parts = deadline.split("-");
+  const [datePart, timePart] = deadline.split("T");
+  const parts = datePart.split("-");
   if (parts.length === 3) {
     const month = parseInt(parts[1], 10);
     const day = parseInt(parts[2], 10);
-    if (!isNaN(month) && !isNaN(day)) return `${month}월 ${day}일`;
+    if (!isNaN(month) && !isNaN(day)) {
+      return timePart ? `${month}월 ${day}일 ${timePart}` : `${month}월 ${day}일`;
+    }
   }
   return "-";
 }
@@ -84,6 +87,12 @@ function parseDeadline(deadline: string | null): number | null {
   if (!deadline) return null;
   const parsed = new Date(deadline).getTime();
   return isNaN(parsed) ? null : parsed;
+}
+
+function splitDeadline(deadline: string | null): { date: string; time: string } {
+  if (!deadline) return { date: "", time: "" };
+  const [date, time] = deadline.split("T");
+  return { date: date || "", time: time || "" };
 }
 
 function isOverdue(deadline: string | null): boolean {
@@ -339,22 +348,38 @@ function TaskDetailModal({
 
             <div>
               <label className="mb-1 block text-sm font-semibold text-recall-textMuted">{t.task_field_deadline}</label>
-              <div
-                onClick={handleOpenDatePicker}
-                className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
-              >
-                <span className={form.deadline ? "text-recall-text" : "text-recall-textMuted"}>
-                  {form.deadline || t.task_field_deadline_placeholder}
-                </span>
+              <div className="flex gap-1.5">
+                <div
+                  onClick={handleOpenDatePicker}
+                  className="relative min-w-0 flex-1 cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
+                >
+                  <span className={`truncate ${form.deadline ? "text-recall-text" : "text-recall-textMuted"}`}>
+                    {splitDeadline(form.deadline).date || t.task_field_deadline_placeholder}
+                  </span>
 
-                <CalendarIcon className="text-recall-textMuted flex-shrink-0" size={14} />
+                  <CalendarIcon className="text-recall-textMuted flex-shrink-0" size={14} />
+
+                  <input
+                    ref={dateInputRef}
+                    type="date"
+                    value={splitDeadline(form.deadline).date}
+                    onChange={(e) => {
+                      const time = splitDeadline(form.deadline).time || "09:00";
+                      setForm({ ...form, deadline: e.target.value ? `${e.target.value}T${time}` : null });
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer pointer-events-auto"
+                  />
+                </div>
 
                 <input
-                  ref={dateInputRef}
-                  type="date"
-                  value={form.deadline || ""}
-                  onChange={(e) => setForm({ ...form, deadline: e.target.value })}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer pointer-events-auto"
+                  type="time"
+                  value={splitDeadline(form.deadline).time}
+                  disabled={!form.deadline}
+                  onChange={(e) => {
+                    const date = splitDeadline(form.deadline).date;
+                    if (date) setForm({ ...form, deadline: `${date}T${e.target.value}` });
+                  }}
+                  className="w-24 flex-shrink-0 rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-2 text-sm text-recall-text outline-none focus:border-recall-accent disabled:opacity-50"
                 />
               </div>
             </div>

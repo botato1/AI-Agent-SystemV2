@@ -25,6 +25,7 @@ export {
   Pause as PauseIcon,
   Square as StopIcon,
   AlertTriangle as WarningIcon,
+  HandHelping as AssistIcon,
   CheckCircle2 as CheckIcon,
   ArrowUp as PriorityHighIcon,
   Minus as PriorityMediumIcon,
@@ -39,4 +40,6 @@ export {
   LayoutGrid as GridIcon,
   Search as SearchIcon,
   Calendar as CalendarIcon,
+  Headphones as HeadphoneIcon,
+  Scissors as SplitIcon,
 } from "lucide-react";

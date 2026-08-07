@@ -7,6 +7,7 @@ interface MeetingSearchModalProps {
   workspaceId: string;
   onClose: () => void;
   onSelectMeeting: (meetingId: string) => void;
+  t: any;
 }
 
 function formatShortDate(iso?: string | null): string {
@@ -19,6 +20,7 @@ export default function MeetingSearchModal({
   workspaceId,
   onClose,
   onSelectMeeting,
+  t,
 }: MeetingSearchModalProps) {
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -62,7 +64,7 @@ export default function MeetingSearchModal({
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
           <div className="flex items-center gap-2">
             <SearchIcon size={20} className="text-recall-accent" />
-            <h3 className="text-lg font-bold">회의록 의미 기반 검색</h3>
+            <h3 className="text-lg font-bold">{t.meeting_search_title}</h3>
           </div>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text transition">
             <CloseIcon size={18} />
@@ -78,7 +80,7 @@ export default function MeetingSearchModal({
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="검색어 또는 관련 언급 내용 입력 (예: 서버 포트 번호, 결제 모듈)"
+              placeholder={t.meeting_search_placeholder}
               className="w-full rounded-xl border border-recall-border bg-recall-bgSoft pl-10 pr-4 py-2.5 text-sm text-recall-text outline-none focus:border-recall-accent transition"
             />
           </div>
@@ -86,7 +88,7 @@ export default function MeetingSearchModal({
           {/* 날짜 범위 선택 */}
           <div className="flex items-center gap-2 text-xs text-recall-textMuted">
             <CalendarIcon size={14} className="flex-shrink-0" />
-            <span>기간 지정:</span>
+            <span>{t.meeting_search_date_range_label}</span>
             <input
               type="date"
               value={dateFrom}
@@ -108,7 +110,7 @@ export default function MeetingSearchModal({
                 }}
                 className="text-recall-accent hover:underline ml-1"
               >
-                초기화
+                {t.meeting_search_reset}
               </button>
             )}
           </div>
@@ -117,11 +119,11 @@ export default function MeetingSearchModal({
         {/* 검색 결과 목록 */}
         <div className="flex-1 overflow-y-auto pr-1 space-y-2.5">
           {isLoading ? (
-            <p className="py-12 text-center text-sm text-recall-textMuted">회의록을 검색하는 중입니다...</p>
+            <p className="py-12 text-center text-sm text-recall-textMuted">{t.meeting_search_loading}</p>
           ) : results.length === 0 ? (
             <div className="py-12 text-center text-recall-textMuted">
-              <p className="text-sm font-medium">검색 결과가 없습니다.</p>
-              <p className="text-xs mt-1">단어나 관련 주제를 변경해보세요.</p>
+              <p className="text-sm font-medium">{t.meeting_search_no_results}</p>
+              <p className="text-xs mt-1">{t.meeting_search_no_results_hint}</p>
             </div>
           ) : (
             results.map((m) => (
@@ -140,11 +142,11 @@ export default function MeetingSearchModal({
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     {m.contradiction_count === 0 ? (
                       <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
-                        깨끗함
+                        {t.home_recent_clean_badge}
                       </span>
                     ) : (
                       <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
-                        모순 {m.contradiction_count}
+                        {t.home_recent_contradiction_badge(m.contradiction_count)}
                       </span>
                     )}
                     <span className="text-xs text-recall-textMuted">
@@ -161,7 +163,7 @@ export default function MeetingSearchModal({
 
                 <div className="flex items-center gap-1 text-xs text-recall-textMuted mt-1">
                   <PersonIcon size={12} />
-                  <span>참석 {m.attendee_count}명</span>
+                  <span>{t.home_recent_attendee_count(m.attendee_count)}</span>
                 </div>
               </button>
             ))
@@ -170,7 +172,7 @@ export default function MeetingSearchModal({
 
         {/* 하단 요약 개수 */}
         <div className="mt-3 border-t border-recall-border pt-3 text-right text-xs text-recall-textMuted">
-          총 {totalCount}개의 회의 검색됨
+          {t.meeting_search_total_count(totalCount)}
         </div>
       </div>
     </div>

@@ -103,13 +103,13 @@ export default function ProfileModal({
 
   // 목소리 프로필 삭제
   const handleDeleteVoice = async () => {
-    if (!window.confirm("등록된 목소리를 삭제하시겠습니까?")) return;
+    if (!window.confirm(t.profile_voice_delete_confirm)) return;
     setError(null);
     setSuccessMessage(null);
 
     const res = await deleteVoiceProfileApi();
     if (res.status === "success") {
-      setSuccessMessage("목소리가 삭제되었습니다.");
+      setSuccessMessage(t.profile_voice_deleted_msg);
       fetchVoiceStatus();
     } else {
       setError(res.message);
@@ -119,7 +119,7 @@ export default function ProfileModal({
   // STT 이름 수정
   const handleRenameVoice = async () => {
     if (!editingVoiceName.trim()) {
-      setError("올바른 이름을 입력해 주세요.");
+      setError(t.profile_voice_name_invalid);
       return;
     }
     setError(null);
@@ -127,7 +127,7 @@ export default function ProfileModal({
 
     const res = await renameVoiceProfileApi(editingVoiceName.trim());
     if (res.status === "success") {
-      setSuccessMessage("인식된 목소리 이름이 수정되었습니다.");
+      setSuccessMessage(t.profile_voice_name_updated_msg);
       setIsEditingVoiceName(false);
       fetchVoiceStatus();
     } else {
@@ -148,25 +148,25 @@ export default function ProfileModal({
     setSuccessMessage(null);
 
     if (!displayName.trim()) {
-      setError("이름을 입력해 주세요.");
+      setError(t.profile_name_required);
       return;
     }
 
     if (showPasswordSection) {
       if (!currentPassword.trim()) {
-        setError("현재 비밀번호를 입력해 주세요.");
+        setError(t.settings_account_delete_password_required);
         return;
       }
       if (!newPassword.trim()) {
-        setError("새 비밀번호를 입력해 주세요.");
+        setError(t.profile_new_password_required);
         return;
       }
       if (newPassword !== confirmPassword) {
-        setError("새 비밀번호가 일치하지 않습니다.");
+        setError(t.profile_password_mismatch);
         return;
       }
       if (currentPassword === newPassword) {
-        setError("새 비밀번호는 현재 비밀번호와 다르게 설정해 주세요.");
+        setError(t.profile_password_same_as_current);
         return;
       }
       const policyError = validatePassword(newPassword);
@@ -195,7 +195,7 @@ export default function ProfileModal({
     setIsSubmitting(false);
 
     if (result.status === "success") {
-      setSuccessMessage("프로필이 성공적으로 업데이트되었습니다.");
+      setSuccessMessage(t.profile_update_success);
       if (result.user) {
         onUpdateSuccess({
           ...user,
@@ -214,7 +214,7 @@ export default function ProfileModal({
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-xl text-recall-text custom-scrollbar">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">프로필 설정</h2>
+          <h2 className="text-xl font-bold">{t.profile_modal_title}</h2>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
             ✕
           </button>
@@ -226,7 +226,7 @@ export default function ProfileModal({
             <Avatar user={user} size={80} />
             <button
               onClick={() => setShowAvatarMenu((v) => !v)}
-              aria-label="프로필 변경"
+              aria-label={t.profile_change_avatar_aria}
               className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border border-recall-border bg-recall-bgSoft text-recall-textMuted shadow-sm hover:text-recall-text transition"
             >
               <PencilIcon size={13} />
@@ -245,9 +245,9 @@ export default function ProfileModal({
                   onClick={() => fileInputRef.current?.click()}
                   className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-sm text-recall-text hover:bg-white/5"
                 >
-                  내 사진 업로드
+                  {t.profile_upload_photo}
                 </button>
-                <p className="mb-1.5 text-xs text-recall-textMuted">또는 색상 선택</p>
+                <p className="mb-1.5 text-xs text-recall-textMuted">{t.profile_or_color}</p>
                 <div className="flex flex-wrap gap-1.5">
                   {AVATAR_COLORS.map((color) => (
                     <button
@@ -262,7 +262,7 @@ export default function ProfileModal({
                           ? "ring-2 ring-recall-accent ring-offset-2 ring-offset-recall-bgSoft"
                           : "opacity-80 hover:opacity-100"
                       }`}
-                      aria-label={`색상 ${color}`}
+                      aria-label={t.profile_color_aria(color)}
                     />
                   ))}
                 </div>
@@ -274,7 +274,7 @@ export default function ProfileModal({
         {/* 입력 폼 영역 */}
         <div className="flex flex-col gap-3.5">
           <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">아이디</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_id}</label>
             <input
               type="text"
               value={user.username}
@@ -284,12 +284,12 @@ export default function ProfileModal({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">이름</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_name}</label>
             <input
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="이름 입력"
+              placeholder={t.profile_name_placeholder}
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
             />
           </div>
@@ -307,13 +307,13 @@ export default function ProfileModal({
             >
               <div className="flex items-center gap-1.5">
                 <ChevronIcon open={showVoiceSection} />
-                <span>목소리 등록하기</span>
+                <span>{t.profile_voice_section_title}</span>
               </div>
               <span className="text-xs font-normal">
                 {voiceStatus?.registered ? (
-                  <span className="text-emerald-400 font-medium">등록됨</span>
+                  <span className="text-emerald-400 font-medium">{t.profile_voice_registered}</span>
                 ) : (
-                  <span className="text-recall-textMuted">미등록</span>
+                  <span className="text-recall-textMuted">{t.profile_voice_unregistered}</span>
                 )}
               </span>
             </button>
@@ -321,11 +321,11 @@ export default function ProfileModal({
             {showVoiceSection && (
               <div className="mt-3.5 flex flex-col gap-3 rounded-xl border border-recall-border/60 bg-white/5 p-3.5 text-xs">
                 {isVoiceLoading ? (
-                  <p className="text-recall-textMuted">상태 확인 중...</p>
+                  <p className="text-recall-textMuted">{t.profile_voice_status_loading}</p>
                 ) : voiceStatus?.registered ? (
                   <div className="flex flex-col gap-2.5">
                     <div className="flex items-center justify-between bg-white/5 p-2 rounded-lg border border-recall-border/40">
-                      <span className="text-recall-textMuted">인식된 이름</span>
+                      <span className="text-recall-textMuted">{t.profile_voice_recognized_name}</span>
                       {isEditingVoiceName ? (
                         <div className="flex items-center gap-1">
                           <input
@@ -339,14 +339,14 @@ export default function ProfileModal({
                             onClick={handleRenameVoice}
                             className="rounded bg-recall-accent px-2 py-0.5 text-xs text-white"
                           >
-                            저장
+                            {t.task_save}
                           </button>
                           <button
                             type="button"
                             onClick={() => setIsEditingVoiceName(false)}
                             className="text-recall-textMuted hover:text-recall-text px-1"
                           >
-                            취소
+                            {t.task_cancel}
                           </button>
                         </div>
                       ) : (
@@ -357,7 +357,7 @@ export default function ProfileModal({
                             onClick={() => setIsEditingVoiceName(true)}
                             className="text-recall-textMuted hover:text-recall-text underline text-[11px]"
                           >
-                            수정
+                            {t.meeting_export_edit}
                           </button>
                         </div>
                       )}
@@ -369,14 +369,14 @@ export default function ProfileModal({
                         onClick={() => setIsVoiceRegisterModalOpen(true)}
                         className="rounded-lg border border-recall-border px-3 py-1.5 text-recall-text hover:bg-white/5 transition"
                       >
-                        다시 녹음하기
+                        {t.profile_voice_reregister}
                       </button>
                       <button
                         type="button"
                         onClick={handleDeleteVoice}
                         className="text-red-400 hover:text-red-300 underline text-xs"
                       >
-                        등록 삭제
+                        {t.profile_voice_delete}
                       </button>
                     </div>
                   </div>
@@ -387,7 +387,7 @@ export default function ProfileModal({
                       onClick={() => setIsVoiceRegisterModalOpen(true)}
                       className="mt-1 w-full rounded-lg bg-recall-accent py-2 font-medium text-white hover:opacity-90 transition text-sm shadow-sm"
                     >
-                      목소리 등록하기
+                      {t.profile_voice_section_title}
                     </button>
                   </div>
                 )}
@@ -407,44 +407,44 @@ export default function ProfileModal({
               className="flex items-center gap-1.5 text-sm text-recall-text font-medium hover:opacity-80 transition"
             >
               <ChevronIcon open={showPasswordSection} />
-              <span>비밀번호 변경</span>
+              <span>{t.profile_change_pwd}</span>
             </button>
 
             {showPasswordSection && (
               <div className="mt-3.5 flex flex-col gap-3">
                 <div>
-                  <label className="mb-1 block text-sm text-recall-textMuted">현재 비밀번호</label>
+                  <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_password_current}</label>
                   <input
                     type="password"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="현재 비밀번호 입력"
+                    placeholder={t.profile_password_current_placeholder}
                     className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
                   />
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호</label>
+                  <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_password_new}</label>
                   <input
                     type="password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="새 비밀번호 입력"
+                    placeholder={t.profile_password_new_placeholder}
                     className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
                   />
                   <div className="mt-1 flex items-center gap-1 text-xs text-recall-textMuted">
                     <InfoIcon />
-                    <span>8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합</span>
+                    <span>{t.profile_password_policy_hint}</span>
                   </div>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호 확인</label>
+                  <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_password_confirm}</label>
                   <input
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="새 비밀번호 다시 입력"
+                    placeholder={t.profile_password_confirm_placeholder}
                     className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:outline-none focus:border-recall-accent"
                   />
                 </div>
@@ -465,14 +465,14 @@ export default function ProfileModal({
             onClick={onClose}
             className="rounded-lg border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5"
           >
-            취소
+            {t.task_cancel}
           </button>
           <button
             onClick={handleSaveProfile}
             disabled={isSubmitting}
             className="rounded-lg bg-recall-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
           >
-            {isSubmitting ? "저장 중..." : "저장"}
+            {isSubmitting ? t.meeting_export_saving : t.task_save}
           </button>
         </div>
       </div>
@@ -493,7 +493,7 @@ export default function ProfileModal({
         isOpen={isVoiceRegisterModalOpen}
         onClose={() => setIsVoiceRegisterModalOpen(false)}
         onSuccess={() => {
-          setSuccessMessage("목소리가 등록되었습니다.");
+          setSuccessMessage(t.profile_voice_registered_msg);
           fetchVoiceStatus();
         }}
       />

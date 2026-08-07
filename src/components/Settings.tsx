@@ -59,7 +59,7 @@ export default function Settings({
       return;
     }
     if (!deletePassword) {
-      setDeleteError("현재 비밀번호를 입력해 주세요.");
+      setDeleteError(t.settings_account_delete_password_required);
       return;
     }
 
@@ -122,7 +122,7 @@ export default function Settings({
   const workspaceSectionItems = [
     {
       label: t.settings_workspace_name || "워크스페이스 이름",
-      value: currentWorkspace?.name || "선택된 워크스페이스 없음",
+      value: currentWorkspace?.name || t.settings_no_workspace_selected,
     },
   ];
 
@@ -130,7 +130,7 @@ export default function Settings({
   const notificationSectionItems: { key: keyof NotificationPreferences; label: string }[] = [
     { key: "new_message", label: t.settings_notif_new || "새 메시지 알림" },
     { key: "meeting_summary", label: t.settings_notif_start || "회의 시작 알림" },
-    { key: "contradiction", label: t.settings_notif_contra || "모순 감지 알림" },
+    { key: "contradiction", label: t.settings_notif_contra || "회의 도움 알림" },
   ];
 
   return (
@@ -294,7 +294,7 @@ export default function Settings({
           {/* 4. 계정 관리 구역 */}
           <div>
             <p className="mb-2 text-sm font-semibold text-recall-textMuted">
-              계정 관리
+              {t.settings_account_title}
             </p>
             <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
               <button
@@ -302,7 +302,7 @@ export default function Settings({
                 onClick={() => setIsDeleteConfirmOpen(true)}
                 className="flex w-full items-center justify-between px-4 py-3 text-base font-medium text-recall-danger hover:bg-recall-danger/10 transition"
               >
-                <span>회원 탈퇴</span>
+                <span>{t.settings_account_delete_short}</span>
               </button>
             </div>
           </div>
@@ -316,18 +316,19 @@ export default function Settings({
               <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-recall-danger/10 text-xl">
                 🗑️
               </div>
-              <h4 className="text-lg font-bold text-recall-text">회원 탈퇴</h4>
+              <h4 className="text-lg font-bold text-recall-text">{t.settings_account_delete_short}</h4>
             </div>
 
             <p className="mb-4 text-sm leading-relaxed text-recall-textMuted">
-              정말로 탈퇴하시겠습니까? <span className="font-bold text-recall-text">계정의 모든 정보가 영구적으로 삭제</span>되며,
-              이 작업은 되돌릴 수 없습니다.
+              {t.settings_account_delete_warning_prefix}{" "}
+              <span className="font-bold text-recall-text">{t.settings_account_delete_warning_bold}</span>
+              {t.settings_account_delete_warning_suffix}
             </p>
 
             {onDeleteAccount && (
               <div className="mb-4">
                 <label className="mb-1 block text-sm font-semibold text-recall-textMuted">
-                  본인 확인을 위해 현재 비밀번호를 입력해 주세요
+                  {t.settings_account_delete_password_label}
                 </label>
                 <input
                   type="password"
@@ -338,7 +339,7 @@ export default function Settings({
                     setDeleteError(null);
                   }}
                   onKeyDown={(e) => e.key === "Enter" && handleConfirmDelete()}
-                  placeholder="현재 비밀번호"
+                  placeholder={t.settings_account_delete_password_placeholder}
                   className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-danger"
                 />
                 {deleteError && <p className="mt-1.5 text-sm text-recall-danger">{deleteError}</p>}
@@ -352,7 +353,7 @@ export default function Settings({
                 disabled={isDeleting}
                 className="rounded-lg border border-recall-border px-3.5 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition disabled:opacity-50"
               >
-                취소
+                {t.task_cancel}
               </button>
               <button
                 type="button"
@@ -360,7 +361,7 @@ export default function Settings({
                 disabled={isDeleting}
                 className="rounded-lg bg-recall-danger px-3.5 py-2 text-sm font-semibold text-white hover:opacity-90 transition shadow-md shadow-recall-danger/20 disabled:opacity-50"
               >
-                {isDeleting ? "처리 중..." : "탈퇴하기"}
+                {isDeleting ? t.settings_account_deleting : t.settings_account_delete_confirm_btn}
               </button>
             </div>
           </div>

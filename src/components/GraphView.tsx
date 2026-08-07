@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import { getDocumentGraphApi } from "../services/document";
+
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import { CloseIcon, MenuIcon, PlusIcon, MinusIcon, RepeatIcon } from "./icons";
 
@@ -689,6 +690,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           documentId={previewDoc.id}
           documentName={previewDoc.name}
           onClose={() => setPreviewDoc(null)}
+          t={t}
         />
       )}
     </div>

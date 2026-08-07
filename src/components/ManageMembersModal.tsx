@@ -16,6 +16,8 @@ interface ManageMembersModalProps {
   currentUserId: string;
   onClose: () => void;
   onOpenInviteModal?: () => void;
+  onMembersChanged?: () => void;
+  t: any;
 }
 
 export default function ManageMembersModal({
@@ -24,6 +26,8 @@ export default function ManageMembersModal({
   currentUserId,
   onClose,
   onOpenInviteModal,
+  onMembersChanged,
+  t,
 }: ManageMembersModalProps) {
   const [members, setMembers] = useState<WorkspaceMemberInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +73,7 @@ export default function ManageMembersModal({
 
     if (res.status === "success") {
       setMembers((prev) => prev.filter((m) => (m.user_id || m.id) !== userId));
+      onMembersChanged?.();
     } else {
       setErrorMessage(res.message);
     }
@@ -101,10 +106,10 @@ export default function ManageMembersModal({
         <div className="flex items-center justify-between border-b border-recall-border pb-3 mb-4">
           <div>
             <h3 className="text-lg font-bold">
-              팀원 관리 <span className="text-sm font-normal text-recall-textMuted">({workspaceName})</span>
+              {t.settings_member_count} <span className="text-sm font-normal text-recall-textMuted">({workspaceName})</span>
             </h3>
             <p className="text-sm text-recall-textMuted mt-0.5">
-              총 {members.length}명의 팀원이 참여 중입니다.
+              {t.members_modal_count(members.length)}
             </p>
           </div>
           <button
@@ -128,7 +133,7 @@ export default function ManageMembersModal({
         {/* 본문 (멤버 목록) */}
         {isLoading ? (
           <div className="py-12 text-center text-sm text-recall-textMuted">
-            멤버 목록을 불러오는 중입니다...
+            {t.members_loading}
           </div>
         ) : (
           <div className="max-h-80 space-y-2.5 overflow-y-auto pr-1">
@@ -157,7 +162,7 @@ export default function ManageMembersModal({
                     <div className="flex flex-col min-w-0">
                       <span className="truncate text-base font-bold text-recall-text leading-tight">
                         {displayName}
-                        {isSelf && <span className="ml-1 text-[11px] font-normal text-recall-textMuted">(나)</span>}
+                        {isSelf && <span className="ml-1 text-[11px] font-normal text-recall-textMuted">{t.members_self_tag}</span>}
                       </span>
                       <span className="truncate text-sm text-recall-textMuted mt-0.5">
                         @{m.username}
@@ -174,15 +179,15 @@ export default function ManageMembersModal({
                         onChange={(e) =>
                           handleRoleChange(targetUserId, e.target.value as "owner" | "member")
                         }
-                        title="역할 변경"
+                        title={t.members_role_change_title}
                         className="rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-1 text-sm text-recall-text outline-none focus:border-recall-accent disabled:opacity-50"
                       >
-                        <option value="member">일반 멤버</option>
-                        <option value="owner">소유자</option>
+                        <option value="member">{t.members_role_regular}</option>
+                        <option value="owner">{t.settings_member_role_owner}</option>
                       </select>
                     ) : (
                       <span className="rounded-lg bg-recall-accent/10 px-2 py-1 text-xs font-semibold text-recall-accent">
-                        {m.role === "owner" ? "소유자" : "일반 멤버"}
+                        {m.role === "owner" ? t.settings_member_role_owner : t.members_role_regular}
                       </span>
                     )}
 
@@ -190,7 +195,7 @@ export default function ManageMembersModal({
                       <button
                         disabled={isProcessing}
                         onClick={() => setDeleteTarget({ id: targetUserId, name: displayName })}
-                        title="팀원 제거"
+                        title={t.members_remove_title}
                         className="flex h-8 w-8 items-center justify-center rounded-lg text-recall-textMuted hover:bg-recall-danger/10 hover:text-recall-danger transition disabled:opacity-50"
                       >
                         <TrashIcon size={16} />
@@ -213,14 +218,14 @@ export default function ManageMembersModal({
               }}
               className="rounded-lg bg-recall-accent/15 px-3.5 py-2 text-sm font-semibold text-recall-accent hover:bg-recall-accent hover:text-white transition"
             >
-              + 팀원 초대하기
+              {t.members_invite_btn}
             </button>
           )}
           <button
             onClick={onClose}
             className="ml-auto rounded-lg border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
           >
-            닫기
+            {t.btn_close}
           </button>
         </div>
       </div>
@@ -233,11 +238,11 @@ export default function ManageMembersModal({
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-recall-danger/10 text-xl">
                 🗑️
               </div>
-              <h4 className="text-lg font-bold text-recall-text">팀원 제거</h4>
+              <h4 className="text-lg font-bold text-recall-text">{t.members_remove_title}</h4>
             </div>
 
             <p className="text-sm text-recall-textMuted leading-relaxed mb-5">
-              <span className="font-bold text-recall-text">'{deleteTarget.name}'</span> 님을 워크스페이스에서 제거하시겠습니까? 이 작업은 즉시 반영됩니다.
+              {t.members_remove_confirm(deleteTarget.name)}
             </p>
 
             <div className="flex justify-end gap-2">
@@ -246,14 +251,14 @@ export default function ManageMembersModal({
                 onClick={() => setDeleteTarget(null)}
                 className="rounded-lg border border-recall-border px-3.5 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
               >
-                취소
+                {t.task_cancel}
               </button>
               <button
                 type="button"
                 onClick={executeDeleteMember}
                 className="rounded-lg bg-recall-danger px-3.5 py-2 text-sm font-semibold text-white hover:opacity-90 transition shadow-md shadow-recall-danger/20"
               >
-                제거하기
+                {t.members_remove_confirm_btn}
               </button>
             </div>
           </div>

@@ -8,8 +8,10 @@ import {
   resolveContradictionApi,
   dismissContradictionApi,
   reopenContradictionApi,
+  updateContradictionApi,
   getChangeSummaryApi,
 } from "../services/contradiction";
+import { showToast } from "../lib/toast";
 
 const CHANGE_SUMMARY_POLL_INTERVAL_MS = 2000;
 
@@ -94,7 +96,7 @@ export function useContradictions(workspaceId: string) {
         setPendingSummaryFor(target);
       }
     } else {
-      alert(res.message);
+      showToast(res.message);
     }
   }
 
@@ -103,8 +105,23 @@ export function useContradictions(workspaceId: string) {
     if (res.status === "success") {
       setContradictions((prev) => prev.filter((c) => c.id !== id));
     } else {
-      alert(res.message);
+      showToast(res.message);
     }
+  }
+
+  // 잘못 감지된 모순의 스냅샷 텍스트를 직접 고친다. 성공하면 목록에 있는 항목도 즉시 갱신한다.
+  async function update(
+    id: string,
+    updates: { statement_text_snapshot?: string; reference_text_snapshot?: string }
+  ): Promise<boolean> {
+    const res = await updateContradictionApi(workspaceId, id, updates);
+    if (res.status === "success" && res.contradiction) {
+      const updated = res.contradiction;
+      setContradictions((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      return true;
+    }
+    showToast(res.message);
+    return false;
   }
 
   // "유지"로 처리했던 것을 다시 미해결로 되돌린다 ("반영"은 백엔드가 거부함)
@@ -113,7 +130,7 @@ export function useContradictions(workspaceId: string) {
     if (res.status === "success") {
       setContradictions((prev) => prev.filter((c) => c.id !== id));
     } else {
-      alert(res.message);
+      showToast(res.message);
     }
   }
 
@@ -133,6 +150,7 @@ export function useContradictions(workspaceId: string) {
     resolve,
     dismiss,
     reopen,
+    update,
     refresh: loadList,
   };
 }
