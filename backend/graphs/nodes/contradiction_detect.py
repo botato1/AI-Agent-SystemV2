@@ -39,6 +39,12 @@ CONFIDENCE_THRESHOLD = 0.6
 #  rag_service.py의 실측 기준 "관련있음 0.6~, 무관 0.4 미만"과 동일한 값 사용.)
 RELEVANCE_THRESHOLD = 0.4
 
+# [수정] 문서-발화 모순 판단을 일단 끈다 - decision_judgment.judge() 하나로 판단을
+# 통일하기로 함 (document_judgment.py에서도 같은 이유로 이미 판단 로직을 제거했고,
+# 이 노드만 아직 같은 일을 하고 있었음 - 승주 리뷰 3번 항목). 코드/로직은 그대로
+# 남겨두고 진입점만 막는다 - 다시 켤 때는 이 플래그만 True로.
+DOCUMENT_CONTRADICTION_ENABLED = False
+
 _JUDGE_PROMPT = """당신은 팀 문서와 회의/채팅 발언 사이의 모순을 판단하는 검토자입니다.
 
 [발언]
@@ -111,6 +117,17 @@ def _judge_contradiction(statement: str, reference: str) -> dict:
 
 
 def contradiction_detect_node(state: ContradictionState) -> dict:
+    if not DOCUMENT_CONTRADICTION_ENABLED:
+        # 비활성화 상태 - 호출부(meeting_ws_router.py, meeting_service.py)가 보는
+        # 반환 모양은 "후보 없음"과 동일하게 맞춰서, 이 노드를 끈 것 때문에 호출부가
+        # 별도 분기를 타지 않게 한다.
+        return {
+            "content_chunk_candidates": [],
+            "llm_judgments": [],
+            "detected_contradictions": [],
+            "saved_contradiction_ids": [],
+        }
+
     workspace_id = state["workspace_id"]
     category_id = state["category_id"]
     statement_text = state["statement_text"]
