@@ -16,6 +16,7 @@ from backend.schemas.contradiction_schema import (
     ContradictionListResponse,
     ContradictionResolveRequest,
     ChangeSummaryDraftSchema,
+    ContradictionUpdateRequest,
 )
 from backend.schemas.type_schema import ContradictionStatus
 
@@ -312,4 +313,36 @@ def reopen_contradiction_api(
         )
 
     updated = contradiction_crud.reopen_contradiction(db, contradiction_id)
+    return _to_contradiction_schema(db, updated)
+
+
+# 잘못 감지된 모순 내용 수정
+@router.patch("/{contradiction_id}", response_model=ContradictionSchema)
+def update_contradiction_api(
+    workspace_id: uuid.UUID,
+    contradiction_id: uuid.UUID,
+    request: ContradictionUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    contradiction = _get_contradiction_or_404(db, contradiction_id, workspace_id)
+
+    if request.statement_text_snapshot is None and request.reference_text_snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+    if contradiction.status != "unresolved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 처리된 모순입니다.",
+        )
+    _check_meeting_not_recording(db, contradiction)
+
+    updated = contradiction_crud.update_contradiction_snapshots(
+        db, contradiction_id,
+        statement_text_snapshot=request.statement_text_snapshot,
+        reference_text_snapshot=request.reference_text_snapshot,
+    )
     return _to_contradiction_schema(db, updated)

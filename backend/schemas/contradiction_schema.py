@@ -240,3 +240,8 @@ class ContradictionListResponse(BaseModel):
 class ContradictionResolveRequest(BaseModel):
     resolution_type: ContradictionResolutionType
     note: Optional[str] = None
+
+
+class ContradictionUpdateRequest(BaseModel):
+    statement_text_snapshot: Optional[str] = Field(default=None, min_length=1)
+    reference_text_snapshot: Optional[str] = Field(default=None, min_length=1)
