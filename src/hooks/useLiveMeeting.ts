@@ -636,9 +636,13 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     reconnectDeadlineRef.current = null;
     clearReconnectTimer();
 
+    // session_end는 밀려 있는 자막이 많으면 최대 1분까지 걸릴 수 있다 - 그보다 짧게 잡으면
+    // 서버가 마지막 자막을 다 보내기 전에 소켓을 닫아버려서 회의 후반부 스크립트가 화면에서
+    // 잘려 보인다 (회의록엔 남지만 회의 중 화면에는 안 뜬 채로 끝나버림).
+    const SESSION_END_TIMEOUT_MS = 60000;
     const waitForSessionEnd = new Promise<void>((resolve) => {
       sessionEndResolverRef.current = resolve;
-      setTimeout(resolve, 5000);
+      setTimeout(resolve, SESSION_END_TIMEOUT_MS);
     });
 
     if (ws.readyState === WebSocket.OPEN) {
