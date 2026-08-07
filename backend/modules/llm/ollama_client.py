@@ -247,7 +247,11 @@ def _call_ollama(
     ko_suffix = "\n\n[중요] 반드시 한국어로만 답하세요. 중국어 사용 절대 금지."
 
     def _payload(p: str) -> dict:
-        body = {"model": model, "prompt": p, "stream": False}
+        # [추가] keep_alive - 모델을 GPU 메모리에 계속 상주시켜 호출마다 재로드되는
+        # 오버헤드를 없앤다. 실시간 판단 파이프라인처럼 발화 하나당 여러 번 순차
+        # 호출하는 경우, 이게 없으면 매 호출이 로드→추론→언로드를 반복해 체감
+        # 지연이 크게 늘어난다.
+        body = {"model": model, "prompt": p, "stream": False, "keep_alive": "30m"}
         if response_format is not None:
             body["format"] = response_format
         if temperature is not None:
