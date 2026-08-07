@@ -216,20 +216,47 @@ def _build_context_from_docs(docs: list, max_chars: int = 6000) -> str:
     return "\n\n".join(parts)[:max_chars]
 
 
-def _call_ollama(prompt: str, timeout: float = 150.0, model: str = OLLAMA_MODEL_LIGHT) -> str:
+def _call_ollama(
+    prompt: str,
+    timeout: float = 150.0,
+    model: str = OLLAMA_MODEL_LIGHT,
+    response_format: str | None = None,
+    temperature: float | None = None,
+) -> str:
     """
     Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회).
 
     [수정 - 2026.07.16] model 인자 추가 (Model1/2 이원화).
     기본값은 OLLAMA_MODEL_LIGHT(Model1)이라 기존 호출부는 그대로 둬도 동작한다.
     Model2로 escalate하려면 model=OLLAMA_MODEL_HEAVY로 명시 호출.
+
+    [수정] response_format 인자 추가 (승주 리뷰 반영). "json"을 넘기면 Ollama의
+    구조화 출력 모드로 응답이 항상 유효한 JSON이 되도록 강제한다. JSON을 파싱해
+    쓰는 호출부(contradiction_detect 등)가 이 공용 함수를 쓰면서도 기존의
+    format:json 보장을 잃지 않게 하기 위함. 기본값 None이면 payload에 아예
+    포함하지 않으므로 기존 호출부 동작은 그대로다.
+
+    [추가] temperature 인자 추가. 기본값 None이면 Ollama 기본값(모델 Modelfile에
+    별도 설정 없으면 0.8 근처)이 그대로 적용되어, 완전히 같은 입력에도 매번 다른
+    출력이 나올 수 있다. 실시간 판단 파이프라인(decision_judgment.py)처럼 같은
+    입력에는 항상 같은 판단이 나와야 하는 호출부는 temperature=0으로 명시해서
+    호출해야 한다 - 재현성이 필요 없는 다른 호출부(채팅 답변, 요약 등)는 기본값
+    그대로 두면 기존 동작이 안 바뀐다.
     """
     # 프롬프트 끝에 한국어 강제 지시 추가
     ko_suffix = "\n\n[중요] 반드시 한국어로만 답하세요. 중국어 사용 절대 금지."
 
+    def _payload(p: str) -> dict:
+        body = {"model": model, "prompt": p, "stream": False}
+        if response_format is not None:
+            body["format"] = response_format
+        if temperature is not None:
+            body["options"] = {"temperature": temperature}
+        return body
+
     response = httpx.post(
         f"{OLLAMA_BASE_URL}/api/generate",
-        json={"model": model, "prompt": prompt + ko_suffix, "stream": False},
+        json=_payload(prompt + ko_suffix),
         timeout=timeout,
     )
     text = response.json().get("response", "답변 생성 실패").strip()
@@ -241,11 +268,9 @@ def _call_ollama(prompt: str, timeout: float = 150.0, model: str = OLLAMA_MODEL_
         print(f"[경고] 중국어 감지 → 재시도 {attempt + 1}/2")
         response = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt + ko_suffix + "\n한국어 외 다른 언어는 절대 사용하지 마세요.",
-                "stream": False,
-            },
+            json=_payload(
+                prompt + ko_suffix + "\n한국어 외 다른 언어는 절대 사용하지 마세요."
+            ),
             timeout=timeout,
         )
         text = response.json().get("response", "답변 생성 실패").strip()
