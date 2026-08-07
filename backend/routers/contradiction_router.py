@@ -52,14 +52,19 @@ def _check_meeting_not_recording(db: Session, contradiction) -> None:
             detail="회의가 진행 중일 때는 모순을 처리할 수 없습니다. 회의 종료 후 처리해주세요.",
         )
     
-def _check_not_chat_sourced(contradiction) -> None:
-    """채팅발 모순은 알림 전용 — resolve/dismiss 처리 자체를 막는다.
-    이유: 반영 시 RAG(decision_collection) 재인덱싱이 안 되는 문제 때문에
-    회의처럼 실제로 변경을 확정하는 액션을 아직 지원할 수 없음."""
-    if contradiction.source_type == "room_message":
+def _check_not_chat_sourced(contradiction, resolution_type: str | None = None) -> None:
+    """채팅발 모순 중, decision 변경을 실제로 확정(전이)하는 조합만 막는다.
+    change_acknowledged + reference_type='decision'이면 decisions 테이블 전이가
+    일어나는데 RAG(decision_collection) 재인덱싱이 안 됨 - dismiss/keep_reference/
+    문서(content_chunk) 참조는 이 경로를 안 타므로 막을 이유 없음."""
+    if (
+        contradiction.source_type == "room_message"
+        and contradiction.reference_type == "decision"
+        and resolution_type == "change_acknowledged"
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="채팅에서 감지된 모순은 알림 용도로만 제공됩니다. 처리하려면 회의에서 다시 확인해주세요.",
+            detail="채팅에서 감지된 결정 변경은 아직 반영할 수 없습니다. 회의에서 다시 확인해주세요.",
         )
 
 
@@ -206,8 +211,8 @@ def resolve_contradiction_api(
             detail="이미 처리된 모순입니다.",
         )
     _check_meeting_not_recording(db, contradiction)
-    _check_not_chat_sourced(contradiction)    
-
+    _check_not_chat_sourced(contradiction, request.resolution_type)
+    
     resolution = contradiction_crud.resolve_contradiction(
         db,
         contradiction_id=contradiction_id,
@@ -259,7 +264,6 @@ def dismiss_contradiction_api(
             detail="이미 처리된 모순입니다.",
         )
     _check_meeting_not_recording(db, contradiction)
-    _check_not_chat_sourced(contradiction)
     
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
     return _to_contradiction_schema(db, updated)
