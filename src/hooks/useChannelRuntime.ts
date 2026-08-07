@@ -12,6 +12,7 @@ export interface ChatMessage {
   senderId: string | null;
   text: string;
   isMine: boolean;
+  createdAt: string;
 }
 
 export interface DocItem {
@@ -77,6 +78,7 @@ export function useChannelRuntime(
     senderId: m.sender_user_id,
     text: m.content,
     isMine: m.sender_user_id === currentUser.id,
+    createdAt: m.created_at,
   }));
 
   async function sendChatMessage(text: string) {

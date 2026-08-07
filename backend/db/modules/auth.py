@@ -21,6 +21,7 @@ class User(Base):
     created_at = created_at_col()
     updated_at = updated_at_col()
     profile_image_url = Column(Text, nullable=True)
+    avatar_color = Column(String(20), nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (

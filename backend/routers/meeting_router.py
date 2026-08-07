@@ -6,16 +6,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
+import io
+import wave
 from sqlalchemy.orm import Session
 
 from backend.core.security import create_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud
-from backend.services import meeting_service
+from backend.modules.rag.document_loader import load_document
+from backend.services import document_service, meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
+from backend.modules.judgment import agenda_reminder
 from backend.routers import meeting_ws_router
+from backend.schemas.task_schema import TaskResponse, TaskListResponse
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
     MeetingResponse,
@@ -35,20 +41,28 @@ from backend.schemas.meeting_schema import (
     MeetingAttendeeListResponse,
     AttendeeMappingRequest,
     MeetingExportResponse,
+    MeetingExportFileResponse,
+    MeetingExportFileListResponse,
     MeetingRecentItem,
     MeetingRecentListResponse,
     MeetingScheduleRequest,
     UpcomingMeetingItem,
     UpcomingMeetingListResponse,
     MeetingJoinResponse,
+    MeetingSegmentUpdateRequest,
+    MeetingSummaryUpdateRequest,
+    MeetingSegmentSplitRequest,
+    MeetingSegmentSplitResponse,
+    MeetingDocumentResponse,
+    MeetingDocumentListResponse,
 )
 
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/meetings", tags=["Meetings"])
 decisions_router = APIRouter(prefix="/api/workspaces/{workspace_id}", tags=["Decisions"])
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (document_service.py와 동일한 임시 조치)
-MEETING_AUDIO_STORAGE_DIR = Path("data/uploads/audio")
+MEETING_EXPORT_STORAGE_DIR = Path("storage/uploads/exports")
+MEETING_AUDIO_STORAGE_DIR = Path("storage/uploads/audio")
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm"}
 
 
@@ -107,11 +121,18 @@ def start_meeting_api(
             detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
         )
 
+    started_at = datetime.now(timezone.utc)
+    title = (request.title or "").strip()
+    title_is_auto = not title
+    if title_is_auto:
+        title = f"{started_at.month}월 {started_at.day}일 회의"
+
     meeting = meeting_crud.create_meeting(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
-        title=request.title,
+        title=title,
+        title_is_auto=title_is_auto,
         location=request.location,
         topic=request.topic,
         recording_mode=request.recording_mode,
@@ -119,14 +140,16 @@ def start_meeting_api(
         started_by=uuid.UUID(current_user_id),
         related_room_id=request.related_room_id,
         status="recording",
-        started_at=datetime.now(timezone.utc),
+        started_at=started_at,
     )
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
+    reminder_result = agenda_reminder.check_on_session_start(db, category.id)
 
     return MeetingStartResponse(
         **MeetingResponse.model_validate(meeting).model_dump(),
         ws_ticket=ws_ticket,
+        agenda_reminder=reminder_result["popup"],
     )
 
 
@@ -135,7 +158,7 @@ def start_meeting_api(
 async def upload_meeting_api(
     workspace_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    title: str = Form(..., min_length=1, max_length=200),
+    title: str | None = Form(default=None, max_length=200),
     file: UploadFile = File(...),
     related_room_id: uuid.UUID | None = Form(None),
     location: str | None = Form(None),
@@ -179,12 +202,18 @@ async def upload_meeting_api(
         version_group_id=uuid.uuid4(),
         analysis_status="pending",
     )
+    resolved_title = (title or "").strip()
+    title_is_auto = not resolved_title
+    if title_is_auto:
+        now = datetime.now(timezone.utc)
+        resolved_title = f"{now.month}월 {now.day}일 회의"
 
     meeting = meeting_crud.create_meeting(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
-        title=title,
+        title=resolved_title,
+        title_is_auto=title_is_auto,
         location=location,
         topic=topic,
         input_type="audio_upload",
@@ -243,6 +272,11 @@ def end_meeting_api(
             detail="녹음 중인 회의가 아닙니다.",
         )
     meeting = transitioned
+
+    # 각자 PC 모드는 참가자별로 별도 파일에 녹음되므로, 후처리가 찾는 단일 파일로
+    # 미리 합쳐둬야 한다 (다른 참가자 소켓이 아직 연결돼 있어도 여기까지 기록된 만큼만 합침).
+    if meeting.recording_mode == "individual":
+        meeting_ws_router._merge_individual_recordings(meeting_id)
 
     # 응답은 바로 내려주고, 요약/결정사항/할 일 생성(LLM 호출 포함)은 백그라운드에서 처리.
     background_tasks.add_task(
@@ -382,13 +416,19 @@ def schedule_meeting_api(
                 detail=f"워크스페이스 멤버가 아닌 사용자입니다: {user_id}",
             )
 
+    scheduled_title = (request.title or "").strip()
+    title_is_auto = not scheduled_title
+    if title_is_auto:
+        scheduled_title = f"{request.scheduled_at.month}월 {request.scheduled_at.day}일 회의"
+
     meeting = meeting_crud.create_meeting(
         db,
         workspace_id=workspace_id,
         category_id=category.id,
-        title=request.title,
-        topic=request.topic,
+        title=scheduled_title,
+        title_is_auto=title_is_auto,
         location=request.location,
+        topic=request.topic,
         input_type="live_recording",
         started_by=uuid.UUID(current_user_id),
         status="scheduled",
@@ -427,6 +467,22 @@ def get_upcoming_meetings_api(
         ))
     return UpcomingMeetingListResponse(meetings=items)
 
+# 회의에서 AI가 추출한 할 일 중 아직 검수(승인) 안 된 제안 목록
+@router.get("/{meeting_id}/suggested-tasks", response_model=TaskListResponse)
+def get_meeting_suggested_tasks_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    items = meeting_crud.list_suggested_tasks_by_meeting(db, meeting_id)
+    return TaskListResponse(
+        tasks=[TaskResponse.model_validate(i) for i in items]
+    )
+
 # 예정된 회의를 실제 녹음으로 시작
 @router.post("/{meeting_id}/begin", response_model=MeetingStartResponse)
 def begin_scheduled_meeting_api(
@@ -455,9 +511,12 @@ def begin_scheduled_meeting_api(
         )
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
+    reminder_result = agenda_reminder.check_on_session_start(db, transitioned.category_id)
+
     return MeetingStartResponse(
         **MeetingResponse.model_validate(transitioned).model_dump(),
         ws_ticket=ws_ticket,
+        agenda_reminder=reminder_result["popup"],
     )
 
 # 회의 단건 조회
@@ -483,8 +542,12 @@ def update_meeting_title_api(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     _get_meeting_or_404(db, meeting_id, workspace_id)
-
-    updated = meeting_crud.update_meeting_info(db, meeting_id, title=request.title, location=request.location, topic=request.topic)
+    
+    updated = meeting_crud.update_meeting_info(
+        db, meeting_id,
+        title=request.title, location=request.location, topic=request.topic,
+        title_is_auto=False,
+    )
     return MeetingResponse.model_validate(updated)
 
 
@@ -517,6 +580,123 @@ def get_meeting_segments_api(
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments]
     )
 
+# 회의 원본 음성 듣기/다운로드 (실시간 녹음은 raw PCM이라 WAV 헤더를 씌워서 반환)
+@router.get("/{meeting_id}/audio")
+def get_meeting_audio_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if not meeting.source_file_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일이 아직 없습니다.",
+        )
+
+    workspace_file = file_crud.get_file(db, meeting.source_file_id)
+    if not workspace_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일을 찾을 수 없습니다.",
+        )
+
+    file_path = Path(workspace_file.storage_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 음성 파일이 존재하지 않습니다.",
+        )
+
+    if workspace_file.mime_type == "audio/L16":
+        # 실시간 녹음 - raw PCM16LE 16kHz mono라 브라우저가 바로 못 읽음. WAV 헤더를 씌워서 반환.
+        pcm_bytes = file_path.read_bytes()
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(pcm_bytes)
+        buffer.seek(0)
+        return StreamingResponse(buffer, media_type="audio/wav")
+
+    return FileResponse(
+        path=file_path,
+        media_type=workspace_file.mime_type or "application/octet-stream",
+        filename=workspace_file.original_filename,
+    )
+
+# 발화 세그먼트 내용 수정
+@router.patch("/{meeting_id}/segments/{segment_id}", response_model=MeetingSegmentResponse)
+def update_meeting_segment_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    request: MeetingSegmentUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if request.content is None and request.speaker_label is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+    
+    segment = meeting_crud.get_segment(db, segment_id)
+    if not segment or segment.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="발화 세그먼트를 찾을 수 없습니다.",
+        )
+
+    updated = meeting_crud.update_segment_content(
+        db, segment_id, content=request.content, speaker_label=request.speaker_label,
+    )    
+    return MeetingSegmentResponse.model_validate(updated)
+
+# 발화 세그먼트 분할 (한 세그먼트에 두 사람 발언이 섞였을 때)
+@router.post("/{meeting_id}/segments/{segment_id}/split", response_model=MeetingSegmentSplitResponse)
+def split_meeting_segment_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    segment_id: uuid.UUID,
+    request: MeetingSegmentSplitRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    segment = meeting_crud.get_segment(db, segment_id)
+    if not segment or segment.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="발화 세그먼트를 찾을 수 없습니다.",
+        )
+    if segment.end_ms - segment.start_ms < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="구간이 너무 짧아 분할할 수 없습니다.",
+        )
+
+    result = meeting_crud.split_segment(
+        db, segment_id,
+        first_content=request.first_content,
+        second_content=request.second_content,
+        first_speaker_label=request.first_speaker_label,
+        second_speaker_label=request.second_speaker_label,
+    )
+    first, second = result
+    return MeetingSegmentSplitResponse(
+        first=MeetingSegmentResponse.model_validate(first),
+        second=MeetingSegmentResponse.model_validate(second),
+    )
 
 # 회의 요약 조회
 @router.get("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
@@ -536,6 +716,40 @@ def get_meeting_summary_api(
             detail="회의 요약을 찾을 수 없습니다.",
         )
     return MeetingSummaryResponse.model_validate(summary)
+
+# 회의 요약 수정
+@router.patch("/{meeting_id}/summary", response_model=MeetingSummaryResponse)
+def update_meeting_summary_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: MeetingSummaryUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    existing = meeting_crud.get_meeting_summary(db, meeting_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의 요약을 찾을 수 없습니다.",
+        )
+
+    if request.short_summary is None and request.full_summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+
+    update_fields = {}
+    if request.short_summary is not None:
+        update_fields["short_summary"] = request.short_summary
+    if request.full_summary is not None:
+        update_fields["full_summary"] = request.full_summary
+
+    updated = meeting_crud.upsert_summary(db, meeting_id, **update_fields)
+    return MeetingSummaryResponse.model_validate(updated)
 
 # 회의록 내보내기용 데이터 일괄 조회 — 문서 조립은 프론트에서 처리
 @router.get("/{meeting_id}/export", response_model=MeetingExportResponse)
@@ -565,6 +779,105 @@ def get_meeting_export_api(
         short_summary=summary.short_summary if summary else None,
         filtered_transcript=summary.filtered_transcript if summary else None,
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments],
+    )
+
+def _build_export_document_text(meeting, summary, attendee_rows, segments) -> str:
+    lines = [f"# {meeting.title} 회의록"]
+    if meeting.location:
+        lines.append(f"장소: {meeting.location}")
+    if meeting.topic:
+        lines.append(f"주제: {meeting.topic}")
+    attendee_names = ", ".join(user.display_name for _, user in attendee_rows)
+    if attendee_names:
+        lines.append(f"참석자: {attendee_names}")
+    if summary and summary.full_summary:
+        lines.append(f"\n## 전체 내용\n{summary.full_summary}")
+    if summary and summary.short_summary:
+        lines.append(f"\n## 요약\n{summary.short_summary}")
+    if segments:
+        transcript = "\n".join(f"[{s.speaker_label or '화자 미상'}] {s.content}" for s in segments)
+        lines.append(f"\n## 스크립트\n{transcript}")
+    return "\n".join(lines)
+
+
+# 회의록 PDF 내보내기 - 완성된 PDF 파일을 서버에 저장/등록
+@router.post("/{meeting_id}/export", response_model=MeetingExportFileResponse, status_code=status.HTTP_201_CREATED)
+async def upload_meeting_export_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    file: UploadFile = File(...),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    if not file.filename or Path(file.filename).suffix.lower() != ".pdf":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PDF 파일만 업로드 가능합니다.",
+        )
+
+    file_content = await file.read()
+    MEETING_EXPORT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{uuid.uuid4()}.pdf"
+    storage_path = MEETING_EXPORT_STORAGE_DIR / stored_filename
+    storage_path.write_bytes(file_content)
+
+    workspace_file = file_crud.create_meeting_export(
+        db,
+        workspace_id=workspace_id,
+        category_id=meeting.category_id,
+        meeting_id=meeting_id,
+        uploaded_by=uuid.UUID(current_user_id),
+        original_filename=file.filename,
+        stored_filename=stored_filename,
+        storage_path=str(storage_path),
+        file_size_bytes=len(file_content),
+        sha256_hash=hashlib.sha256(file_content).hexdigest(),
+    )
+
+    # 검색/모순 감지 대상에 포함되도록 임베딩 — 부가 기능이라 실패해도 파일 저장 자체는 성공 처리
+    try:
+        summary = meeting_crud.get_meeting_summary(db, meeting_id)
+        attendee_rows = meeting_crud.get_attendees(db, meeting_id)
+        segments = meeting_crud.get_segments(db, meeting_id)
+        document_text = _build_export_document_text(meeting, summary, attendee_rows, segments)
+        load_result = load_document(db, workspace_file.id, chunks=[
+            {"style": "body", "content": document_text, "page_number": 1}
+        ])
+        if load_result.get("status") != "success":
+            print(f"[meeting_router] 회의록 내보내기 임베딩 실패: {load_result}")
+    except Exception as e:
+        print(f"[meeting_router] 회의록 내보내기 임베딩 중 예외: {repr(e)}")
+
+    return MeetingExportFileResponse(
+        export_id=workspace_file.id,
+        meeting_id=meeting_id,
+        meeting_title=meeting.title,
+        filename=workspace_file.original_filename,
+        created_at=workspace_file.created_at,
+    )
+
+
+# 워크스페이스 전체 회의록 내보내기 이력
+@decisions_router.get("/meeting-exports", response_model=MeetingExportFileListResponse)
+def list_meeting_exports_api(
+    workspace_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    rows = file_crud.list_meeting_exports(db, workspace_id)
+    return MeetingExportFileListResponse(
+        exports=[
+            MeetingExportFileResponse(
+                export_id=wf.id, meeting_id=wf.related_meeting_id,
+                meeting_title=title, filename=wf.original_filename,
+                created_at=wf.created_at,
+            )
+            for wf, title in rows
+        ]
     )
 
 
@@ -675,7 +988,7 @@ def update_meeting_speakers_api(
         "message": "화자 이름이 매핑되었습니다.",
     }
 
-# 진행 중인 "각자 PC에서" 모드 회의에 참가 — 본인 몫의 ws_ticket 발급
+# 진행 중인 회의에 참가 — individual 모드는 본인 마이크로, 그 외엔 보기 전용으로 ws_ticket 발급
 @router.post("/{meeting_id}/join", response_model=MeetingJoinResponse)
 def join_meeting_api(
     workspace_id: uuid.UUID,
@@ -686,18 +999,16 @@ def join_meeting_api(
     require_workspace_member(db, workspace_id, current_user_id)
     meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
 
-    if meeting.recording_mode != "individual":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="'각자 PC에서' 모드 회의만 참가할 수 있습니다.",
-        )
     if meeting.status != "recording":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="녹음 중인 회의가 아닙니다.",
         )
 
-    ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
+    # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가. 그 외(single_device,
+    # 한 대의 PC) 모드는 오디오는 이미 호스트 연결이 담당하므로 보기 전용으로만 참가시킨다.
+    view_only = meeting.recording_mode != "individual"
+    ws_ticket = create_ws_ticket(current_user_id, str(meeting_id), view_only=view_only)
     return MeetingJoinResponse(ws_ticket=ws_ticket)
 
 # 참석 인원 조회
@@ -770,3 +1081,45 @@ def get_workspace_decisions_api(
         results.append(item)
 
     return DecisionWithHistoryListResponse(decisions=results)
+
+# 회의에 첨부된 참고 문서 목록 조회
+@router.get("/{meeting_id}/documents", response_model=MeetingDocumentListResponse)
+def get_meeting_documents_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    files = file_crud.list_files_by_meeting(db, meeting_id)
+    return MeetingDocumentListResponse(
+        documents=[MeetingDocumentResponse.model_validate(f) for f in files]
+    )
+
+# 회의 첨부 문서 삭제(연결 해제)
+@router.delete("/{meeting_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_meeting_document_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    document_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    try:
+        result = document_service.unlink_or_delete_meeting_document(db, document_id, meeting_id)
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의에 첨부된 문서를 찾을 수 없습니다.",
+        )
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"문서 삭제 중 오류가 발생했습니다: {result.get('error')}",
+        )

@@ -131,7 +131,11 @@ def _validate_password_format(password: str) -> None:
 
 
 def _has_profile_update_fields(request: ProfileUpdateRequest) -> bool:
-    return request.display_name is not None or request.new_password is not None
+    return (
+        request.display_name is not None
+        or request.avatar_color is not None
+        or request.new_password is not None
+    )
 
 
 # 아이디 중복 확인
@@ -347,6 +351,8 @@ def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest
             detail="사용자를 찾을 수 없습니다.",
         )
 
+    # 검증을 먼저 전부 끝낸다 (이 시점까지 아무것도 커밋하지 않음)
+    display_name = None
     if request.display_name is not None:
         display_name = request.display_name.strip()
 
@@ -355,8 +361,6 @@ def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="이름은 빈 값으로 수정할 수 없습니다.",
             )
-
-        auth_crud.update_user_profile(db, user.id, display_name=display_name)
 
     if request.new_password is not None:
         if not request.current_password:
@@ -373,6 +377,14 @@ def update_profile(db: Session, access_token: str, request: ProfileUpdateRequest
                 detail="현재 비밀번호가 올바르지 않습니다.",
             )
 
+    # 검증을 모두 통과한 뒤에만 실제로 저장한다 (부분 커밋 방지)
+    if request.avatar_color is not None:
+        auth_crud.update_user_profile(db, user.id, avatar_color=request.avatar_color)
+
+    if display_name is not None:
+        auth_crud.update_user_profile(db, user.id, display_name=display_name)
+
+    if request.new_password is not None:
         auth_crud.update_user_password(db, user.id, hash_password(request.new_password))
 
     updated_user = auth_crud.get_user_by_id(db, user.id)
@@ -488,7 +500,7 @@ def delete_account(db: Session, access_token: str, request: AccountDeleteRequest
         error=None,
     )
 
-PROFILE_IMAGE_STORAGE_DIR = Path("data/uploads/profile_images")
+PROFILE_IMAGE_STORAGE_DIR = Path("storage/uploads/profile_images")
 ALLOWED_PROFILE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MAX_PROFILE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
 
@@ -559,6 +571,17 @@ def get_voice_profile_script() -> str:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="음성 서버에서 문장을 가져오지 못했습니다.",
+        )
+    
+def list_registered_voice_profiles() -> list[str]:
+    try:
+        response = httpx.get(f"{STT_SERVER_BASE_URL}/api/profiles", timeout=10.0)
+        response.raise_for_status()
+        return response.json().get("names", [])
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="음성 서버에서 등록된 화자 목록을 가져오지 못했습니다.",
         )
 
 

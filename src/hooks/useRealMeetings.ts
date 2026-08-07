@@ -4,11 +4,13 @@ import {
   MeetingSegment,
   MeetingSummary,
   Decision,
+  MeetingAttendee,
   getMeetingListApi,
   deleteMeetingApi,
   getMeetingSegmentsApi,
   getMeetingSummaryApi,
   getMeetingDecisionsApi,
+  getMeetingAttendeesApi,
   uploadMeetingAudioApi,
   mapSpeakerNamesApi,
   renameMeetingApi,
@@ -24,6 +26,7 @@ export function useRealMeetings(workspaceId: string) {
   const [segments, setSegments] = useState<MeetingSegment[]>([]);
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [attendees, setAttendees] = useState<MeetingAttendee[]>([]);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -57,24 +60,33 @@ export function useRealMeetings(workspaceId: string) {
         setSegments([]);
         setSummary(null);
         setDecisions([]);
+        setAttendees([]);
         return;
       }
 
       setIsDetailLoading(true);
-      const [segRes, sumRes, decRes] = await Promise.all([
+      const [segRes, sumRes, decRes, attRes] = await Promise.all([
         getMeetingSegmentsApi(workspaceId, selectedMeetingId),
         getMeetingSummaryApi(workspaceId, selectedMeetingId),
         getMeetingDecisionsApi(workspaceId, selectedMeetingId),
+        getMeetingAttendeesApi(workspaceId, selectedMeetingId),
       ]);
       setIsDetailLoading(false);
 
       setSegments(segRes.status === "success" ? segRes.segments : []);
       setSummary(sumRes.status === "success" ? sumRes.summary : null);
       setDecisions(decRes.status === "success" ? decRes.decisions : []);
+      setAttendees(attRes.status === "success" ? attRes.attendees : []);
     }
 
     loadDetail();
   }, [workspaceId, selectedMeetingId, selectedMeeting?.status]);
+
+  async function reloadAttendees() {
+    if (!workspaceId || !selectedMeetingId) return;
+    const res = await getMeetingAttendeesApi(workspaceId, selectedMeetingId);
+    if (res.status === "success") setAttendees(res.attendees);
+  }
 
   async function uploadAudio(file: File, title: string) {
     setIsUploading(true);
@@ -135,6 +147,8 @@ export function useRealMeetings(workspaceId: string) {
     segments,
     summary,
     decisions,
+    attendees,
+    reloadAttendees,
     isDetailLoading,
     isUploading,
     uploadAudio,

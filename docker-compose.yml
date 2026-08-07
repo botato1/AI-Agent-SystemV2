@@ -1,5 +1,20 @@
 services:
 
+  # 프론트엔드 (Vite 빌드 -> nginx 정적 서빙). 학교 서버 내부망(같은 와이파이)에서만
+  # 접속 가능 - 외부 공개 전이라 별도 도메인/HTTPS 없이 IP:포트로 접속한다.
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: http://61.81.98.82:8000
+    container_name: ai-agent-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - fastapi
+    restart: always
+
   # FastAPI 백엔드
   fastapi:
     build: .
@@ -13,13 +28,54 @@ services:
       - /mnt/nas_2026_spring/dobby/shared/data/sqlite:/app/storage/sqlite
       # 업로드 파일 NAS 마운트
       - /mnt/nas_2026_spring/dobby/shared/data/uploads:/app/storage/uploads
+      # ChromaDB 임베딩 데이터 - chroma_client.py가 PersistentClient(embedded 모드)로
+      # /app/storage/chroma에 직접 파일 저장하는데 마운트가 없어서, 재배포(--build)할
+      # 때마다 AI Chat/모순감지용 벡터가 통째로 날아가고 있었음.
+      #
+      # NAS가 아닌 서버 로컬 디스크를 쓰는 이유: NAS 경로로 마운트하면 ChromaDB가
+      # PersistentClient 초기화(모듈 import 시점)에서 무한 대기에 빠져 uvicorn이
+      # 아예 기동하지 못한다(로그도 안 남고 포트 바인딩 안 됨). 실제 배포에서 확인했고,
+      # 같은 이미지로 NAS 경로만 마운트해 단독 테스트해도 재현됨.
+      # postgres(initdb chmod)/ollama와 동일한 NAS 권한 제약으로 보인다.
+      - /srv/dobby/chroma_embedded:/app/storage/chroma
+      # 리랭커(BAAI/bge-reranker-v2-m3, ~1-2GB) HuggingFace 캐시 -
+      # 재배포(--build)마다 캐시가 날아가 매번 재다운로드되던 문제.
+      # postgres/ollama와 동일하게 NAS 대신 서버 로컬 디스크 사용.
+      - /srv/dobby/hf_cache:/root/.cache/huggingface
     depends_on:
       - chromadb
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
       timeout: 10s
       retries: 3
+    # 리랭커(chroma_client._get_reranker)가 devices=["cuda:0"]로 GPU를 고정 지정하는데
+    # 이 컨테이너에 GPU 할당이 없어서 "Found no NVIDIA driver" 로 워밍업이 실패하고 있었음.
+    # rerank_results()가 예외를 잡아 hybrid_score로 폴백하므로 검색이 죽지는 않지만,
+    # 리랭킹이 조용히 비활성화돼 검색 품질이 떨어진 상태로 동작한다.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: always
+
+  # PostgreSQL
+  postgres:
+    image: postgres:16
+    container_name: ai-agent-postgres
+    environment:
+      POSTGRES_USER: recall
+      POSTGRES_PASSWORD: recall
+      POSTGRES_DB: recall
+    volumes:
+      # postgres가 initdb 시 데이터 디렉토리를 chmod 0700으로 강제 변경하는데
+      # NAS 마운트가 chmod 자체를 막아서 시작이 안 됨 (Operation not permitted) -
+      # ollama_models와 동일한 이유로 NAS 대신 서버 로컬 디스크 사용.
+      - /srv/dobby/postgres_data:/var/lib/postgresql/data
     restart: always
 
   # ChromaDB 벡터DB

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
 
@@ -370,4 +370,39 @@ def count_in_range(db: Session, workspace_id: uuid.UUID, start: datetime, end: d
             Contradiction.detected_at < end,
         )
         .count()
+    )
+
+def list_latest_decision_changes_by_meeting(db: Session, meeting_id: uuid.UUID) -> list[Contradiction]:
+    """회의 종료 후 사용자에게 보여줄 decision 변경 후보 목록.
+
+    같은 reference_decision_id에 대해 회의 중 여러 번 값이 바뀌었으면
+    가장 최근(detected_at) 것 하나만 노출한다 (승주 확인).
+    """
+    latest_per_decision = (
+        db.query(
+            Contradiction.reference_decision_id,
+            func.max(Contradiction.detected_at).label("latest_detected_at"),
+        )
+        .filter(
+            Contradiction.session_meeting_id == meeting_id,
+            Contradiction.reference_type == "decision",
+            Contradiction.status == "unresolved",
+        )
+        .group_by(Contradiction.reference_decision_id)
+        .subquery()
+    )
+
+    return (
+        db.query(Contradiction)
+        .join(
+            latest_per_decision,
+            (Contradiction.reference_decision_id == latest_per_decision.c.reference_decision_id)
+            & (Contradiction.detected_at == latest_per_decision.c.latest_detected_at),
+        )
+        .filter(
+            Contradiction.session_meeting_id == meeting_id,
+            Contradiction.reference_type == "decision",
+            Contradiction.status == "unresolved",
+        )
+        .all()
     )
