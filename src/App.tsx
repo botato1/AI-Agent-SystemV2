@@ -11,6 +11,8 @@ import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
 import PasswordResetConfirmView from "./components/PasswordResetConfirmView";
+import { ToastContainer } from "./lib/toast";
+import { ConfirmDialogContainer } from "./lib/confirm";
 
 import { Channel, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
@@ -99,6 +101,16 @@ export default function App() {
     type: "placeholder",
     key: "home",
   });
+  // 홈 화면 "최근 회의록"에서 클릭한 회의를 음성 회의 화면에서 바로 선택된 상태로 열기 위한 값
+  const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
+  // 모순/회의 도움 카드의 "결정 참조" 배지를 눌렀을 때 대시보드에서 그 결정사항을 바로 펼쳐
+  // 보여주기 위한 값
+  const [pendingDecisionId, setPendingDecisionId] = useState<string | null>(null);
+
+  function openDecision(decisionId: string) {
+    setPendingDecisionId(decisionId);
+    setSelection({ type: "placeholder", key: "dashboard" });
+  }
 
   const [showProfile, setShowProfile] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -500,6 +512,8 @@ export default function App() {
 
   return (
     <div key={currentUser.id} className="flex h-screen w-screen overflow-hidden">
+      <ToastContainer />
+      <ConfirmDialogContainer />
       <Sidebar
         workspaces={workspaces}
         currentWorkspaceId={currentWorkspaceId}
@@ -539,6 +553,7 @@ export default function App() {
           memberNameById={memberNameById}
           memberAvatarById={memberAvatarById}
           activeRecorderName={activeRecorderName}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "home" ? (
@@ -551,10 +566,15 @@ export default function App() {
           onUpdateTask={realTasks.updateTask}
           onDeleteTask={realTasks.removeTask}
           onNavigate={(key) => setSelection({ type: "placeholder", key })}
+          onOpenMeeting={(meetingId) => {
+            setPendingMeetingId(meetingId);
+            setSelection({ type: "placeholder", key: "voiceMeeting" });
+          }}
           onBeginScheduledMeeting={(meetingId) => {
             liveMeeting.beginScheduled(meetingId);
             setSelection({ type: "placeholder", key: "voiceMeeting" });
           }}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "aiChat" ? (
@@ -586,6 +606,9 @@ export default function App() {
           onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
           onEditLiveSegment={liveMeeting.editSegmentContent}
           onRenameLive={liveMeeting.renameMeeting}
+          initialMeetingId={pendingMeetingId}
+          onInitialMeetingIdConsumed={() => setPendingMeetingId(null)}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "dashboard" ? (
@@ -598,6 +621,8 @@ export default function App() {
           onStatusChange={realTasks.changeStatus}
           onPriorityChange={realTasks.changePriority}
           onDeleteTask={realTasks.removeTask}
+          initialDecisionId={pendingDecisionId}
+          onInitialDecisionIdConsumed={() => setPendingDecisionId(null)}
           t={t}
         />
       ) : selection.key === "docAnalysis" ? (

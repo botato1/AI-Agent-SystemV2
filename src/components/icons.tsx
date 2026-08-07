@@ -25,6 +25,7 @@ export {
   Pause as PauseIcon,
   Square as StopIcon,
   AlertTriangle as WarningIcon,
+  HandHelping as AssistIcon,
   CheckCircle2 as CheckIcon,
   ArrowUp as PriorityHighIcon,
   Minus as PriorityMediumIcon,

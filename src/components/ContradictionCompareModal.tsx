@@ -1,31 +1,40 @@
 // src/components/ContradictionCompareModal.tsx
+import { useState } from "react";
 import { Contradiction, ContradictionResolutionType } from "../services/contradiction";
 import ContradictionMessage from "./ContradictionMessage";
+import ContradictionEditForm from "./ContradictionEditForm";
 import { CloseIcon } from "./icons";
+import { showConfirm } from "../lib/confirm";
 
 interface ContradictionCompareModalProps {
   contradiction: Contradiction;
   onClose: () => void;
-  onDismiss: (id: string) => void;
   onResolve: (id: string, resolutionType: ContradictionResolutionType) => void;
+  onUpdate?: (
+    id: string,
+    updates: { statement_text_snapshot: string; reference_text_snapshot: string }
+  ) => Promise<boolean>;
   onViewInMeeting?: () => void;
   onViewReference?: () => void;
+  onViewDecision?: () => void;
   t: any;
 }
 
 export default function ContradictionCompareModal({
   contradiction,
   onClose,
-  onDismiss,
   onResolve,
+  onUpdate,
   onViewInMeeting,
   onViewReference,
+  onViewDecision,
   t,
 }: ContradictionCompareModalProps) {
-  // 채팅에서 감지된 모순은 백엔드가 반영/유지/무시 처리를 거부하므로(회의에서만 처리 가능),
-  // 처리 버튼 없이 안내 문구만 보여준다. 본문에 기존 내용/새 발언이 이미 다 나와있어서
-  // 별도로 이동시킬 곳은 없음 - 실제 처리 전까지는 홈 화면에 계속 남아 리마인드해준다.
-  const isChatSourced = contradiction.source_type !== "meeting_segment";
+  // 채팅에서 감지된 결정(decision) 변경만 백엔드가 여전히 409로 막는다(회의에서 감지된 결정
+  // 변경은 그대로 반영 가능). dismiss/keep_reference는 source_type이나 reference_type과
+  // 무관하게 항상 가능하다.
+  const canApplyChange = !(contradiction.source_type === "room_message" && contradiction.reference_type === "decision");
+  const [isEditing, setIsEditing] = useState(false);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
@@ -40,43 +49,68 @@ export default function ContradictionCompareModal({
           </button>
         </div>
 
-        <ContradictionMessage contradiction={contradiction} expanded t={t} onViewReference={onViewReference ? () => onViewReference() : undefined} />
+        {isEditing ? (
+          <ContradictionEditForm
+            contradiction={contradiction}
+            onCancel={() => setIsEditing(false)}
+            onSave={async (updates) => {
+              if (!onUpdate) return false;
+              const ok = await onUpdate(contradiction.id, updates);
+              if (ok) setIsEditing(false);
+              return ok;
+            }}
+            t={t}
+          />
+        ) : (
+          <ContradictionMessage
+            contradiction={contradiction}
+            expanded
+            t={t}
+            onViewReference={onViewReference ? () => onViewReference() : undefined}
+            onViewDecision={onViewDecision ? () => onViewDecision() : undefined}
+          />
+        )}
 
         <div className="mt-4 flex flex-col gap-2 border-t border-recall-border pt-4">
-          {isChatSourced ? (
-            <p className="text-center text-xs text-recall-textMuted">{t.contradiction_chat_source_notice}</p>
-          ) : (
-            <>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onDismiss(contradiction.id)}
-                  className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-textMuted hover:bg-white/5"
-                >
-                  {t.contradiction_dismiss}
-                </button>
-                <button
-                  onClick={() => onResolve(contradiction.id, "keep_reference")}
-                  className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-text hover:bg-white/5"
-                >
-                  {t.contradiction_keep}
-                </button>
-                <button
-                  onClick={() => onResolve(contradiction.id, "change_acknowledged")}
-                  className="flex-1 rounded-lg bg-recall-accent px-3 py-2 text-xs font-medium text-white hover:opacity-90"
-                >
-                  {t.contradiction_apply}
-                </button>
-              </div>
+          <div className="flex gap-2">
+            {onUpdate && !isEditing && (
+              <button
+                onClick={() => setIsEditing(true)}
+                className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-textMuted hover:bg-white/5"
+              >
+                {t.contradiction_edit}
+              </button>
+            )}
+            <button
+              onClick={() => onResolve(contradiction.id, "keep_reference")}
+              className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-text hover:bg-white/5"
+            >
+              {t.contradiction_keep}
+            </button>
+            {canApplyChange && (
+              <button
+                onClick={async () => {
+                  const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                  if (ok) onResolve(contradiction.id, "change_acknowledged");
+                }}
+                className="flex-1 rounded-lg bg-recall-accent px-3 py-2 text-xs font-medium text-white hover:opacity-90"
+              >
+                {t.contradiction_apply}
+              </button>
+            )}
+          </div>
 
-              {onViewInMeeting && (
-                <button
-                  onClick={onViewInMeeting}
-                  className="text-center text-xs text-recall-accent underline hover:opacity-80"
-                >
-                  {t.contradiction_view_in_meeting}
-                </button>
-              )}
-            </>
+          {!canApplyChange && (
+            <p className="text-center text-xs text-recall-textMuted">{t.contradiction_decision_apply_notice}</p>
+          )}
+
+          {onViewInMeeting && (
+            <button
+              onClick={onViewInMeeting}
+              className="text-center text-xs text-recall-accent underline hover:opacity-80"
+            >
+              {t.contradiction_view_in_meeting}
+            </button>
           )}
         </div>
       </div>

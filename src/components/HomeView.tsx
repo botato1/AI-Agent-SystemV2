@@ -14,7 +14,18 @@ import {
   deleteMeetingApi,
 } from "../services/meeting";
 import { PlaceholderKey, Task } from "../types";
-import { MicIcon, WarningIcon, CloseIcon, TrashIcon, PencilIcon, CheckIcon, PersonIcon, PlayIcon } from "./icons";
+import {
+  MicIcon,
+  WarningIcon,
+  CloseIcon,
+  TrashIcon,
+  PencilIcon,
+  CheckIcon,
+  PersonIcon,
+  PlayIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from "./icons";
 import WelcomeOnboarding from "./WelcomeOnboarding";
 import MeetingSearchModal from "./MeetingSearchModal";
 import MeetingAttendeesModal from "./MeetingAttendeesModal";
@@ -33,7 +44,9 @@ interface HomeViewProps {
   onUpdateTask: (task: Task) => void;
   onDeleteTask: (id: string) => void;
   onNavigate: (key: PlaceholderKey) => void;
+  onOpenMeeting: (meetingId: string) => void;
   onBeginScheduledMeeting: (meetingId: string) => void;
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -511,7 +524,9 @@ export default function HomeView({
   onUpdateTask,
   onDeleteTask,
   onNavigate,
+  onOpenMeeting,
   onBeginScheduledMeeting,
+  onOpenDecision,
   t,
 }: HomeViewProps) {
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
@@ -524,15 +539,25 @@ export default function HomeView({
   const {
     contradictions: unresolvedContradictions,
     resolve: resolveContradiction,
-    dismiss: dismissContradiction,
+    update: updateContradiction,
   } = useContradictions(workspaceId);
-  const [skippedContradictionIds, setSkippedContradictionIds] = useState<Set<string>>(new Set());
+  // 화살표로 하나씩 넘겨보는 캐러셀 인덱스. 목록이 줄어들면(처리/삭제) 범위를 벗어날 수 있어서
+  // 항상 clampedReviewIndex를 통해서만 읽는다.
+  const [reviewIndex, setReviewIndex] = useState(0);
   const [compareContradictionId, setCompareContradictionId] = useState<string | null>(null);
   const [referenceDocPreview, setReferenceDocPreview] = useState<{ id: string; name: string } | null>(null);
-  const visibleContradiction =
-    unresolvedContradictions.find((c) => !skippedContradictionIds.has(c.id)) ?? null;
+  const clampedReviewIndex =
+    unresolvedContradictions.length === 0 ? 0 : Math.min(reviewIndex, unresolvedContradictions.length - 1);
+  const visibleContradiction = unresolvedContradictions[clampedReviewIndex] ?? null;
   const compareContradiction =
     unresolvedContradictions.find((c) => c.id === compareContradictionId) ?? null;
+
+  function goToPrevReview() {
+    setReviewIndex(Math.max(0, clampedReviewIndex - 1));
+  }
+  function goToNextReview() {
+    setReviewIndex(Math.min(unresolvedContradictions.length - 1, clampedReviewIndex + 1));
+  }
 
   const [upcoming, setUpcoming] = useState<UpcomingMeeting[]>([]);
   const [showUpcomingModal, setShowUpcomingModal] = useState(false);
@@ -638,7 +663,9 @@ export default function HomeView({
   const upcomingListItems: UpcomingListItem[] = [
     ...upcoming.map((m): UpcomingListItem => ({ kind: "meeting", sortKey: m.scheduled_at, data: m })),
     ...upcomingTasks.map((t): UpcomingListItem => ({ kind: "task", sortKey: t.deadline as string, data: t })),
-  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+    // 회의(scheduled_at)는 UTC ISO 문자열, 할일(deadline)은 로컬 시간 문자열(Z 없음)이라
+    // 문자열 그대로 비교하면 형식이 달라 순서가 어긋난다 - 실제 시각(ms)으로 비교해야 한다.
+  ].sort((a, b) => new Date(a.sortKey).getTime() - new Date(b.sortKey).getTime());
 
   const now = new Date();
 
@@ -823,36 +850,52 @@ export default function HomeView({
               {!visibleContradiction ? (
                 <p className="py-6 text-center text-xs text-recall-textMuted">{t.home_review_empty}</p>
               ) : (
-                <div className="space-y-3">
-                  {[visibleContradiction].map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex flex-col gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5"
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={goToPrevReview}
+                      disabled={clampedReviewIndex === 0}
+                      aria-label={t.home_review_prev}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
                     >
+                      <ChevronLeftIcon size={14} />
+                    </button>
+
+                    <div className="flex flex-1 flex-col gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
                       <p className="text-xs text-recall-text leading-relaxed font-medium">
-                        {c.display_message || c.statement_text_snapshot}
+                        {visibleContradiction.display_message || visibleContradiction.statement_text_snapshot}
                       </p>
 
                       <p className="text-[11px] text-recall-textMuted">
-                        {c.reference_source_name || t.home_review_default_source} · {formatShortDate(c.detected_at)}
+                        {visibleContradiction.reference_source_name || t.home_review_default_source} ·{" "}
+                        {formatShortDate(visibleContradiction.detected_at)}
                       </p>
 
-                      <div className="flex items-center gap-2 pt-1 border-t border-amber-500/10">
+                      <div className="pt-1 border-t border-amber-500/10">
                         <button
-                          onClick={() => setCompareContradictionId(c.id)}
-                          className="flex-1 rounded-lg border border-recall-border bg-recall-bgSoft py-1.5 text-xs font-semibold text-recall-text hover:bg-white/10 transition text-center"
+                          onClick={() => setCompareContradictionId(visibleContradiction.id)}
+                          className="w-full rounded-lg border border-recall-border bg-recall-bgSoft py-1.5 text-xs font-semibold text-recall-text hover:bg-white/10 transition text-center"
                         >
                           {t.contradiction_compare_title}
                         </button>
-                        <button
-                          onClick={() => setSkippedContradictionIds((prev) => new Set(prev).add(c.id))}
-                          className="flex-1 rounded-lg border border-recall-border/60 bg-transparent py-1.5 text-xs font-medium text-recall-textMuted hover:text-recall-text hover:bg-white/5 transition text-center"
-                        >
-                          {t.home_review_skip_btn}
-                        </button>
                       </div>
                     </div>
-                  ))}
+
+                    <button
+                      onClick={goToNextReview}
+                      disabled={clampedReviewIndex === unresolvedContradictions.length - 1}
+                      aria-label={t.home_review_next}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
+                    >
+                      <ChevronRightIcon size={14} />
+                    </button>
+                  </div>
+
+                  {unresolvedContradictions.length > 1 && (
+                    <p className="text-center text-[11px] text-recall-textMuted">
+                      {clampedReviewIndex + 1} / {unresolvedContradictions.length}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -884,7 +927,7 @@ export default function HomeView({
                     {recentMeetings.map((m) => (
                       <button
                         key={m.id}
-                        onClick={() => onNavigate("voiceMeeting")}
+                        onClick={() => onOpenMeeting(m.id)}
                         className="flex w-full flex-col gap-1.5 rounded-xl border border-recall-border/60 bg-recall-bgSoft p-3.5 text-left hover:border-recall-accent/60 transition group"
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -1075,19 +1118,22 @@ export default function HomeView({
         <ContradictionCompareModal
           contradiction={compareContradiction}
           onClose={() => setCompareContradictionId(null)}
-          onDismiss={(id) => {
-            dismissContradiction(id);
-            setCompareContradictionId(null);
-          }}
           onResolve={(id, resolutionType) => {
             resolveContradiction(id, resolutionType);
             setCompareContradictionId(null);
           }}
+          onUpdate={updateContradiction}
           onViewInMeeting={
             compareContradiction.source_type === "meeting_segment"
               ? () => {
                   setCompareContradictionId(null);
-                  onNavigate("voiceMeeting");
+                  // meeting_id가 내려오면 그 회의를 바로 열고, 아직 없으면(구버전 응답)
+                  // 예전처럼 회의 목록 화면으로만 이동한다.
+                  if (compareContradiction.meeting_id) {
+                    onOpenMeeting(compareContradiction.meeting_id);
+                  } else {
+                    onNavigate("voiceMeeting");
+                  }
                 }
               : undefined
           }
@@ -1098,6 +1144,14 @@ export default function HomeView({
                     id: compareContradiction.reference_file_id,
                     name: compareContradiction.reference_source_name || t.home_review_default_source,
                   })
+              : undefined
+          }
+          onViewDecision={
+            compareContradiction.reference_type === "decision" && compareContradiction.reference_decision_id
+              ? () => {
+                  setCompareContradictionId(null);
+                  onOpenDecision(compareContradiction.reference_decision_id!);
+                }
               : undefined
           }
           t={t}

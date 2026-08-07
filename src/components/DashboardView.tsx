@@ -1,5 +1,5 @@
 // src/components/DashboardView.tsx
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Task, TaskPriority, TaskStatus } from "../types";
 import { WorkspaceDecision } from "../services/decision";
 import { useWorkspaceDecisions } from "../hooks/useWorkspaceDecisions";
@@ -16,6 +16,10 @@ interface DashboardViewProps {
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
   onDeleteTask: (id: string) => void;
+  // 모순 카드의 "결정 참조" 배지를 눌러서 들어온 경우, 그 결정사항을 결정사항 탭에서
+  // 바로 펼쳐 보여주기 위한 값 - 소비하고 나면 상위(App)에서 null로 리셋해줘야 한다.
+  initialDecisionId?: string | null;
+  onInitialDecisionIdConsumed?: () => void;
   t: any;
 }
 
@@ -31,12 +35,23 @@ function isWithinLastWeek(iso: string): boolean {
   return Date.now() - decidedAt <= 7 * 24 * 60 * 60 * 1000;
 }
 
-// 결정사항 하나 - 접었을 땐 현재 값만, 누르면 이 주제가 어떻게 바뀌어왔는지(history) 펼쳐서 보여준다
-function DecisionCard({ d, t }: { d: WorkspaceDecision; t: any }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+// 결정사항 하나 - 접었을 땐 현재 값만, 누르면 이 주제가 어떻게 바뀌어왔는지(history) 펼쳐서 보여준다.
+// autoExpand는 모순 카드의 "결정 참조" 배지를 눌러서 들어왔을 때만 true - 펼친 채로 스크롤해서 보여준다.
+function DecisionCard({ d, t, autoExpand }: { d: WorkspaceDecision; t: any; autoExpand?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(!!autoExpand);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (autoExpand) cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [autoExpand]);
 
   return (
-    <div className="rounded-xl border border-recall-border bg-recall-bg p-4">
+    <div
+      ref={cardRef}
+      className={`rounded-xl border p-4 transition-colors ${
+        autoExpand ? "border-recall-accent bg-recall-accent/5" : "border-recall-border bg-recall-bg"
+      }`}
+    >
       <button
         onClick={() => setIsExpanded((v) => !v)}
         className="flex w-full items-start justify-between gap-3 text-left"
@@ -78,7 +93,17 @@ function DecisionCard({ d, t }: { d: WorkspaceDecision; t: any }) {
   );
 }
 
-function DecisionsTab({ workspaceId, tasks, t }: { workspaceId: string; tasks: Task[]; t: any }) {
+function DecisionsTab({
+  workspaceId,
+  tasks,
+  t,
+  focusDecisionId,
+}: {
+  workspaceId: string;
+  tasks: Task[];
+  t: any;
+  focusDecisionId?: string | null;
+}) {
   const { decisions, isLoading } = useWorkspaceDecisions(workspaceId);
 
   const inProgressCount = tasks.filter((task) => task.status === "in_progress").length;
@@ -119,7 +144,7 @@ function DecisionsTab({ workspaceId, tasks, t }: { workspaceId: string; tasks: T
         ) : (
           <div className="space-y-3">
             {decisions.map((d) => (
-              <DecisionCard key={d.id} d={d} t={t} />
+              <DecisionCard key={d.id} d={d} t={t} autoExpand={d.id === focusDecisionId} />
             ))}
           </div>
         )}
@@ -137,10 +162,20 @@ export default function DashboardView({
   onStatusChange,
   onPriorityChange,
   onDeleteTask,
+  initialDecisionId,
+  onInitialDecisionIdConsumed,
   t,
 }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("decisions");
   const [createInitialStatus, setCreateInitialStatus] = useState<TaskStatus | null>(null);
+  const [focusDecisionId, setFocusDecisionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!initialDecisionId) return;
+    setFocusDecisionId(initialDecisionId);
+    setActiveTab("decisions");
+    onInitialDecisionIdConsumed?.();
+  }, [initialDecisionId]);
 
   const tabs: { id: DashboardTab; label: string }[] = [
     { id: "decisions", label: t.dashboard_tab_decisions },
@@ -178,7 +213,7 @@ export default function DashboardView({
             t={t}
           />
         ) : (
-          <DecisionsTab workspaceId={workspaceId} tasks={tasks} t={t} />
+          <DecisionsTab workspaceId={workspaceId} tasks={tasks} t={t} focusDecisionId={focusDecisionId} />
         )}
       </div>
 

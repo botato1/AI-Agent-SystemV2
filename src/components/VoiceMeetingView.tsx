@@ -34,6 +34,9 @@ interface VoiceMeetingViewProps {
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
   onEditLiveSegment: (segmentId: string, content: string) => Promise<boolean>;
   onRenameLive: (title: string) => void;
+  initialMeetingId?: string | null;
+  onInitialMeetingIdConsumed?: () => void;
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -63,6 +66,9 @@ export default function VoiceMeetingView({
   onMapLiveSpeakers,
   onEditLiveSegment,
   onRenameLive,
+  initialMeetingId,
+  onInitialMeetingIdConsumed,
+  onOpenDecision,
   t,
 }: VoiceMeetingViewProps) {
   return (
@@ -97,6 +103,9 @@ export default function VoiceMeetingView({
         onMapLiveSpeakers={onMapLiveSpeakers}
         onEditLiveSegment={onEditLiveSegment}
         onRenameLive={onRenameLive}
+        initialMeetingId={initialMeetingId}
+        onInitialMeetingIdConsumed={onInitialMeetingIdConsumed}
+        onOpenDecision={onOpenDecision}
         t={t}
       />
     </div>

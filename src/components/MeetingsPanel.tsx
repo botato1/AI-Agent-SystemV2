@@ -15,6 +15,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   WarningIcon,
+  AssistIcon,
   PencilIcon,
   PersonIcon,
   DownloadIcon,
@@ -25,6 +26,8 @@ import {
   CheckIcon,
 } from "./icons";
 import ContradictionMessage from "./ContradictionMessage";
+import ContradictionEditForm from "./ContradictionEditForm";
+import { showConfirm } from "../lib/confirm";
 import ChangeSummaryModal from "./ChangeSummaryModal";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import MeetingAttendeesModal from "./MeetingAttendeesModal";
@@ -254,7 +257,7 @@ function SegmentRow({
             <span className="text-xs text-recall-textMuted/70">{formatDuration(timeMs)}</span>
           )}
           {hasContradiction && (
-            <WarningIcon size={12} className="flex-shrink-0 text-recall-danger" />
+            <AssistIcon size={12} className="flex-shrink-0 text-recall-accent" />
           )}
           {canAssign && (
             <AssignSpeakerControl
@@ -479,6 +482,11 @@ interface MeetingsPanelProps {
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
   onEditLiveSegment: (segmentId: string, content: string) => Promise<boolean>;
   onRenameLive: (title: string) => void;
+  // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어왔을 때, 그 회의를 바로 선택해서 보여주기 위한 값 -
+  // 소비하고 나면 상위(App)에서 null로 리셋해줘야 뒤로 갔다 다시 들어와도 강제로 재선택되지 않는다.
+  initialMeetingId?: string | null;
+  onInitialMeetingIdConsumed?: () => void;
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -676,7 +684,7 @@ function LiveContradictionToast({
     return (
       <div
         className={`mb-2 rounded-xl border p-3 text-xs ${
-          isDecision ? "border-purple-500/30 bg-purple-500/5" : "border-recall-danger/30 bg-recall-danger/5"
+          isDecision ? "border-purple-500/30 bg-purple-500/5" : "border-recall-accent/30 bg-recall-accent/5"
         }`}
       >
         <p className="mb-1.5 font-bold text-recall-text">{t.meeting_live_alert_edit_title}</p>
@@ -717,16 +725,16 @@ function LiveContradictionToast({
       className={`mb-2 rounded-xl border p-3 text-xs ${
         isDecision
           ? "border-purple-500/30 bg-purple-500/5"
-          : "border-recall-danger/30 bg-recall-danger/5"
+          : "border-recall-accent/30 bg-recall-accent/5"
       }`}
     >
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <span
           className={`flex items-center gap-1.5 font-bold ${
-            isDecision ? "text-purple-400" : "text-recall-danger"
+            isDecision ? "text-purple-400" : "text-recall-accent"
           }`}
         >
-          {isDecision ? <RepeatIcon size={13} /> : <WarningIcon size={13} />}
+          {isDecision && <RepeatIcon size={13} />}
           {isDecision ? t.meeting_live_alert_decision_title : t.contradiction_title}
           {alert.judgmentCase && (
             <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold">
@@ -766,25 +774,24 @@ function LiveContradictionToast({
         ))}
 
       <div className="flex gap-1.5">
-        {canEditSegment ? (
+        {canEditSegment && (
           <button
             onClick={() => setIsEditing(true)}
             className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
           >
             {t.meeting_live_alert_edit_btn}
           </button>
-        ) : (
-          <button
-            onClick={() => onDismiss(alert.contradiction_id)}
-            className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
-          >
-            {t.contradiction_dismiss}
-          </button>
         )}
         {actions.map((action) => (
           <button
             key={action}
-            onClick={() => onResolve(alert.contradiction_id, action)}
+            onClick={async () => {
+              if (action === "change_acknowledged") {
+                const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                if (!ok) return;
+              }
+              onResolve(alert.contradiction_id, action);
+            }}
             className={`flex-1 rounded px-2 py-1 text-[11px] font-medium ${
               action === "change_acknowledged"
                 ? "bg-recall-accent text-white hover:opacity-90"
@@ -1030,6 +1037,9 @@ export default function MeetingsPanel({
   onMapLiveSpeakers,
   onEditLiveSegment,
   onRenameLive,
+  initialMeetingId,
+  onInitialMeetingIdConsumed,
+  onOpenDecision,
   t,
 }: MeetingsPanelProps) {
   const {
@@ -1061,6 +1071,14 @@ export default function MeetingsPanel({
     updateFullSummary,
     reload,
   } = useRealMeetings(workspaceId);
+
+  // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어온 경우, 그 회의를 바로 선택해서 보여준다.
+  useEffect(() => {
+    if (!initialMeetingId) return;
+    setSelectedMeetingId(initialMeetingId);
+    setTopTab("meetings");
+    onInitialMeetingIdConsumed?.();
+  }, [initialMeetingId]);
 
   // 회의록 탭 관련 자료 - 조회/업로드 모두 회의 ID 기준 전용 API를 사용한다(채팅방 연결 여부와 무관).
   const meetingDocInputRef = useRef<HTMLInputElement>(null);
@@ -1135,6 +1153,7 @@ export default function MeetingsPanel({
     resolve,
     dismiss,
     reopen,
+    update: updateContradiction,
     refresh: refreshContradictions,
     pendingSummaryFor,
     changeSummary,
@@ -1193,6 +1212,7 @@ export default function MeetingsPanel({
   const [isMeetingListOpen, setIsMeetingListOpen] = useState(true);
   const [isContradictionListOpen, setIsContradictionListOpen] = useState(true);
   const [expandedContradictionIds, setExpandedContradictionIds] = useState<Set<string>>(new Set());
+  const [editingContradictionId, setEditingContradictionId] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
   const [showAttendeesModal, setShowAttendeesModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -1953,19 +1973,13 @@ export default function MeetingsPanel({
         <button
           onClick={() => setIsContradictionListOpen(true)}
           title={t.meeting_contradiction_list_expand}
-          className="group relative flex h-full w-8 flex-shrink-0 flex-col items-center gap-2 border-l border-recall-border py-3 text-recall-textMuted transition-colors hover:border-recall-danger/40 hover:bg-white/5"
+          className="group relative flex h-full w-8 flex-shrink-0 flex-col items-center gap-2 border-l border-recall-border py-3 text-recall-textMuted transition-colors hover:border-recall-accent/40 hover:bg-white/5"
         >
-          <span className="relative">
-            <WarningIcon
-              size={16}
-              className={contradictions.length > 0 ? "text-recall-danger" : "text-recall-textMuted"}
-            />
-            {contradictions.length > 0 && (
-              <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-recall-danger text-[10px] font-semibold text-white">
-                {contradictions.length}
-              </span>
-            )}
-          </span>
+          {contradictions.length > 0 && (
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-recall-accent text-[10px] font-semibold text-white">
+              {contradictions.length}
+            </span>
+          )}
           <ChevronLeftIcon size={11} className="opacity-50 transition-opacity group-hover:opacity-100" />
         </button>
       ) : (
@@ -1979,7 +1993,6 @@ export default function MeetingsPanel({
               <ChevronRightIcon size={13} className="text-recall-textMuted" />
             </button>
             <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-recall-textMuted">
-              <WarningIcon size={12} className="text-recall-danger" />
               {t.contradiction_title}
             </p>
           </div>
@@ -2050,21 +2063,35 @@ export default function MeetingsPanel({
                       {/* severity(모순 심각도)는 문서-발화 모순 감지 전용 개념이라 decision 카드에서는 숨긴다 */}
                       {!isDecisionCard && severityBadge(c.severity, t)}
                     </div>
-                    <ContradictionMessage
-                      contradiction={c}
-                      expanded={isExpanded}
-                      onViewReference={(id, name) => setPreviewDoc({ id, name })}
-                      t={t}
-                    />
-                    {!isViewingLive && (
+                    {editingContradictionId === c.id ? (
+                      <ContradictionEditForm
+                        contradiction={c}
+                        onCancel={() => setEditingContradictionId(null)}
+                        onSave={async (updates) => {
+                          const ok = await updateContradiction(c.id, updates);
+                          if (ok) setEditingContradictionId(null);
+                          return ok;
+                        }}
+                        t={t}
+                      />
+                    ) : (
+                      <ContradictionMessage
+                        contradiction={c}
+                        expanded={isExpanded}
+                        onViewReference={(id, name) => setPreviewDoc({ id, name })}
+                        onViewDecision={(decisionId) => onOpenDecision(decisionId)}
+                        t={t}
+                      />
+                    )}
+                    {!isViewingLive && editingContradictionId !== c.id && (
                       <div className="flex gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
                         {c.status === "unresolved" ? (
                           <>
                             <button
-                              onClick={() => dismiss(c.id)}
+                              onClick={() => setEditingContradictionId(c.id)}
                               className="flex-1 rounded border border-recall-border px-1.5 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
                             >
-                              {t.contradiction_dismiss}
+                              {t.contradiction_edit}
                             </button>
                             <button
                               onClick={() => resolve(c.id, "keep_reference")}
@@ -2072,12 +2099,20 @@ export default function MeetingsPanel({
                             >
                               {t.contradiction_keep}
                             </button>
-                            <button
-                              onClick={() => resolve(c.id, "change_acknowledged")}
-                              className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
-                            >
-                              {t.contradiction_apply}
-                            </button>
+                            {/* 채팅에서 감지된 결정 변경(reference_type === "decision")만 백엔드가
+                                여전히 409로 막는다 - 회의에서 감지된 결정 변경은 그대로 반영 가능하므로
+                                채팅 소스일 때만 숨긴다 */}
+                            {!(c.source_type === "room_message" && isDecisionCard) && (
+                              <button
+                                onClick={async () => {
+                                  const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                                  if (ok) resolve(c.id, "change_acknowledged");
+                                }}
+                                className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                              >
+                                {t.contradiction_apply}
+                              </button>
+                            )}
                           </>
                         ) : (
                           c.resolution_type !== "change_acknowledged" && (

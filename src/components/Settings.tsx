@@ -130,7 +130,7 @@ export default function Settings({
   const notificationSectionItems: { key: keyof NotificationPreferences; label: string }[] = [
     { key: "new_message", label: t.settings_notif_new || "새 메시지 알림" },
     { key: "meeting_summary", label: t.settings_notif_start || "회의 시작 알림" },
-    { key: "contradiction", label: t.settings_notif_contra || "모순 감지 알림" },
+    { key: "contradiction", label: t.settings_notif_contra || "회의 도움 알림" },
   ];
 
   return (

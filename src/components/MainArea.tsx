@@ -10,7 +10,6 @@ import {
   UploadIcon,
   TrashIcon,
   LinkIcon,
-  WarningIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
 } from "./icons";
@@ -43,6 +42,7 @@ interface MainAreaProps {
   memberNameById: Record<string, string>;
   memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -255,10 +255,12 @@ function ComposerBar({
 function ContradictionPanel({
   contradictions,
   onViewReference,
+  onViewDecision,
   t,
 }: {
   contradictions: Contradiction[];
   onViewReference: (fileId: string, name: string) => void;
+  onViewDecision: (decisionId: string, name: string) => void;
   t: any;
 }) {
   const [isOpen, setIsOpen] = useState(true);
@@ -285,20 +287,14 @@ function ContradictionPanel({
     return (
       <button
         onClick={() => setIsOpen(true)}
-        title="모순 목록 펼치기"
-        className="group relative flex w-8 flex-shrink-0 flex-col items-center gap-2 rounded-lg border border-recall-border bg-recall-bgSoft py-3 text-recall-textMuted transition-colors hover:border-recall-danger/40 hover:bg-white/5"
+        title={t.meeting_contradiction_list_expand}
+        className="group relative flex w-8 flex-shrink-0 flex-col items-center gap-2 rounded-lg border border-recall-border bg-recall-bgSoft py-3 text-recall-textMuted transition-colors hover:border-recall-accent/40 hover:bg-white/5"
       >
-        <span className="relative">
-          <WarningIcon
-            size={16}
-            className={contradictions.length > 0 ? "text-recall-danger" : "text-recall-textMuted"}
-          />
-          {contradictions.length > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-recall-danger text-[10px] font-semibold text-white">
-              {contradictions.length}
-            </span>
-          )}
-        </span>
+        {contradictions.length > 0 && (
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-recall-accent text-[10px] font-semibold text-white">
+            {contradictions.length}
+          </span>
+        )}
         <ChevronLeftIcon size={11} className="opacity-50 transition-opacity group-hover:opacity-100" />
       </button>
     );
@@ -309,13 +305,12 @@ function ContradictionPanel({
       <div className="mb-2 flex items-center gap-1.5">
         <button
           onClick={() => setIsOpen(false)}
-          title="모순 목록 접기"
+          title={t.meeting_contradiction_list_collapse}
           className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-white/5"
         >
           <ChevronRightIcon size={13} className="text-recall-textMuted" />
         </button>
         <p className="flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
-          <WarningIcon size={13} className="text-recall-danger" />
           {t.contradiction_title}
         </p>
       </div>
@@ -333,7 +328,13 @@ function ContradictionPanel({
                 className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
               >
                 <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity, t)}</div>
-                <ContradictionMessage contradiction={c} expanded={isExpanded} onViewReference={onViewReference} t={t} />
+                <ContradictionMessage
+                  contradiction={c}
+                  expanded={isExpanded}
+                  onViewReference={onViewReference}
+                  onViewDecision={onViewDecision}
+                  t={t}
+                />
               </div>
             );
           })
@@ -351,6 +352,7 @@ function MessageTab({
   roomFiles,
   onOpenPreview,
   contradictions,
+  onOpenDecision,
   currentUser,
   memberAvatarById,
   t,
@@ -362,6 +364,7 @@ function MessageTab({
   roomFiles: RoomFile[];
   onOpenPreview: (documentId: string, name: string) => void;
   contradictions: Contradiction[];
+  onOpenDecision: (decisionId: string) => void;
   currentUser: MainAreaProps["currentUser"];
   memberAvatarById: Record<string, string | null>;
   t: any;
@@ -558,6 +561,7 @@ function MessageTab({
       <ContradictionPanel
         contradictions={contradictions}
         onViewReference={onOpenPreview}
+        onViewDecision={(decisionId) => onOpenDecision(decisionId)}
         t={t}
       />
     </div>
@@ -724,6 +728,7 @@ export default function MainArea({
   memberNameById,
   memberAvatarById,
   activeRecorderName,
+  onOpenDecision,
   t,
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
@@ -845,6 +850,7 @@ export default function MainArea({
           roomFiles={roomFiles.files}
           onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           contradictions={roomContradictions}
+          onOpenDecision={onOpenDecision}
           currentUser={currentUser}
           memberAvatarById={memberAvatarById}
           t={t}

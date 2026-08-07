@@ -25,11 +25,18 @@ export interface Contradiction {
   category_id: string;
   source_type: ContradictionSourceType;
   meeting_segment_id?: string | null;
+  // "회의에서 보기"로 그 회의를 바로 열기 위한 필드. source_type이 "meeting_segment"일 때만
+  // 채워지고, 그 외엔 null이다.
+  meeting_id?: string | null;
   room_message_id?: string | null;
   reference_type: ContradictionReferenceType;
+  // reference_type이 "decision"이 아닐 때만 채워진다(문서/코드 참조) - 이 경우 문서 미리보기에 쓴다.
   reference_file_id: string;
   reference_chunk_id?: string | null;
   reference_code_fact_id?: string | null;
+  // reference_type === "decision"일 때만 채워진다(그 외엔 항상 null) - 대시보드의 해당
+  // 결정사항 이력으로 이동할 때 쓴다. reference_file_id와 반대로 이쪽만 유효하다.
+  reference_decision_id?: string | null;
   statement_text_snapshot: string;
   reference_text_snapshot: string;
   // 화면에 바로 띄울 수 있는 "기존 자료와 다르다" 비교 문구. 없으면(예전 데이터) statement/reference
@@ -437,7 +444,95 @@ export async function reopenContradictionApi(
 }
 
 /**
- * 6. 변경 요약 초안 조회 API
+ * 6. 모순 내용 수정 API (PATCH /api/workspaces/{workspace_id}/contradictions/{contradiction_id})
+ *
+ * 잘못 감지된 모순의 스냅샷 텍스트(기존 내용/새 발언)를 직접 고칠 수 있게 한다.
+ * 주의: 실제 응답도 resolve/dismiss/reopen과 동일하게 갱신된 ContradictionSchema 객체 하나뿐이다
+ * ({status, contradiction} 래핑 없음) - data.contradiction || data로 두 형태 모두 받는다.
+ * display_message는 DB에 저장되지 않고 조회 시 스냅샷 두 필드로 매번 재조립되는 값이라,
+ * 이 응답에도 새 스냅샷 기준으로 자동 갱신되어 내려온다.
+ *
+ * unresolved 상태에서만 수정 가능(resolved/dismissed는 이미 change_summary_draft가 생성됐을
+ * 수 있어 거부됨) - "이미 처리됨"과 "회의 진행 중" 두 케이스 모두 409로 온다.
+ * statement_text_snapshot/reference_text_snapshot을 둘 다 안 보내면 400("수정할 내용이 없습니다.")이다.
+ */
+export async function updateContradictionApi(
+  workspaceId: string,
+  contradictionId: string,
+  updates: { statement_text_snapshot?: string; reference_text_snapshot?: string }
+): Promise<GetContradictionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      contradiction: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/contradictions/${contradictionId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "모순 수정에 실패했습니다.";
+      let errorCode = data.error || `HTTP_${response.status}`;
+      if (response.status === 400) {
+        defaultMsg = "수정할 내용이 없습니다.";
+        errorCode = "no_updates";
+      } else if (response.status === 409) {
+        // "이미 처리됨"과 "회의 진행 중" 둘 다 409로 오므로, 백엔드가 보내주는 실제 메시지를
+        // 우선 쓰고(위 return에서 data.message || data.detail로 처리) 이건 최후의 기본값이다.
+        defaultMsg = "이미 처리된 모순이거나 회의가 진행 중입니다.";
+        errorCode = "conflict";
+      } else if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 403) {
+        defaultMsg = "워크스페이스 멤버만 처리할 수 있습니다.";
+      } else if (response.status === 404) {
+        defaultMsg = "존재하지 않는 워크스페이스이거나 모순입니다.";
+      } else if (response.status === 422) {
+        defaultMsg = "잘못된 수정 내용입니다.";
+      }
+
+      return {
+        status: "error",
+        contradiction: null,
+        message: data.message || data.detail || defaultMsg,
+        error: errorCode,
+      };
+    }
+
+    return {
+      status: "success",
+      contradiction: data.contradiction || data,
+      message: "모순 내용이 수정되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("updateContradictionApi error:", error);
+    return {
+      status: "error",
+      contradiction: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 7. 변경 요약 초안 조회 API
  * (GET /api/workspaces/{workspace_id}/contradictions/{contradiction_id}/change-summary)
  */
 export async function getChangeSummaryApi(
