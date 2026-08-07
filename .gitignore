@@ -5,3 +5,11 @@ build/
 .env
 *.log
 frontend/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local dev config
+.claude/
