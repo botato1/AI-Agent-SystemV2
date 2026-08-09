@@ -10,7 +10,6 @@ import {
   UploadIcon,
   TrashIcon,
   LinkIcon,
-  WarningIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
 } from "./icons";
@@ -18,12 +17,11 @@ import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRunt
 import { useRoomFiles } from "../hooks/useRoomFiles";
 import { useContradictions } from "../hooks/useContradictions";
 import { RoomFile } from "../services/roomFile";
-import { Contradiction, ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
+import { Contradiction, ContradictionSeverity } from "../services/contradiction";
 import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
 import ContradictionMessage from "./ContradictionMessage";
-import ChangeSummaryModal from "./ChangeSummaryModal";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
 
@@ -44,6 +42,7 @@ interface MainAreaProps {
   memberNameById: Record<string, string>;
   memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -255,15 +254,13 @@ function ComposerBar({
 
 function ContradictionPanel({
   contradictions,
-  onResolve,
-  onDismiss,
   onViewReference,
+  onViewDecision,
   t,
 }: {
   contradictions: Contradiction[];
-  onResolve: (id: string, resolutionType: ContradictionResolutionType) => void;
-  onDismiss: (id: string) => void;
   onViewReference: (fileId: string, name: string) => void;
+  onViewDecision: (decisionId: string, name: string) => void;
   t: any;
 }) {
   const [isOpen, setIsOpen] = useState(true);
@@ -290,20 +287,14 @@ function ContradictionPanel({
     return (
       <button
         onClick={() => setIsOpen(true)}
-        title="모순 목록 펼치기"
-        className="group relative flex w-8 flex-shrink-0 flex-col items-center gap-2 rounded-lg border border-recall-border bg-recall-bgSoft py-3 text-recall-textMuted transition-colors hover:border-recall-danger/40 hover:bg-white/5"
+        title={t.meeting_contradiction_list_expand}
+        className="group relative flex w-8 flex-shrink-0 flex-col items-center gap-2 rounded-lg border border-recall-border bg-recall-bgSoft py-3 text-recall-textMuted transition-colors hover:border-recall-accent/40 hover:bg-white/5"
       >
-        <span className="relative">
-          <WarningIcon
-            size={16}
-            className={contradictions.length > 0 ? "text-recall-danger" : "text-recall-textMuted"}
-          />
-          {contradictions.length > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-recall-danger text-[10px] font-semibold text-white">
-              {contradictions.length}
-            </span>
-          )}
-        </span>
+        {contradictions.length > 0 && (
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-recall-accent text-[10px] font-semibold text-white">
+            {contradictions.length}
+          </span>
+        )}
         <ChevronLeftIcon size={11} className="opacity-50 transition-opacity group-hover:opacity-100" />
       </button>
     );
@@ -314,13 +305,12 @@ function ContradictionPanel({
       <div className="mb-2 flex items-center gap-1.5">
         <button
           onClick={() => setIsOpen(false)}
-          title="모순 목록 접기"
+          title={t.meeting_contradiction_list_collapse}
           className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded hover:bg-white/5"
         >
           <ChevronRightIcon size={13} className="text-recall-textMuted" />
         </button>
         <p className="flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide text-recall-textMuted">
-          <WarningIcon size={13} className="text-recall-danger" />
           {t.contradiction_title}
         </p>
       </div>
@@ -338,27 +328,13 @@ function ContradictionPanel({
                 className="cursor-pointer rounded-lg border border-recall-border p-2.5 hover:border-recall-accent/40"
               >
                 <div className="mb-1 flex items-center justify-end">{severityBadge(c.severity, t)}</div>
-                <ContradictionMessage contradiction={c} expanded={isExpanded} onViewReference={onViewReference} t={t} />
-                <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    onClick={() => onDismiss(c.id)}
-                    className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-textMuted hover:bg-white/5"
-                  >
-                    {t.contradiction_dismiss}
-                  </button>
-                  <button
-                    onClick={() => onResolve(c.id, "keep_reference")}
-                    className="flex-1 rounded border border-recall-border px-1.5 py-1 text-xs text-recall-text hover:bg-white/5"
-                  >
-                    {t.contradiction_keep}
-                  </button>
-                  <button
-                    onClick={() => onResolve(c.id, "change_acknowledged")}
-                    className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-xs font-medium text-white hover:opacity-90"
-                  >
-                    {t.contradiction_apply}
-                  </button>
-                </div>
+                <ContradictionMessage
+                  contradiction={c}
+                  expanded={isExpanded}
+                  onViewReference={onViewReference}
+                  onViewDecision={onViewDecision}
+                  t={t}
+                />
               </div>
             );
           })
@@ -376,8 +352,7 @@ function MessageTab({
   roomFiles,
   onOpenPreview,
   contradictions,
-  onResolveContradiction,
-  onDismissContradiction,
+  onOpenDecision,
   currentUser,
   memberAvatarById,
   t,
@@ -389,8 +364,7 @@ function MessageTab({
   roomFiles: RoomFile[];
   onOpenPreview: (documentId: string, name: string) => void;
   contradictions: Contradiction[];
-  onResolveContradiction: (id: string, resolutionType: ContradictionResolutionType) => void;
-  onDismissContradiction: (id: string) => void;
+  onOpenDecision: (decisionId: string) => void;
   currentUser: MainAreaProps["currentUser"];
   memberAvatarById: Record<string, string | null>;
   t: any;
@@ -400,6 +374,21 @@ function MessageTab({
   const dragCounter = useRef(0);
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const shouldScrollToBottomRef = useRef(false);
+
+  function scrollToBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // 메시지 전송은 서버 응답을 기다린 뒤에야 목록에 반영되므로(낙관적 업데이트 아님),
+  // 전송 시점엔 스크롤 예약만 해두고 실제 스크롤은 messages가 갱신된 뒤 useEffect에서 실행한다.
+  useEffect(() => {
+    if (shouldScrollToBottomRef.current) {
+      shouldScrollToBottomRef.current = false;
+      scrollToBottom();
+    }
+  }, [messages]);
 
   const memberActivities: MemberActivity[] = t.mock_member_activities || [];
 
@@ -431,7 +420,11 @@ function MessageTab({
   }
 
   function handleSend(text: string) {
-    if (text) onSend(text);
+    if (text) {
+      // 위로 스크롤해서 옛날 메시지 보다가 새로 채팅 치면, 방금 보낸 메시지를 바로 볼 수 있게 맨 아래로 이동
+      shouldScrollToBottomRef.current = true;
+      onSend(text);
+    }
 
     if (pendingFiles.length > 0) {
       const voiceFiles = pendingFiles.filter((f) => f.type.startsWith("audio/"));
@@ -534,6 +527,7 @@ function MessageTab({
               </div>
             </div>
           ))}
+          <div ref={bottomRef} />
         </div>
 
         {contextMenu && (
@@ -566,9 +560,8 @@ function MessageTab({
 
       <ContradictionPanel
         contradictions={contradictions}
-        onResolve={onResolveContradiction}
-        onDismiss={onDismissContradiction}
         onViewReference={onOpenPreview}
+        onViewDecision={(decisionId) => onOpenDecision(decisionId)}
         t={t}
       />
     </div>
@@ -735,6 +728,7 @@ export default function MainArea({
   memberNameById,
   memberAvatarById,
   activeRecorderName,
+  onOpenDecision,
   t,
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
@@ -748,15 +742,7 @@ export default function MainArea({
 
   const roomFiles = useRoomFiles(workspaceId, channel.id);
 
-  const {
-    contradictions: workspaceContradictions,
-    resolve: resolveContradiction,
-    dismiss: dismissContradiction,
-    pendingSummaryFor,
-    changeSummary,
-    isChangeSummaryLoading,
-    closeChangeSummary,
-  } = useContradictions(workspaceId);
+  const { contradictions: workspaceContradictions } = useContradictions(workspaceId);
 
   const roomContradictions = workspaceContradictions.filter(
     (c) => c.source_type === "room_message" && c.room_message_id && chatMessages.some((m) => m.id === c.room_message_id)
@@ -864,8 +850,7 @@ export default function MainArea({
           roomFiles={roomFiles.files}
           onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           contradictions={roomContradictions}
-          onResolveContradiction={resolveContradiction}
-          onDismissContradiction={dismissContradiction}
+          onOpenDecision={onOpenDecision}
           currentUser={currentUser}
           memberAvatarById={memberAvatarById}
           t={t}
@@ -898,15 +883,6 @@ export default function MainArea({
           documentId={previewDoc.id}
           documentName={previewDoc.name}
           onClose={() => setPreviewDoc(null)}
-        />
-      )}
-
-      {pendingSummaryFor && (
-        <ChangeSummaryModal
-          contradiction={pendingSummaryFor}
-          changeSummary={changeSummary}
-          isLoading={isChangeSummaryLoading}
-          onClose={closeChangeSummary}
           t={t}
         />
       )}

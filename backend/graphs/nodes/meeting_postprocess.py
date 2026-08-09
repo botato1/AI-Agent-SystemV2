@@ -193,13 +193,18 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
             title = str(t.get("title") or "").strip()
             if not title:
                 continue
+            # [수정] AI가 추출한 할 일은 곧바로 "open"(정식 등록)이 아니라 "suggested"(검수
+            # 대기)로 넣는다 - 프론트 검수 UI(승인/거절, suggestedTasks)와 조회 API
+            # (meeting_crud.list_suggested_tasks_by_meeting)는 이미 이 status를 전제로
+            # 만들어져 있었는데, 생성부만 "open"으로 남아있어서 검수 화면에 아무것도 안
+            # 뜨는 상태였다. 승인 시 프론트가 PATCH .../status로 "open"으로 바꾼다.
             row = meeting_crud.create_task(
                 db,
                 workspace_id=meeting.workspace_id,
                 category_id=meeting.category_id,
                 title=title,
                 meeting_id=meeting_id,
-                status="open",
+                status="suggested",
                 assignee_label=str(t.get("assignee") or "") or None,
                 description=str(t.get("description") or "") or None,
                 due_at=_parse_due_date(t.get("due_date")),

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Meeting,
   MeetingStart,
+  AgendaReminderPopup,
   RecordingMode,
   startMeetingApi,
   joinMeetingApi,
@@ -12,6 +13,7 @@ import {
   renameMeetingApi,
   setMeetingAttendeesApi,
   updateMeetingInfoApi,
+  updateMeetingSegmentApi,
   getMeetingApi,
   getMeetingListApi,
 } from "../services/meeting";
@@ -27,11 +29,19 @@ export type LiveMeetingStatus =
   | "error";
 
 export interface LiveSegment {
+  // STT 오인식(예: "9월"을 "구월"로 인식) 때문에 뜬 모순을 회의 중 바로 고칠 수 있게 하려면
+  // 필요하다 - 백엔드가 안 내려주는 예전 응답이면 null이라 그런 회의에선 수정 버튼을 숨긴다.
+  id: string | null;
   content: string;
   speaker_label: string | null;
+  speaker_user_id: string | null;
   start_ms: number;
   end_ms: number;
 }
+
+export type ContradictionAlertSource = "document" | "decision";
+export type JudgmentCase = "reasoned_change" | "unreasoned_change";
+export type ContradictionAlertAction = "change_acknowledged" | "keep_reference";
 
 export interface ContradictionAlert {
   contradiction_id: string;
@@ -41,11 +51,29 @@ export interface ContradictionAlert {
   confidence_score: number;
   displayMessage: string | null;
   referenceSourceName: string | null;
+  // 근거자료 미리보기용 - 백엔드가 안 내려주는 예전 응답에서는 null이라 뱃지가 안 눌리게 처리
+  referenceFileId: string | null;
+  // STT 오인식으로 뜬 모순을 "직접 수정하기"로 바로 고칠 수 있게 하는 원본 발화 세그먼트 -
+  // 결정 변경 감지(decision_judgment)처럼 세그먼트에 안 걸린 모순은 null
+  meetingSegmentId: string | null;
+  // decision_judgment(Case2/3, 결정 변경 감지) 전용 필드 - 문서 기반 모순 감지엔 없음
+  source: ContradictionAlertSource;
+  judgmentCase: JudgmentCase | null;
+  actions: ContradictionAlertAction[] | null;
 }
 
 interface CurrentUserInfo {
   id: string;
   name: string;
+}
+
+// STT 서버가 회의 중 오디오 품질 문제(무음, 마이크 미선택/음소거 등)를 감지하면 보내는 경고.
+// 같은 경고는 서버가 중복 없이 한 번만 보내므로 프론트에서 따로 dedup할 필요는 없다.
+export interface AudioQualityAlert {
+  id: string;
+  level: string;
+  message: string;
+  code?: string | null;
 }
 
 // 백엔드 STT 서버가 raw PCM16LE / 16kHz / mono만 받기 때문에, MediaRecorder의 기본 압축
@@ -103,9 +131,44 @@ function buildWsUrl(apiBaseUrl: string, workspaceId: string, meetingId: string, 
   const isHttps = apiBaseUrl.startsWith("https");
   const host = apiBaseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const protocol = isHttps ? "wss" : "ws";
+  // voice=1: 각자 PC 모드에서 다른 참가자 목소리를 바이너리 프레임으로 중계받기 위한 옵트인.
+  // 한 대의 PC 모드에서는 백엔드가 이 파라미터를 무시한다.
   return `${protocol}://${host}/api/workspaces/${workspaceId}/meetings/${meetingId}/stream?ticket=${encodeURIComponent(
     ticket
-  )}`;
+  )}&voice=1`;
+}
+
+// voice=1로 받는 바이너리 프레임: [1바이트 발신자 슬롯][PCM16LE 16kHz mono 오디오].
+// 발신자 슬롯별로 다음 재생 시각을 따로 추적해야 여러 명의 프레임이 한 버퍼에서 뭉개지지 않는다.
+function playVoiceFrame(
+  ctx: AudioContext | null,
+  buffer: ArrayBuffer,
+  slotTimelineRef: { current: Map<number, number> }
+) {
+  if (!ctx || buffer.byteLength < 3) return;
+
+  const view = new DataView(buffer);
+  const slot = view.getUint8(0);
+  const sampleCount = (buffer.byteLength - 1) / 2;
+  if (sampleCount <= 0) return;
+
+  const audioBuffer = ctx.createBuffer(1, sampleCount, TARGET_SAMPLE_RATE);
+  const channelData = audioBuffer.getChannelData(0);
+  for (let i = 0; i < sampleCount; i++) {
+    const sample = view.getInt16(1 + i * 2, true);
+    channelData[i] = sample / (sample < 0 ? 0x8000 : 0x7fff);
+  }
+
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+
+  const timeline = slotTimelineRef.current;
+  const now = ctx.currentTime;
+  const earliestStart = now + 0.05; // 아주 짧은 버퍼를 둬서 스케줄링 지연으로 인한 끊김을 방지
+  const startAt = Math.max(earliestStart, timeline.get(slot) ?? 0);
+  source.start(startAt);
+  timeline.set(slot, startAt + audioBuffer.duration);
 }
 
 // 실시간 회의 녹음 - 마이크 캡처(AudioWorklet) + 웹소켓 오디오 스트리밍 + 실시간 STT 반영
@@ -118,10 +181,18 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     tentative: "",
   });
   const [contradictionAlerts, setContradictionAlerts] = useState<ContradictionAlert[]>([]);
+  const [audioQualityAlerts, setAudioQualityAlerts] = useState<AudioQualityAlert[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [agendaReminder, setAgendaReminder] = useState<AgendaReminderPopup | null>(null);
 
-  // 다른 사람이 "각자 PC에서" 모드로 이미 시작해둔, 지금 참가할 수 있는 회의가 있는지
+  // 다른 사람이 이미 시작해둔, 지금 참가할 수 있는 회의가 있는지 - 각자 PC 모드는 참가자로,
+  // 한 대의 PC 모드는 보기 전용으로 참가한다 (join()이 recording_mode를 보고 자동으로 구분)
   const [joinableMeeting, setJoinableMeeting] = useState<Meeting | null>(null);
+
+  // 내가 참가자가 아니라 보기 전용(view-only)으로 들어와 있는지 - 오디오 캡처/전송을 건너뛰고,
+  // "회의 종료" 대신 "나가기"만 가능하게 UI를 다르게 보여줘야 해서 필요하다.
+  const [isViewer, setIsViewer] = useState(false);
+  const isViewerRef = useRef(false);
 
   // 아무것도 안 하고 있을 때만(idle) 참가 가능한 회의가 있는지 주기적으로 확인
   useEffect(() => {
@@ -136,9 +207,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       const res = await getMeetingListApi(workspaceId);
       if (cancelled) return;
       if (res.status === "success") {
-        const found = res.meetings.find(
-          (m) => m.status === "recording" && m.recording_mode === "individual"
-        );
+        const found = res.meetings.find((m) => m.status === "recording");
         setJoinableMeeting(found || null);
       }
     }
@@ -162,6 +231,8 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   const micStreamRef = useRef<MediaStream | null>(null);
   const isSendingRef = useRef(false);
   const sessionEndResolverRef = useRef<(() => void) | null>(null);
+  // voice=1로 받는 다른 참가자 오디오 프레임 - 발신자 슬롯별 다음 재생 시각
+  const voiceSlotTimelineRef = useRef<Map<number, number>>(new Map());
 
   // 재연결 관련 상태 — 전부 ref로 관리 (WS 이벤트 핸들러는 리렌더 없이도 최신 값을 읽어야 함)
   const isIntentionalCloseRef = useRef(false);
@@ -233,6 +304,11 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   // 켜는 부분 - start()와 beginScheduled() 둘 다 이 지점부터 완전히 동일하게 동작한다.
   function beginSession(meetingData: MeetingStart) {
     setMeeting(meetingData);
+    setAgendaReminder(
+      meetingData.agenda_reminder && meetingData.agenda_reminder.items.length > 0
+        ? meetingData.agenda_reminder
+        : null
+    );
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || window.location.origin;
 
@@ -248,8 +324,10 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
         setPartial({ confirmed: data.confirmed_text || "", tentative: data.tentative_text || "" });
       } else if (data.type === "final") {
         const newSegments: LiveSegment[] = (data.final?.segments || []).map((s: any) => ({
+          id: s.id ?? null,
           content: s.text || "",
           speaker_label: s.speaker ?? null,
+          speaker_user_id: s.speaker_user_id ?? null,
           start_ms: Math.round((s.start ?? 0) * 1000),
           end_ms: Math.round((s.end ?? 0) * 1000),
         }));
@@ -266,8 +344,23 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
           confidence_score: data.confidence_score ?? 0,
           displayMessage: data.display_message || null,
           referenceSourceName: data.reference_source_name || null,
+          referenceFileId: data.reference_file_id || null,
+          meetingSegmentId: data.meeting_segment_id || null,
+          source: data.source === "decision" ? "decision" : "document",
+          judgmentCase: data.judgment_case === "reasoned_change" || data.judgment_case === "unreasoned_change"
+            ? data.judgment_case
+            : null,
+          actions: Array.isArray(data.actions) ? data.actions : null,
         };
         setContradictionAlerts((prev) => [...prev, alert]);
+      } else if (data.type === "audio_quality") {
+        const alert: AudioQualityAlert = {
+          id: crypto.randomUUID(),
+          level: data.level || "warning",
+          message: data.message || "",
+          code: data.code ?? null,
+        };
+        setAudioQualityAlerts((prev) => [...prev, alert]);
       } else if (data.type === "session_end") {
         sessionEndResolverRef.current?.();
         sessionEndResolverRef.current = null;
@@ -306,18 +399,28 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       const isReconnectAttempt = reconnectDeadlineRef.current !== null;
       const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, meetingData.ws_ticket);
       const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
 
       ws.onopen = async () => {
         if (isReconnectAttempt) {
           reconnectDeadlineRef.current = null;
           clearReconnectTimer();
           wsRef.current = ws;
-          isSendingRef.current = statusBeforeDisconnectRef.current === "recording";
+          isSendingRef.current = !isViewerRef.current && statusBeforeDisconnectRef.current === "recording";
           setStatus(statusBeforeDisconnectRef.current);
           return;
         }
 
         wsRef.current = ws;
+
+        // 보기 전용(view-only) 참가는 마이크 권한/캡처가 아예 필요 없다 - 호스트 연결이 받는
+        // partial/final을 그대로 구독만 하면 된다.
+        if (isViewerRef.current) {
+          isSendingRef.current = false;
+          setStatus("recording");
+          return;
+        }
+
         try {
           await setupAudioCapture();
           isSendingRef.current = true;
@@ -331,7 +434,13 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
         }
       };
 
-      ws.onmessage = handleMessage;
+      ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
+        if (event.data instanceof ArrayBuffer) {
+          playVoiceFrame(audioContextRef.current, event.data, voiceSlotTimelineRef);
+          return;
+        }
+        handleMessage(event as MessageEvent<string>);
+      };
 
       ws.onerror = () => {
         if (!isReconnectAttempt) {
@@ -362,9 +471,18 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     setSegments([]);
     setPartial({ confirmed: "", tentative: "" });
     setContradictionAlerts([]);
+    setAudioQualityAlerts([]);
+    setAgendaReminder(null);
     isIntentionalCloseRef.current = false;
     reconnectDeadlineRef.current = null;
     clearReconnectTimer();
+    voiceSlotTimelineRef.current.clear();
+    isViewerRef.current = false;
+    setIsViewer(false);
+  }
+
+  function clearAgendaReminder() {
+    setAgendaReminder(null);
   }
 
   async function start(
@@ -398,8 +516,8 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     beginSession(res.meeting);
   }
 
-  // 다른 사람이 "각자 PC에서" 모드로 시작해둔 회의에 내 몫의 티켓을 받아서 합류한다.
-  // 진행 방식은 start()랑 동일 - 회의 자체를 새로 만드는 대신 이미 있는 회의 정보 + 내 티켓으로 세션을 연다.
+  // 다른 사람이 시작해둔 회의에 내 몫의 티켓을 받아서 합류한다. 각자 PC 모드면 나도 참가자로
+  // 마이크를 캡처하고, 한 대의 PC 모드면 서버가 보기 전용 티켓을 내려주므로 오디오 없이 구독만 한다.
   async function join(meetingId: string) {
     if (status === "recording" || status === "connecting") return;
     resetSessionState();
@@ -414,6 +532,10 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       setErrorMessage(joinRes.message || meetingRes.message);
       return;
     }
+
+    const viewOnly = meetingRes.meeting.recording_mode !== "individual";
+    isViewerRef.current = viewOnly;
+    setIsViewer(viewOnly);
 
     beginSession({ ...meetingRes.meeting, ws_ticket: joinRes.wsTicket });
   }
@@ -455,6 +577,14 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     }
   }
 
+  function clearContradictionAlert(contradictionId: string) {
+    setContradictionAlerts((prev) => prev.filter((a) => a.contradiction_id !== contradictionId));
+  }
+
+  function clearAudioQualityAlert(alertId: string) {
+    setAudioQualityAlerts((prev) => prev.filter((a) => a.id !== alertId));
+  }
+
   async function mapSpeakerNames(mapping: Record<string, string>) {
     if (!meeting) return;
     const res = await mapSpeakerNamesApi(workspaceId, meeting.id, mapping);
@@ -470,6 +600,20 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     } else {
       alert(`화자 이름 지정 실패: ${res.message}`);
     }
+  }
+
+  // STT 오인식(예: "9월"을 "구월"로 인식)으로 뜬 모순을 회의 중 바로 고칠 수 있게 - 세그먼트
+  // 내용을 수정하고, 성공하면 스크립트에도 바로 반영한다. 실패 시 false를 돌려줘서 호출한
+  // 쪽(모순 카드)이 무시 처리로 안 넘어가고 에러만 보여주게 한다.
+  async function editSegmentContent(segmentId: string, content: string): Promise<boolean> {
+    if (!meeting) return false;
+    const res = await updateMeetingSegmentApi(workspaceId, meeting.id, segmentId, { content });
+    if (res.status === "success") {
+      setSegments((prev) => prev.map((s) => (s.id === segmentId ? { ...s, content } : s)));
+      return true;
+    }
+    alert(`발화 내용 수정 실패: ${res.message}`);
+    return false;
   }
 
   async function renameMeeting(title: string) {
@@ -492,9 +636,13 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     reconnectDeadlineRef.current = null;
     clearReconnectTimer();
 
+    // session_end는 밀려 있는 자막이 많으면 최대 1분까지 걸릴 수 있다 - 그보다 짧게 잡으면
+    // 서버가 마지막 자막을 다 보내기 전에 소켓을 닫아버려서 회의 후반부 스크립트가 화면에서
+    // 잘려 보인다 (회의록엔 남지만 회의 중 화면에는 안 뜬 채로 끝나버림).
+    const SESSION_END_TIMEOUT_MS = 60000;
     const waitForSessionEnd = new Promise<void>((resolve) => {
       sessionEndResolverRef.current = resolve;
-      setTimeout(resolve, 5000);
+      setTimeout(resolve, SESSION_END_TIMEOUT_MS);
     });
 
     if (ws.readyState === WebSocket.OPEN) {
@@ -504,16 +652,34 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     ws.close();
   }
 
+  // 보기 전용 참가자가 회의에서 빠지는 것 - stop()과 달리 "end"를 보내지 않는다(회의 자체를
+  // 끝내는 게 아니라 내 구독 연결만 닫는 거라, 호스트나 다른 참가자에게는 영향이 없어야 한다).
+  function leave() {
+    isIntentionalCloseRef.current = true;
+    reconnectDeadlineRef.current = null;
+    clearReconnectTimer();
+    isSendingRef.current = false;
+    wsRef.current?.close();
+    wsRef.current = null;
+    cleanupAudio();
+    reset();
+  }
+
   function reset() {
     setStatus("idle");
     setMeeting(null);
     setSegments([]);
     setPartial({ confirmed: "", tentative: "" });
     setContradictionAlerts([]);
+    setAudioQualityAlerts([]);
+    setAgendaReminder(null);
     setErrorMessage(null);
     isIntentionalCloseRef.current = false;
     reconnectDeadlineRef.current = null;
     clearReconnectTimer();
+    voiceSlotTimelineRef.current.clear();
+    isViewerRef.current = false;
+    setIsViewer(false);
   }
 
   useEffect(() => {
@@ -531,16 +697,24 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     segments,
     partial,
     contradictionAlerts,
+    audioQualityAlerts,
+    agendaReminder,
+    clearAgendaReminder,
     errorMessage,
     joinableMeeting,
+    isViewer,
     start,
     join,
     beginScheduled,
     pause,
     resume,
     stop,
+    leave,
     reset,
     mapSpeakerNames,
+    editSegmentContent,
+    clearContradictionAlert,
+    clearAudioQualityAlert,
     renameMeeting,
     startedByName: currentUser.name,
   };

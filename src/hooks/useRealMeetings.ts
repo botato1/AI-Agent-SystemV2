@@ -5,16 +5,24 @@ import {
   MeetingSummary,
   Decision,
   MeetingAttendee,
+  MeetingDocumentItem,
+  SplitSegmentParams,
   getMeetingListApi,
   deleteMeetingApi,
   getMeetingSegmentsApi,
   getMeetingSummaryApi,
   getMeetingDecisionsApi,
   getMeetingAttendeesApi,
+  getMeetingDocumentsApi,
+  deleteMeetingDocumentApi,
   uploadMeetingAudioApi,
   mapSpeakerNamesApi,
+  updateMeetingSegmentApi,
+  splitMeetingSegmentApi,
+  updateMeetingSummaryApi,
   renameMeetingApi,
 } from "../services/meeting";
+import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
 
 const PENDING_STATUSES = new Set(["created", "processing"]);
 
@@ -27,6 +35,8 @@ export function useRealMeetings(workspaceId: string) {
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [attendees, setAttendees] = useState<MeetingAttendee[]>([]);
+  const [documents, setDocuments] = useState<MeetingDocumentItem[]>([]);
+  const [suggestedTasks, setSuggestedTasks] = useState<BackendTask[]>([]);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -61,15 +71,19 @@ export function useRealMeetings(workspaceId: string) {
         setSummary(null);
         setDecisions([]);
         setAttendees([]);
+        setSuggestedTasks([]);
+        setDocuments([]);
         return;
       }
 
       setIsDetailLoading(true);
-      const [segRes, sumRes, decRes, attRes] = await Promise.all([
+      const [segRes, sumRes, decRes, attRes, suggestedRes, docRes] = await Promise.all([
         getMeetingSegmentsApi(workspaceId, selectedMeetingId),
         getMeetingSummaryApi(workspaceId, selectedMeetingId),
         getMeetingDecisionsApi(workspaceId, selectedMeetingId),
         getMeetingAttendeesApi(workspaceId, selectedMeetingId),
+        getSuggestedTasksApi(workspaceId, selectedMeetingId),
+        getMeetingDocumentsApi(workspaceId, selectedMeetingId),
       ]);
       setIsDetailLoading(false);
 
@@ -77,6 +91,8 @@ export function useRealMeetings(workspaceId: string) {
       setSummary(sumRes.status === "success" ? sumRes.summary : null);
       setDecisions(decRes.status === "success" ? decRes.decisions : []);
       setAttendees(attRes.status === "success" ? attRes.attendees : []);
+      setSuggestedTasks(suggestedRes.status === "success" ? suggestedRes.tasks : []);
+      setDocuments(docRes.status === "success" ? docRes.documents : []);
     }
 
     loadDetail();
@@ -86,6 +102,22 @@ export function useRealMeetings(workspaceId: string) {
     if (!workspaceId || !selectedMeetingId) return;
     const res = await getMeetingAttendeesApi(workspaceId, selectedMeetingId);
     if (res.status === "success") setAttendees(res.attendees);
+  }
+
+  async function reloadDocuments() {
+    if (!workspaceId || !selectedMeetingId) return;
+    const res = await getMeetingDocumentsApi(workspaceId, selectedMeetingId);
+    if (res.status === "success") setDocuments(res.documents);
+  }
+
+  async function removeDocument(documentId: string) {
+    if (!selectedMeetingId) return;
+    const res = await deleteMeetingDocumentApi(workspaceId, selectedMeetingId, documentId);
+    if (res.status === "success") {
+      setDocuments((prev) => prev.filter((d) => d.id !== documentId));
+    } else {
+      alert(`문서 삭제 실패: ${res.message}`);
+    }
   }
 
   async function uploadAudio(file: File, title: string) {
@@ -114,6 +146,72 @@ export function useRealMeetings(workspaceId: string) {
       );
     } else {
       alert(`화자 이름 지정 실패: ${res.message}`);
+    }
+  }
+
+  async function assignSegmentSpeaker(segmentId: string, name: string) {
+    if (!selectedMeetingId) return;
+    const res = await updateMeetingSegmentApi(workspaceId, selectedMeetingId, segmentId, { speakerLabel: name });
+    if (res.status === "success" && res.segment) {
+      const updated = res.segment;
+      setSegments((prev) => prev.map((s) => (s.id === segmentId ? updated : s)));
+    } else {
+      alert(`화자 이름 지정 실패: ${res.message}`);
+    }
+  }
+
+  // STT가 잘못 알아들은 발화(예: "9월"을 "구월"로 인식)를 스크립트 탭에서 바로 고칠 수 있게.
+  // 성공 여부를 boolean으로 돌려줘서 호출한 쪽(인라인 편집 UI)이 실패 시 편집 모드를 유지하게 한다.
+  async function updateSegmentContent(segmentId: string, content: string): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await updateMeetingSegmentApi(workspaceId, selectedMeetingId, segmentId, { content });
+    if (res.status === "success" && res.segment) {
+      const updated = res.segment;
+      setSegments((prev) => prev.map((s) => (s.id === segmentId ? updated : s)));
+      return true;
+    }
+    alert(`회의록 내용 수정 실패: ${res.message}`);
+    return false;
+  }
+
+  // 한 세그먼트에 서로 다른 화자의 발언이 섞여 있을 때, 특정 지점에서 둘로 나누고 화자를 재지정
+  async function splitSegment(segmentId: string, params: SplitSegmentParams): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await splitMeetingSegmentApi(workspaceId, selectedMeetingId, segmentId, params);
+    if (res.status === "success" && res.first && res.second) {
+      const { first, second } = res;
+      setSegments((prev) => [...prev.map((s) => (s.id === segmentId ? first : s)), second]);
+      return true;
+    }
+    alert(`발화 분할 실패: ${res.message}`);
+    return false;
+  }
+
+  async function updateFullSummary(fullSummary: string) {
+    if (!selectedMeetingId) return;
+    const res = await updateMeetingSummaryApi(workspaceId, selectedMeetingId, { fullSummary });
+    if (res.status === "success" && res.summary) {
+      setSummary(res.summary);
+    } else {
+      alert(`회의록 내용 수정 실패: ${res.message}`);
+    }
+  }
+
+  async function approveSuggestedTask(taskId: string) {
+    const res = await updateTaskStatusApi(workspaceId, taskId, "open");
+    if (res.status === "success") {
+      setSuggestedTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } else {
+      alert(`할 일 추가 실패: ${res.message}`);
+    }
+  }
+
+  async function rejectSuggestedTask(taskId: string) {
+    const res = await deleteTaskApi(workspaceId, taskId);
+    if (res.status === "success") {
+      setSuggestedTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } else {
+      alert(`제안 삭제 실패: ${res.message}`);
     }
   }
 
@@ -148,13 +246,23 @@ export function useRealMeetings(workspaceId: string) {
     summary,
     decisions,
     attendees,
+    documents,
+    suggestedTasks,
+    approveSuggestedTask,
+    rejectSuggestedTask,
     reloadAttendees,
+    reloadDocuments,
+    removeDocument,
     isDetailLoading,
     isUploading,
     uploadAudio,
     removeMeeting,
     renameMeeting,
     mapSpeakerNames,
+    assignSegmentSpeaker,
+    updateSegmentContent,
+    splitSegment,
+    updateFullSummary,
     reload: loadMeetings,
   };
 }

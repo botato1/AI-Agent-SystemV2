@@ -28,34 +28,34 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function statusBadge(status: WorktreeStatus) {
+function statusBadge(t: any, status: WorktreeStatus) {
   switch (status) {
     case "pending":
     case "processing":
-      return { label: "처리 중", className: "bg-recall-accent/10 text-recall-accent" };
+      return { label: t.worktree_status_pending, className: "bg-recall-accent/10 text-recall-accent" };
     case "completed":
-      return { label: "완료", className: "bg-emerald-500/10 text-emerald-400" };
+      return { label: t.worktree_status_completed, className: "bg-emerald-500/10 text-emerald-400" };
     case "partially_completed":
-      return { label: "일부 실패", className: "bg-amber-500/10 text-amber-400" };
+      return { label: t.worktree_status_partial, className: "bg-amber-500/10 text-amber-400" };
     case "failed":
-      return { label: "실패", className: "bg-recall-danger/10 text-recall-danger" };
+      return { label: t.worktree_status_failed, className: "bg-recall-danger/10 text-recall-danger" };
     default:
       return { label: status, className: "bg-recall-textMuted/10 text-recall-textMuted" };
   }
 }
 
-function analysisStatusLabel(status: string): string {
+function analysisStatusLabel(t: any, status: string): string {
   switch (status) {
     case "pending":
-      return "대기";
+      return t.worktree_file_status_pending;
     case "processing":
-      return "분석 중";
+      return t.worktree_file_status_processing;
     case "completed":
-      return "완료";
+      return t.worktree_file_status_completed;
     case "failed":
-      return "실패";
+      return t.worktree_file_status_failed;
     case "excluded":
-      return "제외됨";
+      return t.worktree_file_status_excluded;
     default:
       return status;
   }
@@ -73,6 +73,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
     isUploading,
     uploadFolder,
     deleteWorktree,
+    deleteFile,
   } = useWorktrees(workspaceId);
 
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -144,7 +145,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
 
     const fileArray = Array.from(fileList);
     const firstRelativePath = (fileArray[0] as any).webkitRelativePath || fileArray[0].name;
-    const rootFolderName = firstRelativePath.split("/")[0] || "업로드된 폴더";
+    const rootFolderName = firstRelativePath.split("/")[0] || t.worktree_default_folder_name;
 
     const entries = fileArray.map((file) => ({
       file,
@@ -158,8 +159,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
     <div className="flex h-full w-full bg-recall-bgMain text-recall-text">
       {/* 왼쪽 목록 */}
       <div className="flex h-full w-64 flex-shrink-0 flex-col border-r border-recall-border p-3">
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-medium uppercase tracking-wide text-recall-textMuted">워크트리</p>
+        <div className="mb-3 flex items-center justify-end">
           <input
             ref={folderInputRef}
             type="file"
@@ -176,19 +176,19 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
             className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1 text-sm hover:bg-white/5 disabled:opacity-50"
           >
             <UploadIcon size={12} />
-            {isUploading ? "업로드 중..." : "폴더 업로드"}
+            {isUploading ? t.doc_uploading : t.worktree_upload_folder}
           </button>
         </div>
 
         <div className="flex-1 space-y-1.5 overflow-y-auto">
           {isLoading ? (
-            <p className="text-sm text-recall-textMuted">불러오는 중...</p>
+            <p className="text-sm text-recall-textMuted">{t.common_loading}</p>
           ) : worktrees.length === 0 ? (
-            <p className="text-sm text-recall-textMuted">아직 업로드된 폴더가 없습니다.</p>
+            <p className="text-sm text-recall-textMuted">{t.worktree_no_folders}</p>
           ) : (
             worktrees.map((w) => {
               const isSelected = w.id === selectedWorktreeId;
-              const badge = statusBadge(w.status);
+              const badge = statusBadge(t, w.status);
               return (
                 <div
                   key={w.id}
@@ -204,7 +204,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                       e.stopPropagation();
                       deleteWorktree(w.id);
                     }}
-                    title="삭제"
+                    title={t.task_delete}
                     className="absolute right-2 top-2 rounded p-1 text-recall-textMuted opacity-0 transition-opacity hover:text-recall-danger group-hover:opacity-100"
                   >
                     <TrashIcon size={12} />
@@ -217,8 +217,8 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                     <span className="text-xs text-recall-textMuted">{formatDate(w.created_at)}</span>
                   </span>
                   <span className="text-xs text-recall-textMuted">
-                    파일 {w.completed_file_count}/{w.total_file_count}
-                    {w.failed_file_count > 0 ? ` · 실패 ${w.failed_file_count}` : ""}
+                    {t.worktree_file_count_label(w.completed_file_count, w.total_file_count)}
+                    {w.failed_file_count > 0 ? t.worktree_failed_count_label(w.failed_file_count) : ""}
                   </span>
                 </div>
               );
@@ -233,7 +233,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
           <div className="flex flex-1 flex-col items-center justify-center gap-2">
             <UploadIcon size={24} className="text-recall-textMuted" />
             <p className="text-base text-recall-textMuted">
-              왼쪽에서 폴더를 선택하거나, "폴더 업로드"로 코드 폴더를 올려보세요.
+              {t.worktree_select_hint}
             </p>
           </div>
         ) : previewFile ? (
@@ -244,14 +244,14 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                 className="flex items-center gap-1 text-sm text-recall-textMuted hover:text-recall-text"
               >
                 <ChevronLeftIcon size={15} />
-                파일 목록으로
+                {t.worktree_back_to_files}
               </button>
               <button
                 onClick={handleRetry}
                 disabled={isRetrying}
                 className="rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-text hover:bg-white/5 disabled:opacity-50"
               >
-                {isRetrying ? "재분석 중..." : "재분석"}
+                {isRetrying ? t.worktree_reanalyzing : t.doc_reanalyze}
               </button>
             </div>
             <div className="mb-3">
@@ -268,7 +268,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                     : "text-recall-textMuted hover:text-recall-text"
                 }`}
               >
-                정리된 내용
+                {t.doc_tab_summary_view}
               </button>
               <button
                 onClick={() => setPreviewContentTab("original")}
@@ -278,7 +278,7 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                     : "text-recall-textMuted hover:text-recall-text"
                 }`}
               >
-                원본 파일
+                {t.doc_tab_original_view}
               </button>
             </div>
 
@@ -296,47 +296,49 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
           </>
         ) : (
           <>
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <p className="text-base font-medium text-recall-text">{selectedWorktree.root_folder_name}</p>
-                <p className="text-sm text-recall-textMuted">
-                  {statusBadge(selectedWorktree.status).label} · 총 {selectedWorktree.total_file_count}개 파일 ·{" "}
-                  {formatDate(selectedWorktree.created_at)}
-                </p>
-              </div>
-              <button
-                onClick={() => deleteWorktree(selectedWorktree.id)}
-                className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-sm text-recall-textMuted hover:border-recall-danger hover:text-recall-danger"
-              >
-                <TrashIcon size={13} />
-                삭제
-              </button>
+            <div className="mb-3">
+              <p className="text-base font-medium text-recall-text">{selectedWorktree.root_folder_name}</p>
+              <p className="text-sm text-recall-textMuted">
+                {statusBadge(t, selectedWorktree.status).label} · {t.worktree_total_files_label(selectedWorktree.total_file_count)} ·{" "}
+                {formatDate(selectedWorktree.created_at)}
+              </p>
             </div>
 
             <div className="flex-1 overflow-y-auto rounded-lg border border-recall-border">
               {isFilesLoading ? (
-                <p className="p-3 text-base text-recall-textMuted">불러오는 중...</p>
+                <p className="p-3 text-base text-recall-textMuted">{t.common_loading}</p>
               ) : files.length === 0 ? (
-                <p className="p-3 text-base text-recall-textMuted">파일이 없습니다.</p>
+                <p className="p-3 text-base text-recall-textMuted">{t.worktree_no_files}</p>
               ) : (
                 <div className="divide-y divide-recall-border">
                   {files.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => setPreviewFile({ id: f.id, name: f.relative_path || f.original_filename })}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-base hover:bg-white/5"
-                    >
-                      <DocumentIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
-                      <span className="min-w-0 flex-1 truncate text-recall-text">
-                        {f.relative_path || f.original_filename}
-                      </span>
-                      <span className="flex-shrink-0 text-sm text-recall-textMuted">
-                        {formatFileSize(f.file_size_bytes)}
-                      </span>
-                      <span className="flex-shrink-0 rounded bg-recall-textMuted/10 px-1.5 py-0.5 text-[11px] text-recall-textMuted">
-                        {analysisStatusLabel(f.analysis_status)}
-                      </span>
-                    </button>
+                    <div key={f.id} className="group flex w-full items-center gap-2 px-3 py-2 hover:bg-white/5">
+                      <button
+                        onClick={() => setPreviewFile({ id: f.id, name: f.relative_path || f.original_filename })}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left text-base"
+                      >
+                        <DocumentIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
+                        <span className="min-w-0 flex-1 truncate text-recall-text">
+                          {f.relative_path || f.original_filename}
+                        </span>
+                        <span className="flex-shrink-0 text-sm text-recall-textMuted">
+                          {formatFileSize(f.file_size_bytes)}
+                        </span>
+                        <span className="flex-shrink-0 rounded bg-recall-textMuted/10 px-1.5 py-0.5 text-[11px] text-recall-textMuted">
+                          {analysisStatusLabel(t, f.analysis_status)}
+                        </span>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteFile(f.id);
+                        }}
+                        title={t.task_delete}
+                        className="flex-shrink-0 rounded p-1 text-recall-textMuted opacity-0 transition-opacity hover:text-recall-danger group-hover:opacity-100"
+                      >
+                        <TrashIcon size={13} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}

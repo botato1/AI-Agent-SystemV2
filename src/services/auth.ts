@@ -57,6 +57,7 @@ export interface ProfileResponse {
     last_login_at: string;
     created_at: string;
     profile_image_url: string | null;
+    avatar_color?: string | null;
   } | null;
   message: string;
   error: string | null;
@@ -68,6 +69,7 @@ export interface UpdateProfileParams {
   displayName?: string;
   currentPassword?: string;
   newPassword?: string;
+  avatarColor?: string;
 }
 
 // 1. 아이디 중복 확인 (GET /api/auth/check-user-id)
@@ -372,6 +374,9 @@ export async function updateProfileApi(params: UpdateProfileParams): Promise<Pro
   }
   if (params.newPassword) {
     payload.new_password = params.newPassword;
+  }
+  if (params.avatarColor) {
+    payload.avatar_color = params.avatarColor;
   }
 
   try {

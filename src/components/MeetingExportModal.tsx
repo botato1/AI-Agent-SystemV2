@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import {
   getMeetingExportApi,
   updateMeetingSummaryApi,
-  updateMeetingSegmentApi,
+  exportMeetingPdfApi,
   MeetingExportData,
 } from "../services/meeting";
 import { CloseIcon } from "./icons";
@@ -11,6 +13,7 @@ interface MeetingExportModalProps {
   workspaceId: string;
   meetingId: string;
   onClose: () => void;
+  t: any;
 }
 
 interface SectionFlags {
@@ -30,6 +33,10 @@ function formatDate(iso: string | null): string {
 // PDF 라이브러리 없이, 브라우저 인쇄(다른 이름으로 저장 -> PDF)로 내보낸다. 인쇄할 때
 // 이 영역만 보이게 하고 나머지 화면(모달 배경 등)은 다 숨긴다.
 const PRINT_STYLE = `
+@page {
+  size: A4;
+  margin: 20mm 16mm;
+}
 @media print {
   body * { visibility: hidden; }
   #meeting-export-print-area, #meeting-export-print-area * { visibility: visible; }
@@ -37,7 +44,12 @@ const PRINT_STYLE = `
 }
 `;
 
-export default function MeetingExportModal({ workspaceId, meetingId, onClose }: MeetingExportModalProps) {
+// "서버에 저장"(html2canvas 캡처) 경로는 @media print를 타지 않으므로, 화면에서 숨길 요소는
+// 이 클래스로 표시해두고 캡처 시 ignoreElements로 걸러낸다.
+const PDF_EXPORT_HIDE_CLASS = "pdf-export-hide";
+const PDF_MARGIN_PT = 36; // ~0.5in, 서버 저장 PDF의 상하좌우 여백
+
+export default function MeetingExportModal({ workspaceId, meetingId, onClose, t }: MeetingExportModalProps) {
   const [data, setData] = useState<MeetingExportData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [sections, setSections] = useState<SectionFlags>({ summary: true, attendees: true, script: true });
@@ -48,11 +60,10 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
   const [isSavingSummary, setIsSavingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
 
-  // 스크립트(발화 세그먼트) 인라인 수정 상태 - STT 오인식 정정용
-  const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
-  const [segmentDraft, setSegmentDraft] = useState("");
-  const [isSavingSegment, setIsSavingSegment] = useState(false);
-  const [segmentError, setSegmentError] = useState<string | null>(null);
+  // 서버에 PDF로 저장
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,7 +99,7 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
     setIsSavingSummary(true);
     setSummaryError(null);
 
-    const res = await updateMeetingSummaryApi(workspaceId, meetingId, summaryDraft.trim());
+    const res = await updateMeetingSummaryApi(workspaceId, meetingId, { shortSummary: summaryDraft.trim() });
 
     setIsSavingSummary(false);
 
@@ -101,37 +112,84 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
     setIsEditingSummary(false);
   }
 
-  function startEditSegment(segmentId: string, currentContent: string) {
-    setSegmentError(null);
-    setEditingSegmentId(segmentId);
-    setSegmentDraft(currentContent);
-  }
-
-  async function saveSegment(segmentId: string) {
+  async function saveToServer() {
     if (!data) return;
-    setIsSavingSegment(true);
-    setSegmentError(null);
+    setIsExportingPdf(true);
+    setExportError(null);
+    setExportSuccessMsg(null);
 
-    const res = await updateMeetingSegmentApi(workspaceId, meetingId, segmentId, segmentDraft.trim());
+    try {
+      const printArea = document.getElementById("meeting-export-print-area");
+      if (!printArea) throw new Error("no-print-area");
 
-    setIsSavingSegment(false);
+      const canvas = await html2canvas(printArea, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        ignoreElements: (el) => el.classList.contains(PDF_EXPORT_HIDE_CLASS),
+      });
 
-    if (res.status === "error") {
-      setSegmentError(res.message);
-      return;
+      const pdf = new jsPDF({ unit: "pt", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const contentWidthPt = pageWidth - PDF_MARGIN_PT * 2;
+      const contentHeightPt = pageHeight - PDF_MARGIN_PT * 2;
+
+      // 캔버스 px -> pt 변환 비율 (여백을 뺀 콘텐츠 너비 기준)
+      const pxPerPt = canvas.width / contentWidthPt;
+      const pageHeightPx = contentHeightPt * pxPerPt;
+
+      let renderedHeightPx = 0;
+      let isFirstPage = true;
+      while (renderedHeightPx < canvas.height) {
+        const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedHeightPx);
+
+        const sliceCanvas = document.createElement("canvas");
+        sliceCanvas.width = canvas.width;
+        sliceCanvas.height = sliceHeightPx;
+        const ctx = sliceCanvas.getContext("2d");
+        if (!ctx) throw new Error("no-canvas-context");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+        ctx.drawImage(
+          canvas,
+          0,
+          renderedHeightPx,
+          canvas.width,
+          sliceHeightPx,
+          0,
+          0,
+          canvas.width,
+          sliceHeightPx
+        );
+
+        if (!isFirstPage) pdf.addPage();
+        pdf.addImage(
+          sliceCanvas.toDataURL("image/png"),
+          "PNG",
+          PDF_MARGIN_PT,
+          PDF_MARGIN_PT,
+          contentWidthPt,
+          sliceHeightPx / pxPerPt
+        );
+
+        renderedHeightPx += sliceHeightPx;
+        isFirstPage = false;
+      }
+
+      const blob = pdf.output("blob");
+      const filename = `${data.title || t.meeting_top_tab_exports}.pdf`;
+      const res = await exportMeetingPdfApi(workspaceId, meetingId, blob, filename);
+
+      if (res.status === "error") {
+        setExportError(res.message);
+      } else {
+        setExportSuccessMsg(t.meeting_export_save_success);
+      }
+    } catch {
+      setExportError(t.meeting_export_pdf_gen_failed);
+    } finally {
+      setIsExportingPdf(false);
     }
-
-    setData((prev) =>
-      prev
-        ? {
-            ...prev,
-            segments: prev.segments.map((s) =>
-              s.id === segmentId ? { ...s, content: segmentDraft.trim(), is_edited: true } : s
-            ),
-          }
-        : prev
-    );
-    setEditingSegmentId(null);
   }
 
   const sortedSegments = data ? [...data.segments].sort((a, b) => a.segment_index - b.segment_index) : [];
@@ -144,25 +202,25 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-recall-border px-6 py-4">
-          <p className="text-base font-semibold">회의록 내보내기</p>
+          <p className="text-base font-semibold">{t.meeting_export_title}</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text">
             <CloseIcon size={16} />
           </button>
         </div>
 
         {isLoading ? (
-          <p className="px-6 py-8 text-base text-recall-textMuted">불러오는 중...</p>
+          <p className="px-6 py-8 text-base text-recall-textMuted">{t.common_loading}</p>
         ) : !data ? (
-          <p className="px-6 py-8 text-base text-recall-danger">회의록 데이터를 불러오지 못했습니다.</p>
+          <p className="px-6 py-8 text-base text-recall-danger">{t.meeting_export_load_failed}</p>
         ) : (
           <>
             {/* 포함할 항목 선택 - 기본은 다 선택됨 */}
             <div className="flex flex-wrap gap-3 border-b border-recall-border px-6 py-3">
               {(
                 [
-                  { key: "summary" as const, label: "요약" },
-                  { key: "attendees" as const, label: "참석자" },
-                  { key: "script" as const, label: "스크립트" },
+                  { key: "summary" as const, label: t.tab_summary },
+                  { key: "attendees" as const, label: t.meeting_export_section_attendees },
+                  { key: "script" as const, label: t.meeting_tab_script },
                 ]
               ).map((item) => (
                 <label key={item.key} className="flex items-center gap-1.5 text-sm text-recall-text">
@@ -191,10 +249,10 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
                 {sections.attendees && (
                   <div>
                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                      참석자
+                      {t.meeting_export_section_attendees}
                     </p>
                     {data.attendees.length === 0 ? (
-                      <p className="text-sm text-recall-textMuted">지정된 참석자가 없습니다.</p>
+                      <p className="text-sm text-recall-textMuted">{t.meeting_minutes_attendees_none}</p>
                     ) : (
                       <p className="text-sm text-recall-text">
                         {data.attendees.map((a) => a.display_name).join(", ")}
@@ -207,21 +265,21 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
                   <div>
                     <div className="mb-1 flex items-center justify-between">
                       <p className="text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                        요약
+                        {t.tab_summary}
                       </p>
                       {!isEditingSummary && (
                         <button
                           type="button"
                           onClick={startEditSummary}
-                          className="print:hidden text-[11px] text-recall-textMuted underline hover:text-recall-text"
+                          className="print:hidden pdf-export-hide text-[11px] text-recall-textMuted underline hover:text-recall-text"
                         >
-                          수정
+                          {t.meeting_export_edit}
                         </button>
                       )}
                     </div>
 
                     {isEditingSummary ? (
-                      <div className="print:hidden flex flex-col gap-2">
+                      <div className="print:hidden pdf-export-hide flex flex-col gap-2">
                         <textarea
                           value={summaryDraft}
                           onChange={(e) => setSummaryDraft(e.target.value)}
@@ -236,7 +294,7 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
                             disabled={isSavingSummary}
                             className="rounded-lg border border-recall-border px-3 py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
                           >
-                            취소
+                            {t.task_cancel}
                           </button>
                           <button
                             type="button"
@@ -244,13 +302,13 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
                             disabled={isSavingSummary}
                             className="rounded-lg bg-recall-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
                           >
-                            {isSavingSummary ? "저장 중..." : "저장"}
+                            {isSavingSummary ? t.meeting_export_saving : t.task_save}
                           </button>
                         </div>
                       </div>
                     ) : (
                       <p className="whitespace-pre-line text-sm text-recall-text">
-                        {data.short_summary || "아직 요약이 생성되지 않았습니다."}
+                        {data.short_summary || t.meeting_summary_not_ready}
                       </p>
                     )}
                   </div>
@@ -259,61 +317,21 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
                 {sections.script && (
                   <div>
                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                      스크립트
+                      {t.meeting_tab_script}
                     </p>
                     {sortedSegments.length === 0 ? (
-                      <p className="text-sm text-recall-textMuted">발화 스크립트가 없습니다.</p>
+                      <p className="text-sm text-recall-textMuted">{t.meeting_no_script}</p>
                     ) : (
                       <div className="space-y-1.5">
-                        {segmentError && <p className="print:hidden text-xs text-recall-danger">{segmentError}</p>}
-                        {sortedSegments.map((s) =>
-                          editingSegmentId === s.id ? (
-                            <div key={s.id} className="print:hidden flex flex-col gap-1.5">
-                              <span className="text-xs font-medium text-recall-text">
-                                {s.speaker_label || "화자 미상"}
-                              </span>
-                              <textarea
-                                value={segmentDraft}
-                                onChange={(e) => setSegmentDraft(e.target.value)}
-                                rows={2}
-                                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
-                              />
-                              <div className="flex justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingSegmentId(null)}
-                                  disabled={isSavingSegment}
-                                  className="rounded-lg border border-recall-border px-2.5 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
-                                >
-                                  취소
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => saveSegment(s.id)}
-                                  disabled={isSavingSegment}
-                                  className="rounded-lg bg-recall-accent px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-                                >
-                                  {isSavingSegment ? "저장 중..." : "저장"}
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <p key={s.id} className="group text-sm text-recall-text">
-                              <span className="font-medium">{s.speaker_label || "화자 미상"}</span>
-                              <span className="text-recall-textMuted"> · {s.content}</span>
-                              {s.is_edited && (
-                                <span className="ml-1.5 text-[10px] text-amber-400">(수정됨)</span>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => startEditSegment(s.id, s.content)}
-                                className="print:hidden ml-1.5 text-[11px] text-recall-textMuted underline opacity-0 group-hover:opacity-100 hover:text-recall-text"
-                              >
-                                수정
-                              </button>
-                            </p>
-                          )
-                        )}
+                        {sortedSegments.map((s) => (
+                          <p key={s.id} className="text-sm text-recall-text">
+                            <span className="font-medium">{s.speaker_label || t.speaker_unknown}</span>
+                            <span className="text-recall-textMuted"> · {s.content}</span>
+                            {s.is_edited && (
+                              <span className="ml-1.5 text-[10px] text-amber-400">{t.meeting_export_edited_badge}</span>
+                            )}
+                          </p>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -321,20 +339,30 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose }: 
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-recall-border px-6 py-4">
+            <div className="flex items-center justify-end gap-2 border-t border-recall-border px-6 py-4">
+              {exportError && <p className="mr-auto text-xs text-recall-danger">{exportError}</p>}
+              {exportSuccessMsg && <p className="mr-auto text-xs text-emerald-500">{exportSuccessMsg}</p>}
               <button
                 type="button"
                 onClick={onClose}
                 className="rounded-lg border border-recall-border px-3.5 py-2 text-sm text-recall-textMuted hover:bg-white/5"
               >
-                닫기
+                {t.btn_close}
               </button>
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="rounded-lg bg-recall-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                className="rounded-lg border border-recall-border px-4 py-2 text-sm font-medium text-recall-text hover:bg-white/5"
               >
-                PDF로 저장
+                {t.meeting_export_save_pdf}
+              </button>
+              <button
+                type="button"
+                onClick={saveToServer}
+                disabled={isExportingPdf}
+                className="rounded-lg bg-recall-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {isExportingPdf ? t.meeting_export_saving : t.meeting_export_save_server}
               </button>
             </div>
           </>

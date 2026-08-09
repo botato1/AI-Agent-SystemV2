@@ -1,6 +1,6 @@
 // src/components/Sidebar.tsx
 import { useEffect, useRef, useState } from "react";
-import { Channel, User, Workspace, AiChatSessionItem } from "../types";
+import { Channel, User, Workspace } from "../types";
 import { Theme } from "../hooks/useTheme";
 import ProfilePopup from "./ProfilePopup";
 import NotificationBell from "./NotificationBell";
@@ -40,10 +40,6 @@ interface SidebarProps {
   onCreateChannel: () => void;
   onRenameChannel: (id: string, name: string) => void;
   onDeleteChannel: (id: string) => void;
-  aiSessions?: AiChatSessionItem[];
-  activeAiSessionId?: string | null;
-  onSelectAiSession?: (sessionId: string) => void;
-  onCreateNewAiSession?: () => void;
   user: User;
   onOpenProfile: () => void;
   onOpenSettings: () => void;
@@ -70,10 +66,6 @@ export default function Sidebar({
   onCreateChannel,
   onRenameChannel,
   onDeleteChannel,
-  aiSessions = [],
-  activeAiSessionId,
-  onSelectAiSession,
-  onCreateNewAiSession,
   user,
   onOpenProfile,
   onOpenSettings,
@@ -83,7 +75,6 @@ export default function Sidebar({
   t,
 }: SidebarProps) {
   const [isChannelsExpanded, setIsChannelsExpanded] = useState(true);
-  const [isAiInsightsExpanded, setIsAiInsightsExpanded] = useState(true);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [openMenuChannelId, setOpenMenuChannelId] = useState<string | null>(null);
@@ -257,7 +248,7 @@ export default function Sidebar({
                             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
                           >
                             <PencilIcon size={13} />
-                            이름 변경
+                            {t.chat_option_rename}
                           </button>
 
                           <button
@@ -268,7 +259,7 @@ export default function Sidebar({
                             }}
                             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
                           >
-                            ⚙️ 팀원 관리
+                            {t.sidebar_manage_members_menu}
                           </button>
 
                           <div className="my-1 border-t border-recall-border" />
@@ -283,7 +274,7 @@ export default function Sidebar({
                               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
                             >
                               <TrashIcon size={13} />
-                              삭제하기
+                              {t.sidebar_delete_workspace}
                             </button>
                           )}
                         </div>
@@ -433,7 +424,7 @@ export default function Sidebar({
                               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
                             >
                               <PencilIcon size={13} />
-                              이름 변경
+                              {t.chat_option_rename}
                             </button>
                             <button
                               onClick={() => {
@@ -443,7 +434,7 @@ export default function Sidebar({
                               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
                             >
                               <TrashIcon size={13} />
-                              삭제
+                              {t.chat_option_delete}
                             </button>
                           </div>
                         )}
@@ -485,65 +476,16 @@ export default function Sidebar({
 
           {/* AI 인사이트 */}
           <button
-            onClick={() => {
-              onSelectPlaceholder("aiChat");
-              setIsAiInsightsExpanded((v) => !v);
-            }}
+            onClick={() => onSelectPlaceholder("aiChat")}
             className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
               activePlaceholder === "aiChat"
                 ? "bg-recall-accent/15 text-recall-text font-medium"
                 : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
             }`}
           >
-            {isAiInsightsExpanded ? (
-              <ChevronDownIcon size={13} className="flex-shrink-0" />
-            ) : (
-              <ChevronRightIcon size={13} className="flex-shrink-0" />
-            )}
             <ChatIcon size={16} className="flex-shrink-0" />
-            <span className="truncate font-medium">AI 인사이트</span>
+            <span className="truncate font-medium">{t.ai_chat_page_title}</span>
           </button>
-
-          {/* AI 대화 세션 서브 목록 */}
-          {isAiInsightsExpanded && (
-            <div className="mb-2 flex flex-col gap-0.5 pl-8 pr-1 py-1">
-              {onCreateNewAiSession && (
-                <button
-                  onClick={onCreateNewAiSession}
-                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs font-semibold text-recall-accent hover:bg-recall-accent/10 transition"
-                >
-                  <PlusIcon size={13} />
-                  <span>+ 새 대화 시작</span>
-                </button>
-              )}
-
-              <div className="max-h-36 overflow-y-auto space-y-0.5 pr-0.5 custom-scrollbar">
-                {aiSessions.length === 0 ? (
-                  <p className="px-2 py-1.5 text-[11px] text-recall-textMuted">이전 대화가 없습니다.</p>
-                ) : (
-                  aiSessions.map((session) => {
-                    const isSelected = activePlaceholder === "aiChat" && activeAiSessionId === session.id;
-                    return (
-                      <button
-                        key={session.id}
-                        onClick={() => {
-                          onSelectPlaceholder("aiChat");
-                          if (onSelectAiSession) onSelectAiSession(session.id);
-                        }}
-                        className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs transition ${
-                          isSelected
-                            ? "bg-recall-accent/15 font-medium text-recall-text"
-                            : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
-                        }`}
-                      >
-                        <span className="truncate">{session.title || "새로운 대화"}</span>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          )}
 
           {/* 그래프 뷰 */}
           <button
@@ -596,6 +538,7 @@ export default function Sidebar({
           currentUserId={user.id}
           onClose={() => setManagingWorkspace(null)}
           onOpenInviteModal={() => setInvitingWorkspace(managingWorkspace)}
+          t={t}
         />
       )}
     </div>
