@@ -406,3 +406,19 @@ def list_latest_decision_changes_by_meeting(db: Session, meeting_id: uuid.UUID) 
         )
         .all()
     )
+
+def update_contradiction_snapshots(
+    db: Session, contradiction_id: uuid.UUID,
+    statement_text_snapshot: Optional[str] = None,
+    reference_text_snapshot: Optional[str] = None,
+) -> Optional[Contradiction]:
+    contradiction = db.get(Contradiction, contradiction_id)
+    if not contradiction:
+        return None
+    if statement_text_snapshot is not None:
+        contradiction.statement_text_snapshot = statement_text_snapshot
+    if reference_text_snapshot is not None:
+        contradiction.reference_text_snapshot = reference_text_snapshot
+    db.commit()
+    db.refresh(contradiction)
+    return contradiction
