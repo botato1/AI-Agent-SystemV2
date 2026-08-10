@@ -55,6 +55,8 @@ from backend.schemas.meeting_schema import (
     MeetingSegmentSplitResponse,
     MeetingDocumentResponse,
     MeetingDocumentListResponse,
+    DecisionCreateRequest,
+    DecisionUpdateRequest,
 )
 
 
@@ -142,6 +144,7 @@ def start_meeting_api(
         status="recording",
         started_at=started_at,
     )
+    meeting_crud.set_attendees(db, meeting.id, [])
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
     reminder_result = agenda_reminder.check_on_session_start(db, category.id)
@@ -223,6 +226,8 @@ async def upload_meeting_api(
         status="created",
     )
 
+    meeting_crud.set_attendees(db, meeting.id, [])
+    
     background_tasks.add_task(
         process_uploaded_audio_stt,
         meeting.id, workspace_id, category.id, file_content,
@@ -435,8 +440,7 @@ def schedule_meeting_api(
         scheduled_at=request.scheduled_at,
     )
 
-    if request.attendee_ids:
-        meeting_crud.set_attendees(db, meeting.id, request.attendee_ids)
+    meeting_crud.set_attendees(db, meeting.id, request.attendee_ids)
 
     return MeetingResponse.model_validate(meeting)
 
@@ -897,6 +901,61 @@ def get_meeting_decisions_api(
         decisions=[DecisionResponse.model_validate(d) for d in decisions]
     )
 
+# 결정사항 생성 (회의록 탭에서 수동 추가)
+@router.post("/{meeting_id}/decisions", response_model=DecisionResponse, status_code=status.HTTP_201_CREATED)
+def create_meeting_decision_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    request: DecisionCreateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    decision = meeting_crud.create_decision(
+        db,
+        workspace_id=workspace_id,
+        meeting_id=meeting_id,
+        title=request.title,
+        decision_text=request.decision_text,
+        reason=request.reason,
+        status=request.status,
+        decided_at=request.decided_at or datetime.now(timezone.utc),
+    )
+    return DecisionResponse.model_validate(decision)
+
+
+# 결정사항 수정
+@router.patch("/{meeting_id}/decisions/{decision_id}", response_model=DecisionResponse)
+def update_meeting_decision_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    request: DecisionUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    decision = meeting_crud.get_decision(db, decision_id)
+    if not decision or decision.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="결정사항을 찾을 수 없습니다.",
+        )
+
+    update_fields = request.model_dump(exclude_unset=True)
+    if not update_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+
+    updated = meeting_crud.update_decision(db, decision_id, **update_fields)
+    return DecisionResponse.model_validate(updated)
+
 # 실시간 녹음 일시정지
 @router.post("/{meeting_id}/pause", response_model=MeetingResponse)
 def pause_meeting_api(
@@ -1053,7 +1112,7 @@ def update_meeting_attendees_api(
     rows = meeting_crud.set_attendees(db, meeting_id, request.user_ids)
     return MeetingAttendeeListResponse(
         attendees=[
-            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
+            MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name, is_initial=attendee.is_initial)
             for attendee, user in rows
         ]
     )

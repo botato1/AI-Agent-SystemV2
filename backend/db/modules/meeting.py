@@ -189,6 +189,7 @@ class MeetingAttendee(Base):
     id = uuid_pk()
     meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    is_initial = Column(Boolean, nullable=False, server_default="false")
     added_at = created_at_col()
 
     __table_args__ = (

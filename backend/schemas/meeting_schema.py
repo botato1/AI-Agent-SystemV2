@@ -385,6 +385,7 @@ class MeetingTitleUpdateRequest(BaseModel):
 class MeetingAttendeeResponse(BaseModel):
     user_id: UUID
     display_name: Optional[str] = None
+    is_initial: bool = False
 
 
 class MeetingAttendeeListResponse(BaseModel):
@@ -483,3 +484,17 @@ class MeetingDocumentResponse(ORMBaseSchema):
 
 class MeetingDocumentListResponse(BaseModel):
     documents: list[MeetingDocumentResponse] = Field(default_factory=list)
+
+class DecisionCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    decision_text: str = Field(..., min_length=1)
+    reason: Optional[str] = None
+    status: DecisionStatus = "active"
+    decided_at: Optional[datetime] = None
+
+
+class DecisionUpdateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    decision_text: Optional[str] = Field(default=None, min_length=1)
+    reason: Optional[str] = None
+    status: Optional[DecisionStatus] = None

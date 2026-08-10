@@ -562,6 +562,34 @@ def update_profile_image(db: Session, access_token: str, filename: str, file_con
         error=None,
     )
 
+def delete_profile_image(db: Session, access_token: str) -> ProfileResponse:
+    try:
+        user_pk = get_user_id_from_access_token(access_token)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 Access Token입니다.",
+        )
+
+    user = auth_crud.get_user_by_id(db, UUID(user_pk))
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다.",
+        )
+
+    old_image_url = user.profile_image_url
+    auth_crud.update_user_profile(db, user.id, profile_image_url=None)
+    _delete_old_profile_image(old_image_url)
+    user = auth_crud.get_user_by_id(db, user.id)
+
+    return ProfileResponse(
+        status="success",
+        user=UserPublicSchema.model_validate(user),
+        message="프로필 이미지가 삭제되었습니다.",
+        error=None,
+    )
+
 def get_voice_profile_script() -> str:
     try:
         response = httpx.get(f"{STT_SERVER_BASE_URL}/api/profiles/script", timeout=10.0)
