@@ -8,6 +8,7 @@ from backend.graphs.nodes.ai_chat_answer import (
     format_chat_history,
     build_answer_prompt,
     _parse_cited_indices,
+    _has_valid_citation,
 )
 
 
@@ -250,3 +251,26 @@ def test_parse_cited_indices_trailing_whitespace_tolerated():
     answer, indices = _parse_cited_indices("답변입니다.\n[출처: 2]   \n  ")
     assert answer == "답변입니다."
     assert indices == {2}
+
+
+def test_has_valid_citation_true_when_none():
+    """마커 자체가 없었으면(None) 필터링 없이 전체 표시를 유지해야 한다."""
+    assert _has_valid_citation(None, 3) is True
+
+
+def test_has_valid_citation_true_when_in_range():
+    assert _has_valid_citation({1, 3}, 3) is True
+
+
+def test_has_valid_citation_false_when_only_zero():
+    """모델이 0-based 실수로 [출처: 0]을 내놓은 경우 - 회귀 재현 케이스."""
+    assert _has_valid_citation({0}, 3) is False
+
+
+def test_has_valid_citation_false_when_out_of_range():
+    assert _has_valid_citation({99}, 3) is False
+
+
+def test_has_valid_citation_true_when_partially_in_range():
+    """일부만 범위 안이어도 유효한 인용이 있는 것으로 취급한다."""
+    assert _has_valid_citation({0, 2}, 3) is True

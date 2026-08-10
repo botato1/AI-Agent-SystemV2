@@ -233,6 +233,22 @@ def _parse_cited_indices(answer: str) -> tuple[str, set[int] | None]:
     return clean_answer, indices
 
 
+def _has_valid_citation(cited_indices: set[int] | None, count: int) -> bool:
+    """cited_indices가 1..count(=resolved 후보 개수) 범위 안 번호를 하나라도
+    담고 있는지 확인한다.
+
+    [배경 - 승주 리뷰(PR #104 코멘트)] _parse_cited_indices()는 숫자를 "하나도"
+    못 뽑았을 때만 None으로 폴백하는데, 모델이 "[출처: 0]"처럼 범위 밖 숫자만
+    내놓으면 indices가 {0}으로 비어있지 않아 그 폴백을 안 탄다. 그런데 필터링
+    루프의 (i+1)은 1부터 시작하므로 {0}과는 절대 안 맞아 sources가 통째로
+    비어버린다 - 이 PR이 막겠다고 명시한 바로 그 회귀. cited_indices가 None이면
+    애초에 마커가 없었다는 뜻이라 True(전체 표시 유지)로 취급한다.
+    """
+    if cited_indices is None:
+        return True
+    return any(1 <= idx <= count for idx in cited_indices)
+
+
 def _call_llm_answer(prompt: str) -> str | None:
     """Ollama에 일반 텍스트 답변 생성을 요청한다. 실패 시 None (다른 노드처럼 JSON 강제 안 함 — 채팅 답변은 텍스트 그대로 노출).
 
@@ -380,6 +396,13 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
     # 안 지킨 경우) cited_indices가 None이 되고, 그러면 기존처럼 전체를 보여준다 —
     # 인용 파싱 때문에 근거가 통째로 안 보이는 회귀는 절대 만들지 않는다.
     answer, cited_indices = _parse_cited_indices(answer)
+    if not _has_valid_citation(cited_indices, len(resolved)):
+        # [수정 - 승주 리뷰(PR #104 코멘트)] cited_indices가 비어있지 않아도 범위 밖
+        # 숫자만 있으면(예: 모델이 "[출처: 0]"처럼 0-based 실수를 하거나 존재하지 않는
+        # 번호를 인용한 경우) 아래 필터링 루프에서 전부 걸러져 sources가 통째로 비어버린다
+        # ((i+1)이 1부터 시작하므로 0이나 len(resolved) 초과 값과는 절대 안 맞음).
+        # 마커가 아예 없었던 것과 동일하게(None) 취급해 전체 표시로 폴백시킨다.
+        cited_indices = None
 
     sources = []
     for i, (candidate, kind, obj) in enumerate(resolved):
