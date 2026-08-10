@@ -8,6 +8,7 @@
 # 답변 생성이 성공한 뒤 라우터가 ai_chat_crud.add_ai_exchange()로
 # 한 번에 처리한다 (실패 시 "답변 없는 질문"만 남는 것을 방지하기 위함).
 
+import re
 import uuid
 
 import httpx
@@ -69,7 +70,20 @@ _ANSWER_PROMPT = """당신은 팀 워크스페이스에 업로드된 문서, 회
 {question}
 
 근거 자료에 있는 내용만 바탕으로 답하세요. 근거 자료에 없는 내용은 답하지 말고 모른다고 답하세요.
-자연스러운 한국어 문장으로 답하세요 (JSON이나 마크다운 형식 없이 답변 텍스트만)."""
+자연스러운 한국어 문장으로 답하세요 (JSON이나 마크다운 형식 없이 답변 텍스트만).
+
+답변을 마친 뒤 마지막 줄에, 실제로 답변 작성에 사용한 근거 자료의 번호만 아래 형식 그대로 적으세요.
+사용한 근거가 없으면 이 줄은 생략하세요.
+[출처: 1,3]"""
+
+# 답변 맨 끝에 붙는 [출처: 1,3] 형태의 인용 마커를 잡아낸다. 답변 텍스트 안쪽에
+# 우연히 비슷한 패턴이 나와도 잘못 지우지 않도록, 문자열 맨 끝(공백 허용)에서만 매치한다.
+# [수정] 괄호 안 내용을 숫자/쉼표/공백으로만 한정하면(예: [0-9,\s]*), 모델이 형식을
+# 살짝 어겨서 "[출처: a,b]"처럼 글자가 섞인 걸 내놓을 때 정규식 자체가 매치를 못 해서
+# 마커 텍스트가 그대로 사용자 답변에 노출된다. 괄호 안은 뭐든 일단 잡아내고(.*?),
+# 숫자만 골라내는 건 파이썬 쪽(_parse_cited_indices)에서 따로 검증한다 - 그래야
+# 마커 모양만 맞으면 내용이 이상해도 항상 화면에서는 지워진다.
+_SOURCE_CITATION_PATTERN = re.compile(r"\[출처:\s*(.*?)\]\s*$")
 
 
 def candidate_score(candidate: dict) -> float:
@@ -173,10 +187,66 @@ def format_chat_history(chat_history: list[dict] | None, max_turns: int = CHAT_H
 
 
 def build_answer_prompt(context_texts: list[str], chat_history: list[dict] | None, question: str) -> str:
-    """검색된 청크 본문 + 대화 이력 + 질문을 하나의 프롬프트로 조립한다."""
-    context = "\n\n---\n\n".join(context_texts) if context_texts else "(근거 자료 없음)"
+    """검색된 청크 본문 + 대화 이력 + 질문을 하나의 프롬프트로 조립한다.
+
+    [수정] 근거 자료에 [1] [2] [3]처럼 번호를 매겨서 넣는다 - LLM이 실제로 답변에
+    쓴 근거만 응답 끝에 [출처: 1,3] 형식으로 표시하게 하기 위함(승주 요청).
+    번호는 1부터 시작하고, context_texts의 순서(=ai_chat_answer_node의 resolved
+    순서)와 1:1 대응한다. _parse_cited_indices()가 이 번호를 그대로 되읽는다.
+    """
+    if context_texts:
+        context = "\n\n---\n\n".join(f"[{i}] {text}" for i, text in enumerate(context_texts, start=1))
+    else:
+        context = "(근거 자료 없음)"
     history = format_chat_history(chat_history)
     return _ANSWER_PROMPT.format(context=context, history=history, question=question)
+
+
+def _parse_cited_indices(answer: str) -> tuple[str, set[int] | None]:
+    """LLM 답변 끝에 붙은 [출처: 1,3] 마커를 파싱한다.
+
+    Returns:
+        (마커를 제거한 답변 텍스트, 인용된 1-based 번호 집합)
+        마커가 아예 없거나, 있어도 숫자를 하나도 못 뽑아냈으면(형식이 깨진 경우)
+        두 번째 값으로 None을 반환한다. 호출부는 None이면 기존 동작(전체 표시)으로
+        안전하게 폴백해야 한다 - 인용 파싱 때문에 근거가 통째로 안 보이는 회귀를
+        만들면 안 된다는 게 이 기능의 전제 조건.
+    """
+    stripped = answer.rstrip()
+    match = _SOURCE_CITATION_PATTERN.search(stripped)
+    if not match:
+        return answer, None
+
+    clean_answer = stripped[: match.start()].rstrip()
+
+    indices: set[int] = set()
+    for part in match.group(1).split(","):
+        part = part.strip()
+        if part.isdigit():
+            indices.add(int(part))
+
+    if not indices:
+        # 마커는 있는데 숫자를 하나도 못 읽음(예: "[출처: ]", "[출처: a,b]") - 폴백.
+        # 그래도 마커 텍스트 자체는 사용자에게 안 보이는 게 맞으므로 clean_answer는 유지.
+        return clean_answer, None
+
+    return clean_answer, indices
+
+
+def _has_valid_citation(cited_indices: set[int] | None, count: int) -> bool:
+    """cited_indices가 1..count(=resolved 후보 개수) 범위 안 번호를 하나라도
+    담고 있는지 확인한다.
+
+    [배경 - 승주 리뷰(PR #104 코멘트)] _parse_cited_indices()는 숫자를 "하나도"
+    못 뽑았을 때만 None으로 폴백하는데, 모델이 "[출처: 0]"처럼 범위 밖 숫자만
+    내놓으면 indices가 {0}으로 비어있지 않아 그 폴백을 안 탄다. 그런데 필터링
+    루프의 (i+1)은 1부터 시작하므로 {0}과는 절대 안 맞아 sources가 통째로
+    비어버린다 - 이 PR이 막겠다고 명시한 바로 그 회귀. cited_indices가 None이면
+    애초에 마커가 없었다는 뜻이라 True(전체 표시 유지)로 취급한다.
+    """
+    if cited_indices is None:
+        return True
+    return any(1 <= idx <= count for idx in cited_indices)
 
 
 def _call_llm_answer(prompt: str) -> str | None:
@@ -320,18 +390,37 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
             "error": "LLM 호출 실패",
         }
 
+    # [수정] LLM이 답변 끝에 붙인 [출처: 1,3] 마커로, 실제로 인용한 근거만 sources에
+    # 남긴다 (승주 요청). MIN_PER_COLLECTION 보장 때문에 낮은 점수로 억지로 끼워진
+    # 후보까지 근거자료로 노출되던 문제. 마커가 없거나 파싱이 이상하면(모델이 형식을
+    # 안 지킨 경우) cited_indices가 None이 되고, 그러면 기존처럼 전체를 보여준다 —
+    # 인용 파싱 때문에 근거가 통째로 안 보이는 회귀는 절대 만들지 않는다.
+    answer, cited_indices = _parse_cited_indices(answer)
+    if not _has_valid_citation(cited_indices, len(resolved)):
+        # [수정 - 승주 리뷰(PR #104 코멘트)] cited_indices가 비어있지 않아도 범위 밖
+        # 숫자만 있으면(예: 모델이 "[출처: 0]"처럼 0-based 실수를 하거나 존재하지 않는
+        # 번호를 인용한 경우) 아래 필터링 루프에서 전부 걸러져 sources가 통째로 비어버린다
+        # ((i+1)이 1부터 시작하므로 0이나 len(resolved) 초과 값과는 절대 안 맞음).
+        # 마커가 아예 없었던 것과 동일하게(None) 취급해 전체 표시로 폴백시킨다.
+        cited_indices = None
+
     sources = []
     for i, (candidate, kind, obj) in enumerate(resolved):
+        if cited_indices is not None and (i + 1) not in cited_indices:
+            continue
+
         # [수정] 저장하는 유사도도 실제 선별 기준이 된 점수(리랭킹 후 reranker_score)로
         # 맞춘다. 예전엔 raw 하이브리드 score를 저장해서, 근거가 뽑힌 이유와 화면에
         # 표시되는 유사도가 서로 다른 값이었다.
         score = clamp_similarity_score(candidate_score(candidate))
+        # display_order는 필터링 후 순서로 다시 매긴다 (건너뛴 항목 때문에 번호가
+        # 듬성듬성해지지 않도록).
         if kind == "decision":
             sources.append({
                 "source_type": "decision",
                 "decision_id": obj.id,
                 "similarity_score": score,
-                "display_order": i,
+                "display_order": len(sources),
             })
         else:
             sources.append({
@@ -339,7 +428,7 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
                 "file_id": obj.file_id,
                 "chunk_id": obj.id,
                 "similarity_score": score,
-                "display_order": i,
+                "display_order": len(sources),
             })
 
     return {
