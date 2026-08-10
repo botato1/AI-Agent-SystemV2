@@ -10,6 +10,7 @@ from backend.core.dependencies import get_current_user_id, require_workspace_mem
 from backend.db.session import get_db
 from backend.db.crud import contradiction_crud, file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
+
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
     ContradictionSchema,
