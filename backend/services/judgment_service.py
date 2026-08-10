@@ -18,6 +18,14 @@ from backend.modules.llm.ollama_client import OLLAMA_MODEL_LIGHT, _call_ollama
 
 _SKIP_NOTIFICATION_POPUP_TYPES = {"reasoned_change", "unreasoned_change"}
 
+# [추가 - 팀 논의] Case 0(decision_reminder)은 "처리 대상"이 아닌 FYI성 알림이라
+# contradictions 테이블에 합치지 않기로 함(resolve 액션 전제가 안 맞음). 대신
+# Notification은 그대로 생성(알림함용)하면서, 추가로 WS push도 같이 할 수 있게
+# dict를 반환한다 - 호출부(meeting_ws_router.py/room_ws_router.py)가 judgment_case
+# 값 보고 "decision_reminder"면 새 타입으로, 그 외(Case 2/3)면 기존
+# "contradiction_alert"로 나눠서 push하는 방식.
+_ALSO_PUSH_LIVE_POPUP_TYPES = {"decision_reminder"}
+
 _POPUP_TITLE = {
     "decision_reminder": "이전 결정 리마인더",
     "document_recommendation": "관련 문서 추천",
@@ -100,8 +108,10 @@ def _judge_single_statement(
 ) -> dict | None:
     """발화 1개에 대해 decision_judgment -> document_judgment -> priority를 실행.
 
-    Case 0/문서추천은 이 함수 안에서 바로 Notification을 생성하고 None을 반환한다.
-    Case 2/3(모순)은 호출부가 실시간 WS push에 쓸 수 있도록 dict를 반환한다.
+    문서추천은 이 함수 안에서 바로 Notification을 생성하고 None을 반환한다.
+    Case 2/3(모순)은 Notification 없이 dict만 반환한다(호출부가 실시간 WS push에 씀).
+    Case 0(리마인더)은 Notification을 생성하면서 동시에 dict도 반환한다(알림함 +
+    실시간 push 둘 다) - _ALSO_PUSH_LIVE_POPUP_TYPES 참조.
     """
     decision_result = decision_judgment.judge(
         db,
@@ -152,6 +162,16 @@ def _judge_single_statement(
             ref_type=source_type,
             ref_id=source_id,
         )
+
+    if popup["type"] in _ALSO_PUSH_LIVE_POPUP_TYPES:
+        # Case 0 - 알림함(Notification, 위에서 생성 완료)과 별개로 실시간 push용
+        # dict도 반환. contradiction_id/actions는 없음 - 해결(resolve) 대상이 아님.
+        return {
+            "message": popup["message"],
+            "judgment_case": popup["type"],
+            "decision_id": decision_result.get("decision_id"),
+        }
+
     return None
 
 
@@ -168,8 +188,12 @@ def run_judgment_pipeline(
 ) -> dict | None:
     """발화/메시지 하나마다 백그라운드로 호출한다. 자체 DB 세션을 새로 연다.
 
-    decision 기반 모순(Case 3)이 발생하면 {"contradiction_id":..., "message":...}를
-    반환한다 — 호출부가 실시간 WS push에 쓸 수 있게 하기 위함.
+    호출부가 실시간 WS push에 쓸 수 있도록 dict를 반환하는 경우:
+    - Case 2/3(근거 있는/없는 변경): {"contradiction_id":..., "message":...,
+      "judgment_case": "reasoned_change"|"unreasoned_change", "actions":[...]}
+    - Case 0(결정 리마인더): {"message":..., "judgment_case": "decision_reminder",
+      "decision_id":...} - contradiction_id/actions 없음(해결 대상 아님).
+    그 외(문서추천 등)는 Notification만 생성하고 None을 반환한다.
     """
     db = SessionLocal()
     try:
