@@ -77,6 +77,12 @@ class LiveSpeakerIdentifier:
         self._closed_set = bool(initial_profiles)
         self._next_speaker_num = 1
 
+    @property
+    def enrolled_count(self) -> int:
+        """사전 등록된 화자 수. 닫힌 집합이 아니면 0 — 열린 집합에서는 '미상'이
+        정상 동작이라, 호출부가 경고 여부를 가를 때 이 값으로 구분한다."""
+        return len(self._profiles) if self._closed_set else 0
+
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         denom = np.linalg.norm(a) * np.linalg.norm(b) + 1e-8

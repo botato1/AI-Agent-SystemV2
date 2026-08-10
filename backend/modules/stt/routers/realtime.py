@@ -202,6 +202,12 @@ async def _stt_worker(
             if warning:
                 await send(warning)
 
+            # 등록된 목소리로 화자를 못 찾고 있으면 알린다. 오디오 경고와 같은
+            # 형식이라 클라이언트는 구분 없이 message만 띄우면 된다.
+            speaker_warning = session.pop_unknown_speaker_warning()
+            if speaker_warning:
+                await send(speaker_warning)
+
 
 async def _run_session(
     websocket: WebSocket, session, recorder, session_id: str,

@@ -244,6 +244,18 @@ REALTIME_SPEAKER_SPLIT_SILENCE_MS = int(os.getenv("REALTIME_SPEAKER_SPLIT_SILENC
 #
 # 비용은 창 수에 비례한다 = 곧 확정 자막의 지연이다. 그래서 재분석(0.5초 이동)보다
 # 성기게 훑고, 짧은 청크는 아예 건너뛴다(짧으면 화자가 바뀔 여지도 적다).
+# 등록된 목소리가 있는데도 확정 전사가 계속 "미상"으로 나오면, 등록 안 된 사람들이
+# 말하고 있다는 뜻이다. 이 상태로 회의를 끝내면 회의록에 이름이 하나도 안 붙는다.
+#
+# 왜 참석자 명단과 대조하지 않는가 (2026-08-10 실측): 회의 두 건(7b30851f, f10b4ade)이
+# 프로필 1명으로 켜져 통째로 못 쓰게 됐는데, **프론트가 attendees에 1명만 넘겨서**
+# 서버 입장에선 명단과 등록이 일치했다 — 불일치로는 감지가 안 된다. 실제 증상
+# (미상 비율)을 직접 보는 편이 명단이 무엇이든 걸린다.
+REALTIME_UNKNOWN_SPEAKER_WARN_RATIO = float(os.getenv("REALTIME_UNKNOWN_SPEAKER_WARN_RATIO", "0.6"))
+# 이만큼 청크가 쌓이기 전엔 판단하지 않는다. 회의 초반 한두 청크가 미상인 건
+# 흔한 일이라(첫 발화가 짧거나 잡음) 그걸로 경고하면 늑대소년이 된다.
+REALTIME_UNKNOWN_SPEAKER_MIN_CHUNKS = int(os.getenv("REALTIME_UNKNOWN_SPEAKER_MIN_CHUNKS", "3"))
+
 # 전사 결과를 문장 단위로 쪼개 내보낼지. 모순 감지 모델이 "발화 하나"를 받도록
 # 만들어졌는데, Qwen은 창 하나당 텍스트 한 덩어리를 주므로 우리가 쪼개야 한다
 # (realtime_service._split_by_sentence 참고 — 실측 근거가 거기 있다).

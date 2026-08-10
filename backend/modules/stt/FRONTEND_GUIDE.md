@@ -225,6 +225,12 @@ wss://<서버주소>/api/ws/stt/{session_id}?participant_name=이준오&voice=1
 | `low_snr` | warning | 주변 소음 대비 목소리가 작음 — **가장 치명적** |
 | `low_volume` | warning | 목소리가 작게 들어옴 |
 | `clipping` | warning | 소리가 너무 커서 잘림 |
+| `unknown_speaker` | warning | 등록된 목소리로 화자를 못 찾는 중 — **오디오가 아니라 등록 문제** |
+
+`unknown_speaker`만 성격이 다르다. 소리는 멀쩡하고 전사도 정상인데 **회의록에 화자
+이름이 안 붙는** 상태다(`speaker`가 계속 `null`). 등록 안 된 사람들이 말할 때 난다.
+추가 필드로 `unknown_ratio`(미상 비율), `enrolled_count`(등록된 목소리 수)가 온다.
+이것도 회의를 막지 않는다 — 그대로 진행하면 이름 없는 회의록이 남을 뿐이다.
 
 **왜 회의 중에 보내는가:** 끝난 뒤 알려주면 소용이 없다. 녹음을 다시 하려면 사람을
 또 모아야 한다. 마이크를 옮기거나 창문을 닫는 건 **회의 초반에 알려주면 할 수 있는

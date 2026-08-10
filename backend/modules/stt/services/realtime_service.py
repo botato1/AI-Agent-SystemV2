@@ -23,6 +23,8 @@ from ..core.config import (
     REALTIME_SPEAKER_SPLIT_SILENCE_MS,
     REALTIME_SENTENCE_SPLIT_ENABLED,
     REALTIME_SENTENCE_MIN_CHARS,
+    REALTIME_UNKNOWN_SPEAKER_WARN_RATIO,
+    REALTIME_UNKNOWN_SPEAKER_MIN_CHUNKS,
     REALTIME_SPEAKER_SCAN_ENABLED,
     REALTIME_SPEAKER_SCAN_MIN_SEC,
     REALTIME_SPEAKER_SCAN_HOP_SEC,
@@ -121,6 +123,10 @@ class RealtimeSTTSession:
         self._last_flush_check = 0.0
         # 회의 중 오디오 상태 감시 — 인식이 무너질 조건이면 초반에 알린다
         self.audio_quality = AudioQualityMonitor()
+        # 등록된 목소리로 화자를 못 찾은 청크 세기 — 미상 경고 판단용
+        self._chunks_seen = 0
+        self._chunks_unknown = 0
+        self._unknown_warned = False
 
         # Local Agreement 스트리밍 상태 (청크가 끝나기 전에도 실시간으로 텍스트를 흘려보내기 위함)
         self._last_partial_at = 0.0
@@ -560,6 +566,13 @@ class RealtimeSTTSession:
             for seg in precise_segments:
                 seg.setdefault("speaker", speaker_label)
 
+        # 미상 경고용 집계 — 이 청크에서 이름이 하나라도 붙었는지.
+        # 각자 PC 모드(fixed_speaker)는 이름이 접속 시 정해지므로 셀 필요가 없다.
+        if self.fixed_speaker is None and precise_segments:
+            self._chunks_seen += 1
+            if not any(seg.get("speaker") for seg in precise_segments):
+                self._chunks_unknown += 1
+
         # 화자를 붙인 **뒤에** 쪼갠다. 먼저 쪼개면 조각마다 화자를 다시 정해야 하는데,
         # 문장 경계는 화자 경계가 아니므로 판정할 근거가 없다.
         precise_segments = self._split_by_sentence(precise_segments)
@@ -608,6 +621,48 @@ class RealtimeSTTSession:
         except Exception:
             logger.exception("⚠️ 오디오 품질 판정 실패 — 경고 생략")
             return None
+
+    def pop_unknown_speaker_warning(self) -> dict | None:
+        """
+        등록된 목소리가 있는데도 화자를 못 찾은 청크가 대부분이면 한 번만 알린다.
+
+        회의를 막지 않는다 — 전사는 정상이고 이름만 안 붙는다. 다만 **그 사실을
+        회의 중에 알아야** 목소리를 등록하거나 참석자를 다시 넣을 수 있다.
+        끝난 뒤 알면 회의록에 이름이 하나도 없는 채로 남는다(실측 2건).
+
+        경고 형식은 오디오 품질 경고와 같다 — 프론트가 `message`를 그대로 띄우는
+        같은 통로를 쓰므로 클라이언트 변경이 필요 없다.
+        """
+        if self._unknown_warned or self.speaker_identifier is None:
+            return None
+        # 자동감지(열린 집합) 모드는 미상이 정상이라 경고 대상이 아니다
+        known = self.speaker_identifier.enrolled_count
+        if not known:
+            return None
+        if self._chunks_seen < REALTIME_UNKNOWN_SPEAKER_MIN_CHUNKS:
+            return None
+        ratio = self._chunks_unknown / self._chunks_seen
+        if ratio < REALTIME_UNKNOWN_SPEAKER_WARN_RATIO:
+            return None
+
+        self._unknown_warned = True
+        logger.warning(
+            f"⚠️ [{self.session_id}] 미상 화자 비율 {ratio:.0%} "
+            f"({self._chunks_unknown}/{self._chunks_seen} 청크, 등록 {known}명)"
+        )
+        return {
+            "session_id": self.session_id,
+            "type": "audio_quality",
+            "level": "warning",
+            "code": "unknown_speaker",
+            "message": (
+                f"등록되지 않은 목소리가 대부분입니다(등록 {known}명). "
+                "회의록에 화자 이름이 '미상'으로 남습니다. "
+                "참석자 목소리를 등록하거나 참석자 명단을 확인해주세요."
+            ),
+            "unknown_ratio": round(ratio, 2),
+            "enrolled_count": known,
+        }
 
     def rename_speaker(self, old_name: str, new_name: str) -> bool:
         """
