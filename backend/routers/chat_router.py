@@ -130,7 +130,10 @@ async def _process_room_message_analysis(
                     "judgment_case": judgment_result.get("judgment_case"),
                     "actions": judgment_result.get("actions", []),
                 }
-            await broadcast_room_event(room_id, payload)
+            try:
+                await broadcast_room_event(room_id, payload)
+            except Exception as e:
+                print(f"[chat_router] 판단 결과 실시간 push 실패: {repr(e)}")
 
 class RoomCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
