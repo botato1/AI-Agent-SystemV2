@@ -239,19 +239,69 @@ def save_summary_as_document(
     full_summary: str,
     short_summary: str,
     discussion_points: list[str],
+    decisions: list[dict] | None = None,
+    action_items: list[dict] | None = None,
 ):
     """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤
     청킹+임베딩(ChromaDB)까지 마치고 meeting_summaries에 연결한다.
+
+    [수정] decisions/action_items 추가 - llm_extractor가 이미 뽑아둔 결정사항/할일이
+    지금까지는 요약 문서에 아예 안 들어가고 있었다(full_summary/short_summary/
+    discussion_points만 포함). "회의록"이라 부를 만한 핵심 정보(결정사항/할일)가
+    검색 대상에서 빠져있던 것 - 같이 포함시킨다.
+
+    [수정] 이 콘텐츠는 회의에서 나온 것이라 문서 업로드(DOCUMENT_COLLECTION)가 아니라
+    회의 컬렉션(MEETING_COLLECTION)에 들어가야 한다 - load_document() 호출 시
+    upload_context_override="meeting", chunk_type_override="meeting_summary"로 지정.
 
     부가 기능이라 실패해도 예외를 밖으로 던지지 않는다 — 이미 저장된 요약/결정사항/할일까지
     실패 처리되는 걸 막기 위함. 실패 시 None을 반환하고 로그만 남긴다.
     """
     try:
+        decisions = decisions or []
+        action_items = action_items or []
+
+        # [수정 - 리뷰 반영] decisions엔 status="reopened_no_conclusion"(재논의했지만
+        # 결론 안 남)인 항목도 섞여 들어온다. decision_text가 이 경우 "확정된 내용"이
+        # 아니라 "논의 중이던 내용"이라, 전부 "결정사항"에 넣으면 아직 안 정해진 걸
+        # 정해진 것처럼 보여주게 된다. status로 갈라서 별도 섹션으로 분리한다.
+        confirmed_decisions = [d for d in decisions if d.get("status") != "reopened_no_conclusion"]
+        pending_decisions = [d for d in decisions if d.get("status") == "reopened_no_conclusion"]
+
+        decisions_text = (
+            "\n".join(
+                f"- **{d.get('title', '')}**: {d.get('decision_text', '')}"
+                + (f" (사유: {d['reason']})" if d.get("reason") else "")
+                for d in confirmed_decisions
+            )
+            if confirmed_decisions else "(이번 회의에서 새로 확정된 결정사항 없음)"
+        )
+        pending_decisions_text = (
+            "\n".join(
+                f"- **{d.get('title', '')}**: {d.get('decision_text', '')}"
+                + (f" (사유: {d['reason']})" if d.get("reason") else "")
+                for d in pending_decisions
+            )
+            if pending_decisions else "(이번 회의에서 결론 안 난 안건 없음)"
+        )
+        action_items_text = (
+            "\n".join(
+                f"- {a.get('title', '')}"
+                + (f" (담당: {a['assignee']})" if a.get("assignee") else "")
+                + (f" (기한: {a['due_date']})" if a.get("due_date") else "")
+                for a in action_items
+            )
+            if action_items else "(이번 회의에서 새로 생성된 할 일 없음)"
+        )
+
         content = (
             f"# {title} 회의 요약\n\n"
             f"## 전체 요약\n{full_summary}\n\n"
             f"## 핵심 요약\n{short_summary}\n\n"
-            f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points)
+            f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points) + "\n\n"
+            f"## 결정사항\n{decisions_text}\n\n"
+            f"## 논의 중/미결 안건\n{pending_decisions_text}\n\n"
+            f"## 할 일\n{action_items_text}"
         )
         content_bytes = content.encode("utf-8")
 
@@ -286,8 +336,22 @@ def save_summary_as_document(
             {"style": "body", "content": short_summary, "page_number": 1},
             {"style": "heading", "content": "논의 사항", "page_number": 1},
             {"style": "body", "content": "\n".join(f"- {p}" for p in discussion_points), "page_number": 1},
+            {"style": "heading", "content": "결정사항", "page_number": 1},
+            {"style": "body", "content": decisions_text, "page_number": 1},
+            {"style": "heading", "content": "논의 중/미결 안건", "page_number": 1},
+            {"style": "body", "content": pending_decisions_text, "page_number": 1},
+            {"style": "heading", "content": "할 일", "page_number": 1},
+            {"style": "body", "content": action_items_text, "page_number": 1},
         ]
-        load_result = load_document(db, workspace_file.id, chunks=chunks)
+        # upload_context_override="meeting" — 이 콘텐츠는 회의에서 나온 것이라
+        # DOCUMENT_COLLECTION이 아니라 MEETING_COLLECTION에 들어가야 한다
+        # (기존엔 문서 청킹 경로를 그대로 써서 upload_context가 "document"로
+        # 고정돼있었음 - 그래서 contradiction_detect 등 문서 전용 소비자가
+        # 회의 요약까지 일반 문서로 오인해서 스캔하는 문제가 있었다).
+        load_result = load_document(
+            db, workspace_file.id, chunks=chunks,
+            upload_context_override="meeting", chunk_type_override="meeting_summary",
+        )
         if load_result.get("status") == "success":
             file_crud.update_analysis_status(db, workspace_file.id, "completed")
         else:
@@ -326,6 +390,8 @@ def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, ca
                 full_summary=result.get("full_summary", ""),
                 short_summary=result.get("short_summary", ""),
                 discussion_points=result.get("discussion_points", []),
+                decisions=result.get("extracted_decisions", []),
+                action_items=result.get("extracted_tasks", []),
             )
 
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
