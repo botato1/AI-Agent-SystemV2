@@ -69,7 +69,7 @@ TURN_PAD_KEEP_RATIO = 0.5
 
 
 
-async def refine_meeting(meeting_id: str, app_state) -> dict | None:
+async def refine_meeting(meeting_id: str, app_state, force: bool = False) -> dict | None:
     """
     회의 후 정밀 재분석 (C-4의 STT 파트).
 
@@ -93,7 +93,7 @@ async def refine_meeting(meeting_id: str, app_state) -> dict | None:
     """
     async with _refine_lock:
         try:
-            meta = await _refine(meeting_id, app_state)
+            meta = await _refine(meeting_id, app_state, force=force)
         except Exception:
             logger.exception(f"❌ [{meeting_id}] 정밀 재분석 실패 — 실시간 회의록은 유지됨")
             # 실패도 통지한다. 성공만 알리면 소비자가 무한정 기다리게 된다.
@@ -347,7 +347,7 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     return meta
 
 
-async def _refine(meeting_id: str, app_state) -> dict | None:
+async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | None:
     meeting_dir = os.path.join(MEETINGS_DIR, meeting_id)
     meta_path = os.path.join(meeting_dir, "transcript.json")
     if not os.path.isfile(meta_path):
@@ -356,8 +356,12 @@ async def _refine(meeting_id: str, app_state) -> dict | None:
 
     with open(meta_path, encoding="utf-8") as f:
         meta = json.load(f)
-    if meta.get("refined"):
-        logger.info(f"↩️ [{meeting_id}] 이미 재분석 완료된 회의 — 건너뜀")
+    # force는 **코드를 고치고 같은 회의로 결과를 다시 재는** 검증 경로를 위한 것이다.
+    # 이게 없으면 transcript.json의 refined 플래그를 손으로 내려야 했고, 실제로 그러다
+    # "고쳤는데 결과가 그대로"라는 잘못된 결론을 낼 뻔했다(건너뛴 걸 모르고 옛 코드
+    # 탓으로 봤다). 운영 경로는 기본값(False)이라 중복 재분석이 일어나지 않는다.
+    if meta.get("refined") and not force:
+        logger.info(f"↩️ [{meeting_id}] 이미 재분석 완료된 회의 — 건너뜀 (다시 돌리려면 force=1)")
         # 호출부가 완료 웹훅을 중복 발송하지 않도록 표시 (응답에는 남지 않는 내부 플래그)
         meta["_refine_skipped"] = True
         return meta

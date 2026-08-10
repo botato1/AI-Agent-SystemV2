@@ -93,17 +93,20 @@ async def edit_segment(meeting_id: str, index: int, body: SegmentEditRequest):
 
 
 @router.post("/meetings/{meeting_id}/refine")
-async def refine_meeting_endpoint(meeting_id: str, request: Request):
+async def refine_meeting_endpoint(meeting_id: str, request: Request, force: bool = False):
     """
     정밀 재분석 수동 트리거 — 회의 종료 시 자동 실행되지만,
     자동 실행이 실패했거나 (서버 재시작 등) 예전 회의를 다시 분석하고 싶을 때 사용.
     무거운 GPU 작업이라 완료까지 시간이 걸릴 수 있음 (회의 길이에 비례).
+
+    force=1: 이미 재분석된 회의도 다시 돌린다. **기존 재분석본을 덮어쓴다.**
+    코드를 고치고 같은 회의로 전후를 비교하는 검증용이다(실시간 결과는 보존됨).
     """
     _validate_meeting_id(meeting_id)
     if not os.path.isfile(os.path.join(MEETINGS_DIR, meeting_id, "transcript.json")):
         raise HTTPException(status_code=404, detail="해당 회의록을 찾을 수 없습니다.")
 
-    meta = await refine_meeting(meeting_id, request.app.state)
+    meta = await refine_meeting(meeting_id, request.app.state, force=force)
     if meta is None:
         raise HTTPException(status_code=500, detail="정밀 재분석 실패 — 서버 로그 확인 필요")
     return {
