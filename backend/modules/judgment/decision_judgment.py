@@ -175,6 +175,44 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
         return False
 
 
+# [추가 - 리뷰 반영, 2026.08.10] Case 2 팝업의 "이유" 필드 버그 수정용.
+# create_contradiction()에 reason=decision.reason(기존 결정의 사유)을 그대로
+# 넘기고 있었는데, 이건 "왜 예전에 그렇게 정했는지"지 "왜 지금 바뀌는지"가
+# 아님 - 기존 결정에 사유가 없으면 근거가 명확히 확인된 Case 2인데도 "사유
+# 미기재"로 뜨고, 있어도 다른 필드(기존 내용)와 내용이 겹쳐 보였음.
+# reason_is_clear 판단 단계는 bool만 반환하므로, 근거가 명확하다고 판단된
+# 경우(Case 2)에만 별도로 그 근거 텍스트 자체를 짧게 추출한다.
+REASON_EXTRACT_INSTRUCTION = (
+    "아래는 회의/채팅에서 방금 나온 발화이다. 이 발화는 기존 결정과 다른 새 값을 "
+    "제시하면서, 왜 바뀌는지 근거/이유도 함께 말하고 있다. 그 근거/이유 부분만 "
+    "간결하게(20자 내외) 추출하라. 근거가 여러 개면 핵심만 요약하라."
+)
+
+REASON_EXTRACT_INPUT_TEMPLATE = """[발화]
+{statement}"""
+
+
+def _extract_change_reason(statement: str) -> str:
+    """Case 2(근거 명확)로 판단된 발화에서 근거 텍스트만 짧게 추출.
+    실패 시 발화 원문을 그대로 반환(빈 값보다는 원문이 나음 - 최소한 근거가
+    포함된 전체 맥락은 보여줄 수 있음)."""
+    input_text = REASON_EXTRACT_INPUT_TEMPLATE.format(statement=statement)
+    prompt = (
+        f"{REASON_EXTRACT_INSTRUCTION}\n\n{input_text}\n\n"
+        f'반드시 다음 JSON 형식으로만 답하라 (다른 설명 금지):\n{{\n  "reason": "..."\n}}'
+    )
+    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
+    try:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            return statement
+        parsed = json.loads(raw[start : end + 1])
+        reason = parsed.get("reason")
+        return reason.strip() if isinstance(reason, str) and reason.strip() else statement
+    except (json.JSONDecodeError, ValueError):
+        return statement
+
+
 def _get_candidate_decisions(
     db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, statement: str
 ) -> list[Decision]:
@@ -295,11 +333,18 @@ def judge(
         message = (f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{statement}'"
                    f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
                    f" 바꾸시겠습니까?")
+        # [수정 - 리뷰 반영] 새 발언의 근거를 별도 추출 - 기존 decision.reason(예전
+        # 사유)이 아니라 "왜 지금 바뀌는지"를 보여줘야 함
+        new_reason = _extract_change_reason(statement)
     else:
         case, judgment_case = "3", "unreasoned_change"
         message = (f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{statement}'"
                    f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
                    f" 바꾸시겠습니까?")
+        # Case 3은 애초에 "근거가 명확하지 않음"이 핵심이라 추출할 근거가 없음 -
+        # 기존 결정의 사유를 그대로 둠(이 필드의 의미가 Case 2와 다름을 프론트/
+        # 문서에서 인지하고 있어야 함 - 필요하면 추후 별도 문구로 교체 고려)
+        new_reason = decision.reason
 
     # 팝업은 세션 내 (decision, judgment_case) 단위로 1회만 - 같은 decision이어도
     # 근거 명확/불명확 여부가 바뀌면 별개 알림으로 취급해 각각 1회씩 뜬다.
@@ -321,7 +366,7 @@ def judge(
         reference_decision_id=decision.id,
         statement_text_snapshot=statement,
         reference_text_snapshot=decision.decision_text,
-        reason=decision.reason,  # [추가] 기존 결정의 사유 - Contradiction 모델의 실제 컬럼
+        reason=new_reason,  # Case 2: 새 발언에서 추출한 변경 근거 / Case 3: 기존 결정의 사유(위 주석 참조)
         confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
         deduplication_key=dedup_key,
         judgment_case=judgment_case,
