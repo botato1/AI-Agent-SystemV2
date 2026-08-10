@@ -5,15 +5,11 @@
 
 TODO:
 - auth_router.py와 auth_service.py를 Re:Call 인증 구조로 마이그레이션
-- SignupRequest, LoginRequest, UserResponse 등 기존 요청·응답 스키마 교체
-- users의 기존 UserRole 제거
-- 사용자 권한은 workspace_members.role을 기준으로 처리
-- 신규 회원가입·로그인 API 스키마는 인증 기능 마이그레이션 시 별도 설계
 - 마이그레이션 완료 후 Legacy 블록 삭제
 """
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -30,42 +26,42 @@ from backend.schemas.type_schema import AccountStatus
 # Legacy: 기존 회원가입·로그인·토큰·프로필 스키마
 # =============================================================================
 
-# 기존 인증 코드에서 사용하는 전역 사용자 역할.
-# Re:Call에서는 사용자 권한을 workspace_members.role로 관리한다.
-UserRole = Literal[
-    "member",
-    "lawyer",
-    "admin",
-]
-
-
 class SignupRequest(BaseModel):
-    user_id: str = Field(
+    username: str = Field(
         ...,
-        description="로그인에 사용할 사용자 아이디",
+        min_length=1,
+        max_length=50,
+        title="id",
+        description="로그인에 사용할 아이디",
     )
-    user_password: str = Field(
+    email: str = Field(
         ...,
-        description="로그인 비밀번호",
+        min_length=1,
+        max_length=255,
+        description="이메일",
     )
-    name: str = Field(
+    password: str = Field(
         ...,
-        description="사용자 이름",
+        description="비밀번호",
     )
-    role: UserRole = Field(
-        default="member",
-        description="사용자 권한",
+    display_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="화면에 표시할 이름",
     )
+    invite_token: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
-    user_id: str = Field(
+    username: str = Field(
         ...,
+        title="id",
         description="로그인 아이디",
     )
-    user_password: str = Field(
+    password: str = Field(
         ...,
-        description="로그인 비밀번호",
+        description="비밀번호",
     )
 
 
@@ -84,28 +80,10 @@ class LogoutRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    name: Optional[str] = Field(
-        default=None,
-        description="변경할 사용자 이름",
-    )
-    current_password: Optional[str] = Field(
-        default=None,
-        description="현재 비밀번호",
-    )
-    new_password: Optional[str] = Field(
-        default=None,
-        description="새 비밀번호",
-    )
-
-
-class UserResponse(BaseModel):
-    id: int
-    user_id: str
-    name: str
-    role: UserRole
-    created_at: Optional[str] = None
-    last_login_at: Optional[str] = None
-
+    display_name: Optional[str] = Field(default=None, description="변경할 표시 이름")
+    avatar_color: Optional[str] = Field(default=None, description="변경할 아바타 색상")
+    current_password: Optional[str] = Field(default=None, description="현재 비밀번호")
+    new_password: Optional[str] = Field(default=None, description="새 비밀번호")
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -116,14 +94,15 @@ class TokenResponse(BaseModel):
 
 class SignupResponse(BaseModel):
     status: str
-    user: Optional[UserResponse] = None
+    user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
+    invite_status: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
     status: str
-    user: Optional[UserResponse] = None
+    user: Optional["UserPublicSchema"] = None
     token: Optional[TokenResponse] = None
     message: str
     error: Optional[str] = None
@@ -144,20 +123,75 @@ class LogoutResponse(BaseModel):
 
 class ProfileResponse(BaseModel):
     status: str
-    user: Optional[UserResponse] = None
+    user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
 
 
 class CheckUserIdResponse(BaseModel):
-    """기존 아이디 중복 검사 API 응답 스키마."""
+    """아이디 중복 검사 API 응답 스키마."""
 
     status: str
-    user_id: str
+    username: str
     available: bool
     message: str
     error: Optional[str] = None
 
+# =============================================================================
+# Re:Call: 신규 인증 API 요청/응답
+# =============================================================================
+
+class EmailCheckResponse(BaseModel):
+    status: str
+    email: str
+    available: bool
+    message: str
+    error: Optional[str] = None
+
+
+class PasswordResetRequestRequest(BaseModel):
+    email: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="비밀번호 재설정 링크를 받을 이메일",
+    )
+
+
+class PasswordResetRequestResponse(BaseModel):
+    status: str
+    message: str
+    error: Optional[str] = None
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    reset_token: str = Field(
+        ...,
+        description="이메일로 받은 비밀번호 재설정 토큰",
+    )
+    new_password: str = Field(
+        ...,
+        description="새 비밀번호",
+    )
+
+
+class PasswordResetConfirmResponse(BaseModel):
+    status: str
+    message: str
+    error: Optional[str] = None
+
+
+class AccountDeleteRequest(BaseModel):
+    current_password: str = Field(
+        ...,
+        description="본인 확인용 현재 비밀번호",
+    )
+
+
+class AccountDeleteResponse(BaseModel):
+    status: str
+    message: str
+    error: Optional[str] = None
 
 # =============================================================================
 # Re:Call: users
@@ -196,18 +230,6 @@ class UserSchema(TimestampSchema, SoftDeleteSchema):
     last_login_at: Optional[datetime] = None
 
 
-class UserPublicSchema(ORMBaseSchema):
-    """API 응답 등 외부에 노출할 수 있는 사용자 스키마."""
-
-    id: UUID
-    username: str
-    email: str
-    display_name: str
-    account_status: AccountStatus
-    last_login_at: Optional[datetime] = None
-    created_at: datetime
-
-
 # =============================================================================
 # Re:Call: refresh_tokens
 # =============================================================================
@@ -233,3 +255,26 @@ class RefreshTokenSchema(ORMBaseSchema):
         max_length=255,
     )
     created_at: datetime
+
+class UserPublicSchema(ORMBaseSchema):
+    """API 응답 등 외부에 노출할 수 있는 사용자 스키마."""
+
+    id: UUID
+    username: str
+    email: str
+    display_name: str
+    profile_image_url: Optional[str] = None
+    avatar_color: Optional[str] = None
+    account_status: AccountStatus
+    last_login_at: Optional[datetime] = None
+    created_at: datetime
+
+class VoiceProfileResponse(BaseModel):
+    registered: bool
+    registered_at: Optional[datetime] = None
+    speaker_name: Optional[str] = None
+    name_extraction_failed: bool = False
+    detected_text: Optional[str] = None
+
+class RegisteredVoiceProfileListResponse(BaseModel):
+    names: list[str]

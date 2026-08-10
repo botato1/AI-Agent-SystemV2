@@ -1,408 +1,346 @@
 # backend/routers/chat_router.py
+import asyncio
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from backend.core.dependencies import get_current_user_id
+from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.db.session import get_db, SessionLocal
+from backend.db.crud import file_crud, room_crud, workspace_crud, notification_crud, contradiction_crud
+from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.schemas.chat_schema import (
-    ChatRequest,
-    ChatHistoryResponse,
-    ConversationTitleUpdateRequest,
+    RoomMessageSchema,
+    RoomMessageCreateRequest,
+    RoomFileLinkRequest,
+    RoomFileResponse,
+    RoomFileListResponse,
 )
-from backend.schemas.response_schema import ChatResponseSchema
-from backend.services.chat_service import handle_chat
-from backend.db.crud import (
-    create_conversation,
-    get_conversations,
-    get_messages,
-    delete_conversation,
-    delete_message,
-    get_conversation_by_id,
-    get_documents,
-    delete_all_conversations_and_messages,
-    link_document_to_room,
-    unlink_document_from_room,
-    get_documents_by_room_id,
-    update_conversation_title,
-)
+from backend.schemas.workspace_schema import RoomResponse, RoomListResponse
+from backend.services import judgment_service
 
 
-class ConversationCreateRequest(BaseModel):
-    title: str = "새 대화"
+router = APIRouter(prefix="/api/workspaces/{workspace_id}/rooms", tags=["Rooms"])
+
+# 같은 room에서 메시지가 빠르게 여러 개 오면 모순감지+판단파이프라인이 동시에
+# DB 커넥션을 여러 개 물어 풀 고갈이 날 수 있다 (meeting 실시간 경로와 동일 이유).
+# room_id 단위로 직렬화해서 방지한다.
+_ROOM_PROCESSING_LOCKS: dict[UUID, asyncio.Lock] = {}
 
 
-class ConversationDocumentRequest(BaseModel):
-    document_id: str
+def _get_room_processing_lock(room_id: UUID) -> asyncio.Lock:
+    lock = _ROOM_PROCESSING_LOCKS.get(room_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ROOM_PROCESSING_LOCKS[room_id] = lock
+    return lock
 
 
-router = APIRouter(
-    prefix="/api",
-    tags=["Chat"],
-)
+def _notify_contradiction_detected(workspace_id: UUID, result: dict, statement_text: str) -> None:
+    """채팅 메시지에서 모순이 감지되면 워크스페이스 멤버들에게 알림을 남긴다."""
+    detected = result.get("detected_contradictions") or []
+    saved_ids = result.get("saved_contradiction_ids") or []
+    pair_count = min(len(detected), len(saved_ids))
+    if pair_count == 0:
+        return
 
+    best_index = max(range(pair_count), key=lambda i: detected[i]["confidence_score"])
+    contradiction = detected[best_index]
+    contradiction_id = saved_ids[best_index]
 
-def get_conversation_or_404(conversation_id: str, user_id: str):
-    conversation = get_conversation_by_id(conversation_id, user_id)
-
-    if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="채팅방을 찾을 수 없습니다.",
-        )
-
-    return conversation
-
-
-# 사용자 채팅 메시지 전송 API
-@router.post("/chat", response_model=ChatResponseSchema)
-async def send_chat_message(
-    request: ChatRequest,
-    current_user_id: str = Depends(get_current_user_id),
-):
+    db = SessionLocal()
     try:
-        return await handle_chat(request, current_user_id)
-    except PermissionError:
+        source_name = None
+        excerpt = ""
+        reference_file_id = contradiction.get("reference_file_id")
+        if reference_file_id:
+            file = file_crud.get_file(db, UUID(reference_file_id))
+            source_name = file.original_filename if file else None
+
+        saved_row = contradiction_crud.get_contradiction(db, UUID(contradiction_id))
+        if saved_row and saved_row.reference_text_snapshot:
+            excerpt = " ".join(saved_row.reference_text_snapshot.split())[:100]
+
+        if source_name and excerpt:
+            display_message = f"'{statement_text}'라고 하셨는데, 기존 자료({source_name})의 '{excerpt}'와 다릅니다."
+        elif excerpt:
+            display_message = f"'{statement_text}'라고 하셨는데, 기존 자료의 '{excerpt}'와 다릅니다."
+        else:
+            display_message = f"'{statement_text}'라고 하셨는데, 기존 자료와 다릅니다."
+
+        for member, _user in workspace_crud.list_members(db, workspace_id):
+            if not notification_crud.is_notification_enabled(
+                db, workspace_id, member.user_id, "contradiction_detected",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=workspace_id,
+                type="contradiction_detected", title="모순 감지",
+                message=display_message,
+                ref_type="contradiction", ref_id=UUID(contradiction_id),
+            )
+    finally:
+        db.close()
+
+
+async def _process_room_message_analysis(
+    room_id: UUID, workspace_id: UUID, category_id: UUID,
+    statement_text: str, message_id: str,
+) -> None:
+    """채팅 메시지 하나의 모순감지+판단파이프라인을 room 단위로 직렬 처리한다."""
+    lock = _get_room_processing_lock(room_id)
+    async with lock:
+        result = await asyncio.to_thread(
+            run_contradiction_detection,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=message_id,
+        )
+        await asyncio.to_thread(_notify_contradiction_detected, workspace_id, result, statement_text)
+
+        await asyncio.to_thread(
+            judgment_service.run_judgment_pipeline,
+            workspace_id=str(workspace_id),
+            category_id=str(category_id),
+            source_type="room_message",
+            statement_text=statement_text,
+            room_message_id=message_id,
+            session_room_id=str(room_id),
+        )
+
+class RoomCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class RoomUpdateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class RoomMessageListResponse(BaseModel):
+    messages: list[RoomMessageSchema] = Field(default_factory=list)
+
+
+def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
+    room = room_crud.get_room_by_id(db, room_id, workspace_id)
+    if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="채팅방을 찾을 수 없습니다.",
         )
+    return room
 
 
-# 특정 채팅방의 이전 대화 기록 조회 API
-@router.get("/conversations/{conversation_id}/messages", response_model=ChatHistoryResponse)
-def get_chat_history(
-    conversation_id: str,
+# 채팅방 생성
+@router.post("", response_model=RoomResponse, status_code=status.HTTP_201_CREATED)
+def create_room(
+    workspace_id: UUID,
+    request: RoomCreateRequest,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
-    get_conversation_or_404(conversation_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
 
-    rows = get_messages(conversation_id, current_user_id)
-
-    messages = [
-        {
-            "message_id": row["id"],
-            "role": row["role"],
-            "content": row["content"],
-            "created_at": row["created_at"],
-        }
-        for row in rows
-    ]
-
-    return {
-        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": conversation_id,
-        "messages": messages,
-    }
-
-
-# 새 채팅방을 생성하는 API
-@router.post("/conversations")
-def create_chat_room(
-    request: ConversationCreateRequest,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    conversation_id = create_conversation(
-        title=request.title,
-        user_id=current_user_id,
-    )
-
-    return {
-        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": conversation_id,
-        "title": request.title,
-    }
-
-
-# 전체 채팅방 목록을 조회하는 API
-@router.get("/conversations")
-def get_chat_rooms(
-    current_user_id: str = Depends(get_current_user_id),
-):
-    rows = get_conversations(current_user_id)
-
-    conversations = [
-        {
-            "room_id": row["id"],  # TODO: v1 호환용, 추후 제거 예정
-            "conversation_id": row["id"],
-            "title": row["title"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "filename": row.get("filename"),
-            "document_id": row.get("document_id"),
-        }
-        for row in rows
-    ]
-
-    return {
-        "conversations": conversations,
-    }
-
-
-# 모든 채팅방과 메시지 전체 삭제 API
-@router.delete("/conversations")
-def remove_all_chat_rooms(
-    current_user_id: str = Depends(get_current_user_id),
-):
-    result = delete_all_conversations_and_messages(current_user_id)
-
-    return {
-        "status": result.get("status", "success"),
-        "message": result.get("message", "모든 채팅방과 메시지가 삭제되었습니다."),
-        "error": None,
-    }
-
-
-# 채팅방 단건 조회 API
-@router.get("/conversations/{conversation_id}")
-def get_conversation_detail(
-    conversation_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    row = get_conversation_or_404(conversation_id, current_user_id)
-
-    document_rows = get_documents(conversation_id, current_user_id)
-
-    documents = [
-        {
-            "document_id": doc["id"],
-            "filename": doc["title"],
-            "title": doc["title"],
-            "type": doc["type"],
-            "source": doc["source"],
-            "summary": doc["summary"],
-            "status": doc["status"],
-            "json_path": doc.get("json_path"),
-            "created_at": doc["created_at"],
-        }
-        for doc in document_rows
-    ]
-
-    target_document = documents[0] if documents else None
-
-    return {
-        "status": "success",
-        "room_id": row["id"],  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": row["id"],
-        "title": row["title"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-        "target_document_id": target_document["document_id"] if target_document else None,
-        "target_filename": target_document["filename"] if target_document else None,
-        "documents": documents,
-        "error": None,
-    }
-
-
-# 채팅방 제목 수정 API
-@router.patch("/conversations/{conversation_id}/title")
-def update_chat_room_title(
-    conversation_id: str,
-    request: ConversationTitleUpdateRequest,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    updated = update_conversation_title(
-        conversation_id=conversation_id,
-        title=request.title,
-        user_id=current_user_id,
-    )
-
-    if not updated:
+    category = room_crud.get_default_category(db, workspace_id)
+    if not category:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="채팅방을 찾을 수 없습니다.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
         )
 
-    return {
-        "status": "success",
-        "room_id": updated["room_id"],  # TODO: v1 호환용, 추후 room_id 제거 예정
-        "conversation_id": updated["conversation_id"],
-        "title": updated["title"],
-        "updated_at": updated["updated_at"],
-        "message": "채팅방 제목이 수정되었습니다.",
-        "error": None,
-    }
+    room = room_crud.create_room(
+        db,
+        workspace_id=workspace_id,
+        category_id=category.id,
+        name=request.name,
+        created_by=UUID(current_user_id),
+    )
+    return RoomResponse.model_validate(room)
 
 
-# 기존 room_id 경로 호환용 제목 수정 API
-@router.patch("/rooms/{room_id}/title")
-def update_chat_room_title_legacy(
-    room_id: str,
-    request: ConversationTitleUpdateRequest,
+# 채팅방 목록 조회
+@router.get("", response_model=RoomListResponse)
+def list_rooms(
+    workspace_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
-    return update_chat_room_title(
-        conversation_id=room_id,
-        request=request,
-        current_user_id=current_user_id,
+    require_workspace_member(db, workspace_id, current_user_id)
+
+    rooms = room_crud.list_rooms(db, workspace_id)
+    return RoomListResponse(rooms=[RoomResponse.model_validate(r) for r in rooms])
+
+
+# 채팅방 단건 조회
+@router.get("/{room_id}", response_model=RoomResponse)
+def get_room(
+    workspace_id: UUID,
+    room_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    room = _get_room_or_404(db, room_id, workspace_id)
+    return RoomResponse.model_validate(room)
+
+
+# 채팅방 이름 수정
+@router.patch("/{room_id}", response_model=RoomResponse)
+def update_room(
+    workspace_id: UUID,
+    room_id: UUID,
+    request: RoomUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
+
+    room = room_crud.update_room_name(db, room_id, request.name)
+    return RoomResponse.model_validate(room)
+
+
+# 채팅방 삭제
+@router.delete("/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_room(
+    workspace_id: UUID,
+    room_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
+
+    room_crud.delete_room(db, room_id)
+
+# 메시지 전송
+@router.post("/{room_id}/messages", response_model=RoomMessageSchema, status_code=status.HTTP_201_CREATED)
+def send_room_message(
+    workspace_id: UUID,
+    room_id: UUID,
+    request: RoomMessageCreateRequest,
+    background_tasks: BackgroundTasks,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    room = _get_room_or_404(db, room_id, workspace_id)
+
+    message = room_crud.add_message(
+        db,
+        room_id=room_id,
+        message_type="text",
+        content=request.content,
+        sender_user_id=UUID(current_user_id),
+        reply_to_id=request.reply_to_id,
     )
 
-
-# 채팅방 삭제 API
-@router.delete("/conversations/{conversation_id}")
-def remove_chat_room(
-    conversation_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    deleted = delete_conversation(conversation_id, current_user_id)
-
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="삭제할 채팅방을 찾을 수 없습니다.",
+    # 메시지 저장 후 모순 탐지를 백그라운드로 실행.
+    # (RAG 토글 여부와 무관하게 모든 텍스트 메시지 대상 — RAG 토글은 검색 포함 범위이지
+    # 모순 탐지 대상 범위는 아니라고 판단. 필요하면 room.rag_enabled 체크 추가)
+    statement_text = (request.content or "").strip()
+    if statement_text:
+        background_tasks.add_task(
+            _process_room_message_analysis,
+            room_id, workspace_id, room.category_id, statement_text, str(message.id),
         )
 
-    return {
-        "status": "success",
-        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": conversation_id,
-        "message": "채팅방이 삭제되었습니다.",
-        "error": None,
-    }
+    return RoomMessageSchema.model_validate(message)
 
-
-# 메시지 삭제 API
-@router.delete("/messages/{message_id}")
-def remove_message(
-    message_id: str,
+# 채팅방 메시지 조회
+@router.get("/{room_id}/messages", response_model=RoomMessageListResponse)
+def get_room_messages(
+    workspace_id: UUID,
+    room_id: UUID,
+    limit: int = 50,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
-    deleted = delete_message(message_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
 
-    if not deleted:
+    messages = room_crud.get_recent_messages(db, room_id, limit=limit)
+    return RoomMessageListResponse(
+        messages=[RoomMessageSchema.model_validate(m) for m in messages]
+    )
+
+
+# 메시지 삭제
+@router.delete("/{room_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_room_message(
+    workspace_id: UUID,
+    room_id: UUID,
+    message_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
+
+    message = room_crud.get_message_by_id(db, message_id)
+    if not message or message.room_id != room_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="삭제할 메시지를 찾을 수 없습니다.",
+            detail="메시지를 찾을 수 없습니다.",
         )
 
-    return {
-        "status": "success",
-        "message_id": message_id,
-        "message": "메시지가 삭제되었습니다.",
-        "error": None,
-    }
+    room_crud.delete_message(db, message_id)
 
-
-# 채팅방에 연결된 문서 목록 조회 API
-@router.get("/conversations/{conversation_id}/documents")
-def get_conversation_documents(
-    conversation_id: str,
+# 파일 연결
+@router.post("/{room_id}/files", response_model=RoomFileResponse, status_code=status.HTTP_201_CREATED)
+def link_room_file(
+    workspace_id: UUID,
+    room_id: UUID,
+    request: RoomFileLinkRequest,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
-    get_conversation_or_404(conversation_id, current_user_id)
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
 
-    docs = get_documents_by_room_id(conversation_id, current_user_id)
-
-    return {
-        "status": "success",
-        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": conversation_id,
-        "documents": [
-            {
-                "document_id": doc["id"],
-                "title": doc["title"],
-                "type": doc["type"],
-                "source": doc["source"],
-                "chroma_status": doc.get("chroma_status"),
-                "created_at": doc["created_at"],
-            }
-            for doc in docs
-        ],
-        "error": None,
-    }
-
-
-# 기존 room_id 경로 호환용 문서 목록 조회 API
-@router.get("/rooms/{room_id}/documents")
-def get_room_documents_legacy(
-    room_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    return get_conversation_documents(
-        conversation_id=room_id,
-        current_user_id=current_user_id,
-    )
-
-
-# 채팅방에 문서 연결 API
-@router.post("/conversations/{conversation_id}/documents")
-def add_document_to_conversation(
-    conversation_id: str,
-    request: ConversationDocumentRequest,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    linked = link_document_to_room(
-        room_id=conversation_id,
-        document_id=request.document_id,
-        user_id=current_user_id,
-    )
-
-    if not linked:
+    workspace_file = file_crud.get_file(db, request.file_id)
+    if not workspace_file or workspace_file.workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="채팅방 또는 문서를 찾을 수 없습니다.",
+            detail="연결할 파일을 찾을 수 없습니다.",
         )
 
-    return {
-        "status": "success",
-        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": conversation_id,
-        "document_id": request.document_id,
-        "message": "문서가 채팅방에 연결되었습니다.",
-        "error": None,
-    }
+    file_crud.link_file_to_room(db, room_id, request.file_id, UUID(current_user_id))
+    return RoomFileResponse.model_validate(workspace_file)
 
 
-# 기존 room_id 경로 호환용 문서 연결 API
-@router.post("/rooms/{room_id}/documents")
-def add_document_to_room_legacy(
-    room_id: str,
-    request: ConversationDocumentRequest,
+# 연결된 파일 목록 조회
+@router.get("/{room_id}/files", response_model=RoomFileListResponse)
+def get_room_files(
+    workspace_id: UUID,
+    room_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
-    return add_document_to_conversation(
-        conversation_id=room_id,
-        request=request,
-        current_user_id=current_user_id,
-    )
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
+
+    files = file_crud.list_files_by_room(db, room_id)
+    return RoomFileListResponse(files=[RoomFileResponse.model_validate(f) for f in files])
 
 
-# 채팅방에서 문서 연결 해제 API
-@router.delete("/conversations/{conversation_id}/documents/{document_id}")
-def remove_document_from_conversation(
-    conversation_id: str,
-    document_id: str,
+# 파일 연결 해제
+@router.delete("/{room_id}/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_room_file(
+    workspace_id: UUID,
+    room_id: UUID,
+    file_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
 ):
-    unlinked = unlink_document_from_room(
-        room_id=conversation_id,
-        document_id=document_id,
-        user_id=current_user_id,
-    )
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
 
+    unlinked = file_crud.unlink_file_from_room(db, room_id, file_id)
     if not unlinked:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="연결된 문서를 찾을 수 없습니다.",
+            detail="연결된 파일을 찾을 수 없습니다.",
         )
-
-    return {
-        "status": "success",
-        "room_id": conversation_id,  # TODO: v1 호환용, 추후 제거 예정
-        "conversation_id": conversation_id,
-        "document_id": document_id,
-        "message": "문서 연결이 해제되었습니다.",
-        "error": None,
-    }
-
-# 기존 room_id 경로 호환용 문서 연결 해제 API
-@router.delete("/rooms/{room_id}/documents/{document_id}")
-def remove_document_from_room_legacy(
-    room_id: str,
-    document_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-):
-    return remove_document_from_conversation(
-        conversation_id=room_id,
-        document_id=document_id,
-        current_user_id=current_user_id,
-    )

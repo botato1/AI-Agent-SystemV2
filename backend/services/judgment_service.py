@@ -1,0 +1,213 @@
+# backend/services/judgment_service.py
+
+"""실시간 판단 파이프라인(결정 리마인더/문서 추천/반복논의) 통합 실행.
+
+decision_judgment -> document_judgment -> priority 순서로 판단하고,
+팝업이 나오면 Notification으로 저장한다. contradiction 타입은 이미
+contradictions 테이블 + 기존 조회 경로로 노출되므로 여기서는 스킵한다.
+"""
+
+import json
+import re
+import uuid
+
+from backend.db.crud import meeting_crud, notification_crud, workspace_crud
+from backend.db.session import SessionLocal
+from backend.modules.judgment import decision_judgment, document_judgment, priority
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_LIGHT, _call_ollama
+
+_SKIP_NOTIFICATION_POPUP_TYPES = {"reasoned_change", "unreasoned_change"}
+
+_POPUP_TITLE = {
+    "decision_reminder": "이전 결정 리마인더",
+    "document_recommendation": "관련 문서 추천",
+}
+
+LOW_STT_CONFIDENCE_THRESHOLD = 0.6  # 이 미만이면 판단 자체를 보류 (오탐 방지)
+
+
+# ── [임시 조치 - 2026.08.10] STT 실시간 세그먼트 병합 대응 ──────────────────
+# 실시간 STT가 여러 화자/발화를 하나의 final 세그먼트로 묶어서 보내는 경우가
+# 확인됨(원인은 STT 쪽 - 이준오 확인 요청함). 판단 모델은 깨끗한 발화 1개
+# 단위로 학습돼서, 여러 문장이 뭉친 텍스트를 그대로 넣으면 판단이 계속
+# 헷갈려서 아무 팝업도 안 뜨는 문제가 있었음. STT가 정상화될 때까지, 판단
+# 직전에 LLM으로 발화를 분리하는 전처리를 임시로 끼워 넣는다.
+#
+# TODO: STT 세그먼트 분할이 정상화되면 이 블록(_looks_merged/_split_merged_
+# statement/_SPLIT_* 상수)과 run_judgment_pipeline()의 분리 호출 한 줄을
+# 삭제하고, statements = [statement_text]로 되돌리면 원래 구조로 복귀됨.
+# _judge_single_statement()는 원래 로직 그대로라 그대로 둬도 됨.
+
+_SPLIT_SENTENCE_END_PATTERN = re.compile(r"[.!?다요죠]\s")
+
+_SPLIT_INSTRUCTION = (
+    "아래는 실시간 회의에서 STT로 받아적힌 텍스트다. 여러 화자의 여러 발화가 "
+    "하나로 뭉쳐 들어왔을 수 있다.\n\n"
+    "이 텍스트를 화자/문장 경계 기준으로 개별 발화 단위로 분리하라.\n\n"
+    "[규칙]\n"
+    "- 원문의 표현을 그대로 유지하고, 내용을 요약하거나 바꾸거나 새로 만들지 마라.\n"
+    "- 이미 하나의 발화면 통째로 1개만 반환해라.\n"
+    "- 각 항목은 완결된 문장(또는 짧은 구) 단위로 나눠라.\n\n"
+    '다음 JSON 배열 형식으로만 답하라: ["발화1", "발화2", ...]'
+)
+
+
+def _looks_merged(text: str) -> bool:
+    """문장 종결 패턴이 3개 이상이면 여러 발화가 뭉쳤을 가능성이 있다고 본다.
+    짧고 단일한 발화가 훨씬 흔하므로, 의심되는 경우에만 분리 LLM 호출을 태워
+    불필요한 지연을 피한다.
+
+    [수정 - 리뷰 반영] 임계값 2 → 3. "9월 22일로 가는 게 안전할 것 같아요. QA
+    일정이 부족해서요." 같은 정상적인 "새 값+근거" 한 발화도 문장 종결 패턴이
+    2개라 임계값 2에서는 쪼개져버림 - 쪼개지면 근거 문장이 값 제시 문장과
+    분리돼 reason_is_clear 판단이 근거를 못 보고 Case 3(근거 없는 변경)로
+    오판하거나, 근거만 남은 조각이 presents_new_value=false로 Case 0에
+    묻히며 근거 정보가 유실됨. 실제 STT 병합 사례(화면 설계 진행 상황 관련
+    여러 화자 발화)는 문장 종결 패턴이 8개였으므로, 3으로 올려도 여유 있게
+    잡아내면서 정상적인 2문장 단일 발화 오분리는 피한다."""
+    return len(_SPLIT_SENTENCE_END_PATTERN.findall(text)) >= 3
+
+
+def _split_merged_statement(statement_text: str) -> list[str]:
+    """의심되는 경우에만 LLM으로 발화 단위 분리. 실패/미의심 시 원문 그대로 1개."""
+    if not _looks_merged(statement_text):
+        return [statement_text]
+
+    prompt = f"{_SPLIT_INSTRUCTION}\n\n텍스트:\n{statement_text}"
+    try:
+        raw = _call_ollama(prompt, timeout=60.0, model=OLLAMA_MODEL_LIGHT,
+                            response_format="json", temperature=0)
+        parsed = json.loads(raw)
+        if isinstance(parsed, list) and parsed and all(isinstance(s, str) and s.strip() for s in parsed):
+            return [s.strip() for s in parsed]
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        print(f"[judgment_service] 발화 분리 실패, 원문 그대로 사용: {repr(e)}")
+
+    return [statement_text]
+
+# ── 임시 조치 끝 ──────────────────────────────────────────────────────────
+
+
+def _judge_single_statement(
+    db,
+    *,
+    workspace_id: uuid.UUID,
+    category_id: uuid.UUID,
+    source_type: str,
+    source_id: uuid.UUID,
+    statement_text: str,
+    session_kwargs: dict,
+) -> dict | None:
+    """발화 1개에 대해 decision_judgment -> document_judgment -> priority를 실행.
+
+    Case 0/문서추천은 이 함수 안에서 바로 Notification을 생성하고 None을 반환한다.
+    Case 2/3(모순)은 호출부가 실시간 WS push에 쓸 수 있도록 dict를 반환한다.
+    """
+    decision_result = decision_judgment.judge(
+        db,
+        workspace_id=workspace_id,
+        category_id=category_id,
+        source_type=source_type,
+        source_id=source_id,
+        statement=statement_text,
+        **session_kwargs,
+    )
+
+    document_result = None
+    if decision_result.get("case") == "none":
+        document_result = document_judgment.judge(
+            db,
+            workspace_id=workspace_id,
+            category_id=category_id,
+            source_type=source_type,
+            source_id=source_id,
+            statement=statement_text,
+            **session_kwargs,
+        )
+
+    popup = priority.select_popup(decision_result, document_result)
+    if not popup:
+        return None
+
+    if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
+        # decision 기반 근거있음/근거없음 변경(Case 2/3) - 실시간 WS 알림으로 바로
+        # push하고, 일반 Notification은 중복이라 생략한다.
+        return {
+            "contradiction_id": popup["contradiction_id"],
+            "message": popup["message"],
+            "judgment_case": popup["type"],
+            "actions": popup.get("actions", []),
+        }
+
+    for member, _user in workspace_crud.list_members(db, workspace_id):
+        if not notification_crud.is_notification_enabled(db, workspace_id, member.user_id, popup["type"]):
+            continue
+        notification_crud.create_notification(
+            db,
+            user_id=member.user_id,
+            workspace_id=workspace_id,
+            type=popup["type"],
+            title=_POPUP_TITLE.get(popup["type"], "알림"),
+            message=popup["message"],
+            ref_type=source_type,
+            ref_id=source_id,
+        )
+    return None
+
+
+def run_judgment_pipeline(
+    *,
+    workspace_id: str,
+    category_id: str,
+    source_type: str,  # "meeting_segment" | "room_message"
+    statement_text: str,
+    meeting_segment_id: str | None = None,
+    room_message_id: str | None = None,
+    session_meeting_id: str | None = None,
+    session_room_id: str | None = None,
+) -> dict | None:
+    """발화/메시지 하나마다 백그라운드로 호출한다. 자체 DB 세션을 새로 연다.
+
+    decision 기반 모순(Case 3)이 발생하면 {"contradiction_id":..., "message":...}를
+    반환한다 — 호출부가 실시간 WS push에 쓸 수 있게 하기 위함.
+    """
+    db = SessionLocal()
+    try:
+        source_id = uuid.UUID(meeting_segment_id) if meeting_segment_id else uuid.UUID(room_message_id)
+
+        if source_type == "meeting_segment":
+            segment = meeting_crud.get_segment(db, source_id)
+            if segment and segment.stt_confidence is not None and float(segment.stt_confidence) < LOW_STT_CONFIDENCE_THRESHOLD:
+                return None  # STT 신뢰도 낮음 - 모순/리마인더 판단 보류
+
+        session_kwargs = {
+            "session_meeting_id": uuid.UUID(session_meeting_id) if session_meeting_id else None,
+            "session_room_id": uuid.UUID(session_room_id) if session_room_id else None,
+        }
+
+        # [임시 조치] STT가 여러 발화를 하나로 묶어 보내는 경우 대응 - 위 블록 참조.
+        # TODO: STT 세그먼트 분할 정상화되면 아래 한 줄을
+        #   statements = [statement_text]
+        # 로 되돌리면 됨.
+        statements = _split_merged_statement(statement_text)
+
+        result = None
+        for stmt in statements:
+            r = _judge_single_statement(
+                db,
+                workspace_id=uuid.UUID(workspace_id),
+                category_id=uuid.UUID(category_id),
+                source_type=source_type,
+                source_id=source_id,
+                statement_text=stmt,
+                session_kwargs=session_kwargs,
+            )
+            if r and result is None:
+                result = r  # 여러 개 중 첫 번째 Case 2/3만 WS push 대상으로 반환
+        return result
+
+    except Exception as e:
+        print(f"[judgment_service] 판단 파이프라인 실패: {repr(e)}")
+        return None
+    finally:
+        db.close()

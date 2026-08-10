@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, BaseModel
 
 from backend.schemas.common_schema import (
     ORMBaseSchema,
@@ -45,6 +45,27 @@ class WorkspaceSchema(TimestampSchema, SoftDeleteSchema):
     )
     description: Optional[str] = None
     owner_id: UUID
+
+class WorkspaceCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+class WorkspaceResponse(ORMBaseSchema):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    owner_id: UUID
+    created_at: datetime
+
+
+class WorkspaceListResponse(BaseModel):
+    workspaces: list[WorkspaceResponse] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -72,6 +93,31 @@ class WorkspaceMemberSchema(ORMBaseSchema):
     joined_at: datetime
     removed_at: Optional[datetime] = None
 
+class WorkspaceMemberAddRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+    role: WorkspaceRole = "member"
+
+class WorkspaceMemberInviteRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+    role: WorkspaceRole = "member"
+
+
+class WorkspaceMemberRoleUpdateRequest(BaseModel):
+    role: WorkspaceRole
+
+
+class WorkspaceMemberResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    username: str
+    display_name: str
+    profile_image_url: Optional[str] = None
+    role: WorkspaceRole
+    joined_at: datetime
+
+
+class WorkspaceMemberListResponse(BaseModel):
+    members: list[WorkspaceMemberResponse] = Field(default_factory=list)
 
 # =============================================================================
 # Re:Call: categories
@@ -131,3 +177,14 @@ class RoomSchema(TimestampSchema, SoftDeleteSchema):
         max_length=100,
     )
     created_by: UUID
+
+class RoomResponse(ORMBaseSchema):
+    id: UUID
+    workspace_id: UUID
+    name: str
+    created_by: UUID
+    created_at: datetime
+
+
+class RoomListResponse(BaseModel):
+    rooms: list[RoomResponse] = Field(default_factory=list)

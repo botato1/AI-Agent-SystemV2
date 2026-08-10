@@ -57,9 +57,9 @@ def _chunk_document(chunks: list) -> list[dict]:
 
     규칙:
     - style == "caption" → 제외 (호출부에서 미리 제거 예정이지만 방어 코드로 유지)
-    - style == "title"   → 새 청크 경계. 현재 모인 body가 있으면 먼저 확정.
-                           다음 청크의 맨 앞에 이 title을 포함시킴.
-    - style == "body"    → 현재 청크에 계속 추가.
+    - style in ("title", "heading") → 새 청크 경계. 현재 모인 내용이 있으면 먼저 확정.
+                           다음 청크의 맨 앞에 이 제목을 포함시킴.
+    - 그 외 ("body", "table", "image", "chart" 등) → 현재 청크에 계속 추가.
                            DOC_CHUNK_MAX를 넘으면 현재 청크 확정 후 새로 시작.
 
     반환: [{"content": str, "page_number": int}, ...]
@@ -71,13 +71,13 @@ def _chunk_document(chunks: list) -> list[dict]:
     current_chars = 0
 
     def flush(lines, title, page):
-        if not lines:
+        if not lines and not title:
             return
         content = "\n".join(lines).strip()
+        if title:
+            content = f"{title}\n{content}".strip() if content else title
         if not content:
             return
-        if title:
-            content = f"{title}\n{content}"
         result.append({"content": content, "page_number": page})
 
     for chunk in chunks:
@@ -98,7 +98,12 @@ def _chunk_document(chunks: list) -> list[dict]:
         if style == "caption":
             continue
 
-        if style == "title":
+        if style in ("title", "heading"):
+            # [수정] 이전엔 "current_title만 있어도" flush해서, title 다음에 바로
+            # heading이 오면(본문 없이) "제목만 있는 빈 청크"가 그대로 확정돼버렸다
+            # (회의 요약 저장 시 첫 청크가 항상 이랬음 - 팀원 리포트). 실제 본문
+            # (current_lines)이 있을 때만 flush하고, 없으면 새 title/heading으로
+            # 그냥 덮어써서 다음 본문과 짝지어지게 한다.
             if current_lines:
                 flush(current_lines, current_title, current_page)
                 current_lines = []
@@ -106,7 +111,7 @@ def _chunk_document(chunks: list) -> list[dict]:
             current_title = content
             current_page = page
 
-        elif style == "body":
+        else:
             content_len = len(content)
             if current_chars + content_len > DOC_CHUNK_MAX and current_chars >= DOC_CHUNK_MIN:
                 flush(current_lines, current_title, current_page)
@@ -185,6 +190,8 @@ def load_document(
     *,
     chunks: Optional[list] = None,
     transcription: Optional[list] = None,
+    upload_context_override: Optional[str] = None,
+    chunk_type_override: Optional[str] = None,
 ) -> dict:
     """
     workspace_files.id(file_id)를 기준으로 OCR/STT 결과를 청킹하여
@@ -195,6 +202,12 @@ def load_document(
     - transcription: STT 서버가 뽑은 [{"speaker": str, "text": str, "start": float, "end": float}, ...]
 
     workspace_id/category_id는 file_id로 workspace_files를 조회해서 자동으로 가져온다.
+
+    [추가] upload_context_override/chunk_type_override — chunks=(문서 청킹 로직)를 쓰면서도
+    문서가 아닌 다른 성격의 콘텐츠(예: 회의 요약)를 저장해야 하는 경우를 위한 탈출구.
+    청킹 알고리즘(제목/본문 크기 기준 묶기)은 문서용을 그대로 재사용하되, 저장되는
+    ChromaDB 컬렉션(upload_context)과 content_chunks.chunk_type만 다르게 지정할 수 있다.
+    안 넘기면 기존 동작(chunks면 "document"/"document_text") 그대로다.
 
     Returns:
         {"status": "success"/"error", "chunk_count": int, "file_id": str, "error": str}
@@ -227,8 +240,8 @@ def load_document(
         if not chunks:
             return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": "chunks_empty"}
         chunked = _chunk_document(chunks)
-        chunk_type = "document_text"
-        upload_context = "document"
+        chunk_type = chunk_type_override or "document_text"
+        upload_context = upload_context_override or "document"
 
     if not chunked:
         print(f"[document_loader] 청킹 결과 없음 → file_id: {file_id}")

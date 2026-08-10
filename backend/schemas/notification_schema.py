@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, BaseModel
 
 from backend.schemas.common_schema import ORMBaseSchema
 from backend.schemas.type_schema import NotificationType
@@ -57,9 +57,25 @@ class NotificationSchema(ORMBaseSchema):
         max_length=30,
     )
     ref_id: Optional[UUID] = None
+    meeting_id: Optional[UUID] = None      # ref_type == "meeting_segment"일 때만 채워짐
+    document_id: Optional[UUID] = None     # related_file_id 그대로
     room_id: Optional[UUID] = None
 
     is_read: bool
     read_at: Optional[datetime] = None
 
     created_at: datetime
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationSchema] = Field(default_factory=list)
+
+class NotificationPreferencesSchema(BaseModel):
+    new_message: bool = True
+    meeting_summary: bool = True
+    contradiction: bool = True
+
+
+class NotificationPreferencesUpdateRequest(BaseModel):
+    new_message: Optional[bool] = None
+    meeting_summary: Optional[bool] = None
+    contradiction: Optional[bool] = None

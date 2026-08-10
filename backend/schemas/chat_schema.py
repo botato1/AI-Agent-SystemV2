@@ -35,6 +35,8 @@ from backend.schemas.common_schema import (
 from backend.schemas.type_schema import (
     AIChatRole,
     AIMessageSourceType,
+    FileAnalysisStatus,
+    FileKind,
     RoomMessageType,
 )
 
@@ -212,6 +214,32 @@ class RoomFileLinkSchema(ORMBaseSchema):
     linked_by: UUID
     created_at: datetime
 
+# =============================================================================
+# Re:Call: room_messages / room_file_links API 요청/응답
+# =============================================================================
+
+class RoomMessageCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    reply_to_id: Optional[UUID] = None
+
+
+class RoomFileLinkRequest(BaseModel):
+    file_id: UUID
+
+
+class RoomFileResponse(ORMBaseSchema):
+    """room에 연결된 파일 정보. 저장 경로 등 내부 정보는 제외하고 노출 가능한 필드만 포함."""
+
+    id: UUID
+    original_filename: str
+    file_kind: FileKind
+    analysis_status: FileAnalysisStatus
+    created_at: datetime
+
+
+class RoomFileListResponse(BaseModel):
+    files: list[RoomFileResponse] = Field(default_factory=list)
+
 
 # =============================================================================
 # Re:Call: ai_chat_sessions
@@ -219,22 +247,22 @@ class RoomFileLinkSchema(ORMBaseSchema):
 
 class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
     """
-    채팅방 안에서 사용자별로 생성되는 개인 AI Chat 세션을 표현한다.
-
-    AI Chat 기록은 사용자별 비공개이며 다음 조합으로 조회한다.
-
-        workspace_id + room_id + user_id
+    채팅방 안에서 사용자별로 여러 개 생성 가능한 개인 AI Chat 세션(대화)을 표현한다.
+    같은 (workspace_id, room_id, user_id) 조합으로 여러 세션이 존재할 수 있다.
     """
 
     id: UUID
     workspace_id: UUID
-    room_id: UUID
+    room_id: Optional[UUID] = None
     user_id: UUID
 
     title: Optional[str] = Field(
         default=None,
         max_length=200,
     )
+
+class AIChatSessionListResponse(BaseModel):
+    sessions: list[AIChatSessionSchema] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -274,18 +302,20 @@ class AIMessageSourceSchema(ORMBaseSchema):
     """
     AI 답변에 사용된 근거 자료 하나를 표현한다.
 
-    source_type에 따라 chunk_id 또는 code_fact_id 중
-    하나만 사용한다.
+    source_type에 따라 chunk_id/code_fact_id/decision_id 중 하나만 사용한다.
+    decision은 workspace_files에 속하지 않으므로 file_id가 NULL이다.
     """
 
     id: UUID
     ai_message_id: UUID
 
     source_type: AIMessageSourceType
-    file_id: UUID
+    file_id: Optional[UUID] = None
+    file_name: Optional[str] = None
 
     chunk_id: Optional[UUID] = None
     code_fact_id: Optional[UUID] = None
+    decision_id: Optional[UUID] = None
 
     similarity_score: Optional[Decimal] = Field(
         default=None,
@@ -304,29 +334,57 @@ class AIMessageSourceSchema(ORMBaseSchema):
     @model_validator(mode="after")
     def _validate_source_consistency(self) -> "AIMessageSourceSchema":
         if self.source_type == "content_chunk":
-            if self.chunk_id is None:
+            if self.file_id is None or self.chunk_id is None:
                 raise ValueError(
                     "source_type이 content_chunk이면 "
-                    "chunk_id가 필수입니다."
+                    "file_id/chunk_id가 필수입니다."
                 )
 
-            if self.code_fact_id is not None:
+            if self.code_fact_id is not None or self.decision_id is not None:
                 raise ValueError(
                     "source_type이 content_chunk이면 "
-                    "code_fact_id는 NULL이어야 합니다."
+                    "code_fact_id/decision_id는 NULL이어야 합니다."
                 )
 
         elif self.source_type == "code_fact":
-            if self.code_fact_id is None:
+            if self.file_id is None or self.code_fact_id is None:
                 raise ValueError(
                     "source_type이 code_fact이면 "
-                    "code_fact_id가 필수입니다."
+                    "file_id/code_fact_id가 필수입니다."
                 )
 
-            if self.chunk_id is not None:
+            if self.chunk_id is not None or self.decision_id is not None:
                 raise ValueError(
                     "source_type이 code_fact이면 "
-                    "chunk_id는 NULL이어야 합니다."
+                    "chunk_id/decision_id는 NULL이어야 합니다."
+                )
+
+        elif self.source_type == "decision":
+            if self.decision_id is None:
+                raise ValueError(
+                    "source_type이 decision이면 "
+                    "decision_id가 필수입니다."
+                )
+
+            if self.file_id is not None or self.chunk_id is not None or self.code_fact_id is not None:
+                raise ValueError(
+                    "source_type이 decision이면 "
+                    "file_id/chunk_id/code_fact_id는 NULL이어야 합니다."
                 )
 
         return self
+    
+# =============================================================================
+# Re:Call: ai_chat API 요청/응답
+# =============================================================================
+
+class AIChatMessageCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+
+
+class AIChatMessageListResponse(BaseModel):
+    messages: list[AIChatMessageSchema] = Field(default_factory=list)
+
+
+class AIMessageSourceListResponse(BaseModel):
+    sources: list[AIMessageSourceSchema] = Field(default_factory=list)

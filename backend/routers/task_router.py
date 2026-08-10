@@ -1,98 +1,159 @@
-from fastapi import APIRouter
+# backend/routers/task_router.py
 
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.db.session import get_db
+from backend.db.crud import meeting_crud, room_crud
 from backend.schemas.task_schema import (
     TaskCreateRequest,
     TaskStatusUpdateRequest,
     TaskPriorityUpdateRequest,
-)
-from backend.db.crud import (
-    get_all_tasks,
-    create_task,
-    update_task_status,
-    update_task_priority,
-    delete_task,
+    TaskUpdateRequest,
+    TaskResponse,
+    TaskListResponse,
 )
 
-
-router = APIRouter(prefix="/api", tags=["Tasks"])
-
-
-# 전체 업무 목록 조회
-@router.get("/tasks")
-def get_task_list():
-    try:
-        rows = get_all_tasks()
-        return {
-            "tasks": [
-                {
-                    "task_id": row["id"],
-                    "task": row["task"],
-                    "assignee": row.get("assignee") or None,
-                    "deadline": row.get("deadline") or None,
-                    "status": row.get("status") or "todo",
-                    "priority": row.get("priority") or "medium",
-                    "room_id": row.get("conversation_id") or None,
-                    "document_id": row.get("document_id") or None,
-                    "created_at": row.get("created_at"),
-                }
-                for row in rows
-            ],
-            "error": None,
-        }
-    except Exception as e:
-        return {"tasks": [], "error": str(e)}
+router = APIRouter(prefix="/api/workspaces/{workspace_id}/tasks", tags=["Tasks"])
 
 
-# 업무 직접 생성
-@router.post("/tasks")
-def create_task_api(request: TaskCreateRequest):
-    try:
-        task_data = request.model_dump()
-        task_name = task_data["task"].strip()
-
-        if not task_name:
-            return {"task": None, "error": "업무 내용은 필수입니다."}
-
-        return {"task": create_task({**task_data, "task": task_name}), "error": None}
-
-    except Exception as e:
-        return {"task": None, "error": str(e)}
+def _get_task_or_404(db: Session, task_id: UUID, workspace_id: UUID):
+    item = meeting_crud.get_task(db, task_id)
+    if not item or item.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="할 일을 찾을 수 없습니다.",
+        )
+    return item
 
 
-# 업무 상태 변경
-@router.patch("/tasks/{task_id}/status")
-def update_task_status_api(task_id: str, request: TaskStatusUpdateRequest):
-    try:
-        if not update_task_status(task_id, request.status):
-            return {"task": None, "error": "해당 업무를 찾을 수 없습니다."}
+# 워크스페이스 내 진행 중인 할 일 목록 조회
+@router.get("", response_model=TaskListResponse)
+def get_task_list(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
 
-        return {"task": {"task_id": task_id, "status": request.status}, "error": None}
-
-    except Exception as e:
-        return {"task": None, "error": "업무 상태 변경 중 오류가 발생했습니다."}
-
-
-# 업무 우선순위 변경
-@router.patch("/tasks/{task_id}/priority")
-def update_task_priority_api(task_id: str, request: TaskPriorityUpdateRequest):
-    try:
-        if not update_task_priority(task_id, request.priority):
-            return {"task": None, "error": "해당 업무를 찾을 수 없습니다."}
-
-        return {"task": {"task_id": task_id, "priority": request.priority}, "error": None}
-
-    except Exception as e:
-        return {"task": None, "error": "업무 우선순위 변경 중 오류가 발생했습니다."}
+    items = meeting_crud.list_open_tasks(db, workspace_id)
+    return TaskListResponse(
+        tasks=[TaskResponse.model_validate(i) for i in items]
+    )
 
 
-# 업무 삭제
-@router.delete("/tasks/{task_id}")
-def delete_task_api(task_id: str):
-    try:
-        if not delete_task(task_id):
-            return {"task": None, "error": "해당 업무를 찾을 수 없습니다."}
+# 할 일 직접 생성 (meeting_id=None)
+@router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+def create_task(
+    workspace_id: UUID,
+    request: TaskCreateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
 
-        return {"task": {"task_id": task_id, "deleted": True}, "error": None}
+    category = room_crud.get_default_category(db, workspace_id)
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
 
-    except Exception as e:
-        return {"task": None, "error": "업무 삭제 중 오류가 발생했습니다."}
+    item = meeting_crud.create_task(
+        db,
+        workspace_id=workspace_id,
+        category_id=category.id,
+        title=request.title,
+        description=request.description,
+        assignee_id=request.assignee_id,
+        assignee_label=request.assignee_label,
+        priority=request.priority,
+        due_at=request.due_at,
+        status="open",
+        created_by=UUID(current_user_id),
+    )
+    return TaskResponse.model_validate(item)
+
+
+# 할 일 단건 조회
+@router.get("/{task_id}", response_model=TaskResponse)
+def get_task(
+    workspace_id: UUID,
+    task_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    item = _get_task_or_404(db, task_id, workspace_id)
+    return TaskResponse.model_validate(item)
+
+
+# 할 일 상태 변경
+@router.patch("/{task_id}/status", response_model=TaskResponse)
+def update_task_status_api(
+    workspace_id: UUID,
+    task_id: UUID,
+    request: TaskStatusUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_task_or_404(db, task_id, workspace_id)
+
+    item = meeting_crud.update_task_status(db, task_id, request.status)
+    return TaskResponse.model_validate(item)
+
+
+# 할 일 우선순위 변경
+@router.patch("/{task_id}/priority", response_model=TaskResponse)
+def update_task_priority_api(
+    workspace_id: UUID,
+    task_id: UUID,
+    request: TaskPriorityUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_task_or_404(db, task_id, workspace_id)
+
+    item = meeting_crud.update_task_priority(db, task_id, request.priority)
+    return TaskResponse.model_validate(item)
+
+# 할 일 상세 수정 (제목/설명/담당자/마감일/우선순위/상태를 한 번에)
+@router.patch("/{task_id}", response_model=TaskResponse)
+def update_task_api(
+    workspace_id: UUID,
+    task_id: UUID,
+    request: TaskUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_task_or_404(db, task_id, workspace_id)
+
+    update_fields = request.model_dump(exclude_unset=True)
+    if not update_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+
+    item = meeting_crud.update_task(db, task_id, **update_fields)
+    return TaskResponse.model_validate(item)
+
+
+# 할 일 삭제
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_task_api(
+    workspace_id: UUID,
+    task_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_task_or_404(db, task_id, workspace_id)
+
+    meeting_crud.delete_task(db, task_id)

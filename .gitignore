@@ -4,7 +4,8 @@ __pycache__/
 .env
 *.pyc
 .DS_Store
-frontend/node_modules/
+node_modules/
+**/node_modules/
 
 # 테스트 파일
 test_file/
@@ -15,6 +16,7 @@ data/raw/
 data/processed/
 data/knowledge/
 data/uploads/
+backend/modules/document/dataset/
 
 # 자동 생성 저장소
 storage/
@@ -34,7 +36,7 @@ unsloth_compiled_cache/
 requirements_finetune.txt
 requirements_rag.txt
 
-gitignore# 가상환경 (추가)
+# 가상환경 (추가)
 venv-rag/
 venv-finetune/
 
@@ -50,6 +52,14 @@ checkpoint-*/
 *.gguf
 *.safetensors
 
-
 # 모델 캐시
 .cache/
+
+# 프론트엔드 빌드 산출물
+.vite/
+dist/
+build/
+*.log
+
+# 레거시 중복 frontend 폴더
+frontend/
