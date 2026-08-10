@@ -244,6 +244,15 @@ REALTIME_SPEAKER_SPLIT_SILENCE_MS = int(os.getenv("REALTIME_SPEAKER_SPLIT_SILENC
 #
 # 비용은 창 수에 비례한다 = 곧 확정 자막의 지연이다. 그래서 재분석(0.5초 이동)보다
 # 성기게 훑고, 짧은 청크는 아예 건너뛴다(짧으면 화자가 바뀔 여지도 적다).
+# 전사 결과를 문장 단위로 쪼개 내보낼지. 모순 감지 모델이 "발화 하나"를 받도록
+# 만들어졌는데, Qwen은 창 하나당 텍스트 한 덩어리를 주므로 우리가 쪼개야 한다
+# (realtime_service._split_by_sentence 참고 — 실측 근거가 거기 있다).
+REALTIME_SENTENCE_SPLIT_ENABLED = os.getenv("REALTIME_SENTENCE_SPLIT_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+# 이보다 짧은 조각은 독립 세그먼트로 두지 않고 앞 조각에 붙인다.
+# "네." "갑자기요." 같은 맞장구가 조각으로 쏟아지면 판단이 오히려 더 헷갈린다.
+# (버리지는 않는다 — 붙이지 않고 통째로 안 쪼개면, 정작 고치려던 긴 덩어리가 그대로 남는다)
+REALTIME_SENTENCE_MIN_CHARS = int(os.getenv("REALTIME_SENTENCE_MIN_CHARS", "6"))
+
 REALTIME_SPEAKER_SCAN_ENABLED = os.getenv("REALTIME_SPEAKER_SCAN_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 REALTIME_SPEAKER_SCAN_MIN_SEC = float(os.getenv("REALTIME_SPEAKER_SCAN_MIN_SEC", "4.0"))
 REALTIME_SPEAKER_SCAN_HOP_SEC = float(os.getenv("REALTIME_SPEAKER_SCAN_HOP_SEC", "0.75"))

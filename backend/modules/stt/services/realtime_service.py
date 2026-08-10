@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 import numpy as np
 from faster_whisper import WhisperModel
@@ -20,6 +21,8 @@ from ..core.config import (
     REALTIME_PARTIAL_SPEAKER_TAIL_SEC,
     REALTIME_SPEAKER_SPLIT_ENABLED,
     REALTIME_SPEAKER_SPLIT_SILENCE_MS,
+    REALTIME_SENTENCE_SPLIT_ENABLED,
+    REALTIME_SENTENCE_MIN_CHARS,
     REALTIME_SPEAKER_SCAN_ENABLED,
     REALTIME_SPEAKER_SCAN_MIN_SEC,
     REALTIME_SPEAKER_SCAN_HOP_SEC,
@@ -33,6 +36,10 @@ from ..core.config import (
 from .audio_quality import AudioQualityMonitor
 from .speaker_timeline import find_speaker_runs
 
+
+# 문장 경계. **부호 뒤에 공백이 있을 때만** 자른다 — "9.15", "3.5"처럼 숫자 사이의
+# 마침표는 공백이 없으므로 문장 경계로 오인되지 않는다.
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
 # 임베딩이 불안정해지는 하한 — speaker_id_service._MIN_EMBED_SEC(1.0초)와 맞춘 값.
 # 이보다 짧으면 목소리 특성보다 발음 내용에 휘둘려 엉뚱한 화자로 튄다.
@@ -273,6 +280,74 @@ class RealtimeSTTSession:
             seg["confident"] = is_confident(seg.get("avg_logprob"), seg.get("no_speech_prob"))
             seg["user_edited"] = False
 
+    def _split_by_sentence(self, segments: list[dict]) -> list[dict]:
+        """
+        세그먼트 하나에 여러 문장이 들어 있으면 문장 단위로 쪼갠다.
+
+        왜 필요한가 (2026-08-10, 승주 제보에서 출발):
+          모순 감지 모델은 **짧고 깨끗한 발화 하나**를 받도록 만들어졌는데, 우리가
+          여러 사람의 여러 문장을 한 덩어리로 보내고 있었다. 실측: 최근 회의 8건에서
+          문장 2개 이상이 한 세그먼트에 들어간 비율이 60~100%, 세그먼트 길이는
+          평균 15~25초에 최장이 계속 28초(강제 컷 상한)에 걸렸다. 판단이 계속
+          안 뜨던 이유였다 — **깨끗한 발화 하나를 받아본 적이 없었다.**
+
+          원인은 엔진 교체의 부작용이다. Whisper는 문장마다 타임스탬프가 붙은
+          세그먼트를 여러 개 돌려주지만, **Qwen3-ASR은 창 하나당 텍스트 한 덩어리**를
+          돌려준다(qwen_engine.transcribe). 화자 분할(_speaker_turns)은 화자가 바뀔
+          때만 쪼개므로, 한 사람이 세 문장을 말하면 여전히 하나로 남는다.
+
+        ⚠️ 타임스탬프는 근사값이다. 엔진이 문장별 시각을 주지 않으므로 글자 수
+           비율로 나눈다. 판단 파이프라인은 텍스트 단위만 보므로 문제없지만,
+           자막 하이라이트나 오디오 되감기에 쓰면 수백 ms 어긋난다.
+
+        문장부호 뒤에 **공백이 있을 때만** 자른다 — "9.15"나 "3.5" 같은 숫자가
+        문장 경계로 오인되는 것을 막는다(숫자 사이엔 공백이 없다).
+        """
+        if not REALTIME_SENTENCE_SPLIT_ENABLED:
+            return segments
+
+        result: list[dict] = []
+        for seg in segments:
+            text = (seg.get("text") or "").strip()
+            parts = [p.strip() for p in _SENTENCE_BOUNDARY.split(text) if p.strip()]
+            # 짧은 조각은 **버리지 말고 앞 조각에 붙인다.** "갑자기요." "네." 같은
+            # 맞장구가 조각으로 쏟아지면 판단이 더 헷갈리지만, 그렇다고 그 하나
+            # 때문에 세그먼트 전체를 안 쪼개면 정작 고치려던 긴 덩어리가 그대로 남는다
+            # (실측: 승주가 보낸 28초 예시가 "네." 하나 때문에 통째로 안 쪼개졌다).
+            merged: list[str] = []
+            for part in parts:
+                if merged and len(part) < REALTIME_SENTENCE_MIN_CHARS:
+                    merged[-1] = f"{merged[-1]} {part}"
+                else:
+                    merged.append(part)
+            # 첫 조각이 짧아 붙일 앞이 없었던 경우 — 뒤에 붙인다
+            if len(merged) > 1 and len(merged[0]) < REALTIME_SENTENCE_MIN_CHARS:
+                merged[1] = f"{merged[0]} {merged[1]}"
+                merged.pop(0)
+            parts = merged
+            if len(parts) < 2:
+                result.append(seg)
+                continue
+
+            span = seg["end"] - seg["start"]
+            total = sum(len(p) for p in parts)
+            cursor = seg["start"]
+            for i, part in enumerate(parts):
+                # 마지막 조각은 남은 구간을 전부 가져간다 — 반올림 오차가 쌓여
+                # 끝 시각이 원본과 어긋나는 것을 막는다
+                end = seg["end"] if i == len(parts) - 1 else cursor + span * len(part) / total
+                result.append({
+                    **seg,
+                    "start": round(cursor, 2),
+                    "end": round(end, 2),
+                    "text": part,
+                    # 시각이 추정치임을 소비자가 알 수 있게 표시한다. 이걸 안 남기면
+                    # 나중에 "왜 자막이 살짝 밀리지"를 추적할 단서가 없다.
+                    "time_estimated": True,
+                })
+                cursor = end
+        return result
+
     def _speaker_turns(self, audio: np.ndarray) -> list[tuple[int, int, str | None]]:
         """
         청크를 화자 턴 단위로 나눈다. [(시작 샘플, 끝 샘플, 화자), ...]
@@ -484,6 +559,10 @@ class RealtimeSTTSession:
         if speaker_label is not None:
             for seg in precise_segments:
                 seg.setdefault("speaker", speaker_label)
+
+        # 화자를 붙인 **뒤에** 쪼갠다. 먼저 쪼개면 조각마다 화자를 다시 정해야 하는데,
+        # 문장 경계는 화자 경계가 아니므로 판정할 근거가 없다.
+        precise_segments = self._split_by_sentence(precise_segments)
 
         if self.recorder is not None:
             # NAS 위 디스크 쓰기가 이벤트 루프(다른 회의의 실시간 스트리밍 포함)를 막지 않게 executor로.
