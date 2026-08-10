@@ -126,7 +126,15 @@ TOPIC_MATCH_INPUT_TEMPLATE = """[과거 의사결정]
 
 
 def _ask_judgment_step(key: str, decision_text: str, decision_reason: str, statement: str) -> bool:
-    """JUDGMENT_MODEL에게 단계 하나(key)만 물어서 bool로 반환. 실패 시 False."""
+    """JUDGMENT_MODEL에게 단계 하나(key)만 물어서 bool로 반환. 실패 시 False.
+
+    [수정] temperature=0 명시 - 기본값(Ollama 기본 0.8 근처)이면 완전히 같은 발화를
+    두 번 판단시켜도 결과가 달라질 수 있다. 특히 STT가 같은 구간에 대해 "final"을
+    중복으로 보내는 경우(세그먼트 저장 쪽엔 중복 방지가 없음), 두 번째 판단이
+    첫 번째와 다른 case로 나오면서 서로 다른 팝업이 중복으로 뜨는 문제가 있었다.
+    temperature=0이면 같은 입력→같은 출력이 보장되어, 기존 dedup(같은 decision·
+    같은 case면 세션당 1회)이 정상적으로 두 번째를 걸러준다.
+    """
     input_text = JUDGMENT_INPUT_TEMPLATE.format(
         decision_text=decision_text, decision_reason=decision_reason, statement=statement,
     )
@@ -134,7 +142,7 @@ def _ask_judgment_step(key: str, decision_text: str, decision_reason: str, state
         f"{JUDGMENT_STEP_INSTRUCTIONS[key]}\n\n{input_text}\n\n"
         f'반드시 다음 JSON 형식으로만 답하라 (다른 설명 금지):\n{{\n  "{key}": true/false\n}}'
     )
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
+    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
     try:
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
@@ -154,7 +162,9 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
     # (학습 데이터의 instruction 필드와 동일한 형식), 여기서 별도로 스펙을
     # 덧붙이지 않는다 - instruction 뒤에 input만 붙이는 게 학습 형식과 일치한다.
     prompt = f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}"
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
+    # temperature=0 명시 이유는 _ask_judgment_step() 주석 참조 - 같은 입력에는
+    # 항상 같은 판단이 나와야 dedup이 제대로 동작한다.
+    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
     try:
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
