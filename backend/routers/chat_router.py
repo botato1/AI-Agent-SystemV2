@@ -103,7 +103,7 @@ async def _process_room_message_analysis(
         )
         await asyncio.to_thread(_notify_contradiction_detected, workspace_id, result, statement_text)
 
-        await asyncio.to_thread(
+        judgment_result = await asyncio.to_thread(
             judgment_service.run_judgment_pipeline,
             workspace_id=str(workspace_id),
             category_id=str(category_id),
@@ -112,6 +112,28 @@ async def _process_room_message_analysis(
             room_message_id=message_id,
             session_room_id=str(room_id),
         )
+        if judgment_result:
+            if judgment_result.get("judgment_case") == "decision_reminder":
+                payload = {
+                    "type": "decision_reminder",
+                    "statement_text": statement_text,
+                    "display_message": judgment_result["message"],
+                    "decision_id": judgment_result.get("decision_id"),
+                }
+            else:
+                payload = {
+                    "type": "contradiction_alert",
+                    "contradiction_id": judgment_result["contradiction_id"],
+                    "statement_text": statement_text,
+                    "display_message": judgment_result["message"],
+                    "source": "decision",
+                    "judgment_case": judgment_result.get("judgment_case"),
+                    "actions": judgment_result.get("actions", []),
+                }
+            try:
+                await broadcast_room_event(room_id, payload)
+            except Exception as e:
+                print(f"[chat_router] 판단 결과 실시간 push 실패: {repr(e)}")
 
 class RoomCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
