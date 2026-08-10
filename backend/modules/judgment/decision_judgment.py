@@ -195,21 +195,31 @@ REASON_EXTRACT_INPUT_TEMPLATE = """[발화]
 def _extract_change_reason(statement: str) -> str:
     """Case 2(근거 명확)로 판단된 발화에서 근거 텍스트만 짧게 추출.
     실패 시 발화 원문을 그대로 반환(빈 값보다는 원문이 나음 - 최소한 근거가
-    포함된 전체 맥락은 보여줄 수 있음)."""
+    포함된 전체 맥락은 보여줄 수 있음).
+
+    [수정 - 리뷰 반영] _call_ollama() 호출까지 try 안으로 넣고 except를
+    Exception으로 넓힘. 원래는 JSON 파싱 실패만 잡고 있었는데, _call_ollama()
+    자체는 내부에 try/except가 없어 네트워크/타임아웃 시 httpx 예외를 그대로
+    던진다 - 이 호출부가 try 밖에 있으면 그 예외가 judge() -> run_judgment_
+    pipeline()의 최상위 except까지 안 잡히고 올라가서, 이미 끝난 Case 2 감지
+    자체(create_contradiction 호출 전)가 통째로 유실된다. 근거 추출은 부가
+    정보일 뿐이므로, 어떤 이유로 실패하든 원문 폴백으로 안전하게 넘어가야 한다.
+    """
     input_text = REASON_EXTRACT_INPUT_TEMPLATE.format(statement=statement)
     prompt = (
         f"{REASON_EXTRACT_INSTRUCTION}\n\n{input_text}\n\n"
         f'반드시 다음 JSON 형식으로만 답하라 (다른 설명 금지):\n{{\n  "reason": "..."\n}}'
     )
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
     try:
+        raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             return statement
         parsed = json.loads(raw[start : end + 1])
         reason = parsed.get("reason")
         return reason.strip() if isinstance(reason, str) and reason.strip() else statement
-    except (json.JSONDecodeError, ValueError):
+    except Exception as e:
+        print(f"[decision_judgment] 근거 추출 실패, 원문으로 폴백: {repr(e)}")
         return statement
 
 
