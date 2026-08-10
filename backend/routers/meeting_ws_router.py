@@ -172,8 +172,15 @@ async def _process_segment_analysis(
         )
         if judgment_result:
             try:
-                async with send_lock:
-                    await websocket.send_json({
+                if judgment_result.get("judgment_case") == "decision_reminder":
+                    payload = {
+                        "type": "decision_reminder",
+                        "statement_text": statement_text,
+                        "display_message": judgment_result["message"],
+                        "decision_id": judgment_result.get("decision_id"),
+                    }
+                else:
+                    payload = {
                         "type": "contradiction_alert",
                         "contradiction_id": judgment_result["contradiction_id"],
                         "statement_text": statement_text,
@@ -181,7 +188,9 @@ async def _process_segment_analysis(
                         "source": "decision",
                         "judgment_case": judgment_result.get("judgment_case"),
                         "actions": judgment_result.get("actions", []),
-                    })
+                    }
+                async with send_lock:
+                    await websocket.send_json(payload)
             except Exception as e:
                 print(f"[meeting_ws_router] decision 모순 알림 전송 실패: {repr(e)}")
 

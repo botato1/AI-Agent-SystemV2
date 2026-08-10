@@ -7,9 +7,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.security import create_room_ws_ticket
 from backend.db.session import get_db, SessionLocal
 from backend.db.crud import file_crud, room_crud, workspace_crud, notification_crud, contradiction_crud
 from backend.graphs.contradiction_graph import run_contradiction_detection
+from backend.routers.room_ws_router import broadcast_room_event
 from backend.schemas.chat_schema import (
     RoomMessageSchema,
     RoomMessageCreateRequest,
@@ -101,7 +103,7 @@ async def _process_room_message_analysis(
         )
         await asyncio.to_thread(_notify_contradiction_detected, workspace_id, result, statement_text)
 
-        await asyncio.to_thread(
+        judgment_result = await asyncio.to_thread(
             judgment_service.run_judgment_pipeline,
             workspace_id=str(workspace_id),
             category_id=str(category_id),
@@ -110,6 +112,28 @@ async def _process_room_message_analysis(
             room_message_id=message_id,
             session_room_id=str(room_id),
         )
+        if judgment_result:
+            if judgment_result.get("judgment_case") == "decision_reminder":
+                payload = {
+                    "type": "decision_reminder",
+                    "statement_text": statement_text,
+                    "display_message": judgment_result["message"],
+                    "decision_id": judgment_result.get("decision_id"),
+                }
+            else:
+                payload = {
+                    "type": "contradiction_alert",
+                    "contradiction_id": judgment_result["contradiction_id"],
+                    "statement_text": statement_text,
+                    "display_message": judgment_result["message"],
+                    "source": "decision",
+                    "judgment_case": judgment_result.get("judgment_case"),
+                    "actions": judgment_result.get("actions", []),
+                }
+            try:
+                await broadcast_room_event(room_id, payload)
+            except Exception as e:
+                print(f"[chat_router] 판단 결과 실시간 push 실패: {repr(e)}")
 
 class RoomCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -121,6 +145,10 @@ class RoomUpdateRequest(BaseModel):
 
 class RoomMessageListResponse(BaseModel):
     messages: list[RoomMessageSchema] = Field(default_factory=list)
+
+
+class RoomWsTicketResponse(BaseModel):
+    ws_ticket: str
 
 
 def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
@@ -215,6 +243,21 @@ def delete_room(
 
     room_crud.delete_room(db, room_id)
 
+# 채팅방 실시간 연결용 WS 티켓 발급
+@router.get("/{room_id}/stream/ticket", response_model=RoomWsTicketResponse)
+def get_room_ws_ticket(
+    workspace_id: UUID,
+    room_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
+
+    ticket = create_room_ws_ticket(current_user_id, str(room_id))
+    return RoomWsTicketResponse(ws_ticket=ticket)
+
+
 # 메시지 전송
 @router.post("/{room_id}/messages", response_model=RoomMessageSchema, status_code=status.HTTP_201_CREATED)
 def send_room_message(
@@ -237,6 +280,16 @@ def send_room_message(
         reply_to_id=request.reply_to_id,
     )
 
+    message_schema = RoomMessageSchema.model_validate(message)
+
+    # 같은 방에 붙어있는 다른 연결에 새 메시지를 바로 push — REST 응답은 보낸
+    # 사람 자신에게만 가므로, 이게 없으면 다른 참가자는 새로고침해야 보임.
+    background_tasks.add_task(
+        broadcast_room_event,
+        room_id,
+        {"type": "new_message", "message": message_schema.model_dump(mode="json")},
+    )
+
     # 메시지 저장 후 모순 탐지를 백그라운드로 실행.
     # (RAG 토글 여부와 무관하게 모든 텍스트 메시지 대상 — RAG 토글은 검색 포함 범위이지
     # 모순 탐지 대상 범위는 아니라고 판단. 필요하면 room.rag_enabled 체크 추가)
@@ -247,7 +300,7 @@ def send_room_message(
             room_id, workspace_id, room.category_id, statement_text, str(message.id),
         )
 
-    return RoomMessageSchema.model_validate(message)
+    return message_schema
 
 # 채팅방 메시지 조회
 @router.get("/{room_id}/messages", response_model=RoomMessageListResponse)
