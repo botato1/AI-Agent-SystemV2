@@ -53,10 +53,19 @@ _SPLIT_INSTRUCTION = (
 
 
 def _looks_merged(text: str) -> bool:
-    """문장 종결 패턴이 2개 이상이면 여러 발화가 뭉쳤을 가능성이 있다고 본다.
+    """문장 종결 패턴이 3개 이상이면 여러 발화가 뭉쳤을 가능성이 있다고 본다.
     짧고 단일한 발화가 훨씬 흔하므로, 의심되는 경우에만 분리 LLM 호출을 태워
-    불필요한 지연을 피한다."""
-    return len(_SPLIT_SENTENCE_END_PATTERN.findall(text)) >= 2
+    불필요한 지연을 피한다.
+
+    [수정 - 리뷰 반영] 임계값 2 → 3. "9월 22일로 가는 게 안전할 것 같아요. QA
+    일정이 부족해서요." 같은 정상적인 "새 값+근거" 한 발화도 문장 종결 패턴이
+    2개라 임계값 2에서는 쪼개져버림 - 쪼개지면 근거 문장이 값 제시 문장과
+    분리돼 reason_is_clear 판단이 근거를 못 보고 Case 3(근거 없는 변경)로
+    오판하거나, 근거만 남은 조각이 presents_new_value=false로 Case 0에
+    묻히며 근거 정보가 유실됨. 실제 STT 병합 사례(화면 설계 진행 상황 관련
+    여러 화자 발화)는 문장 종결 패턴이 8개였으므로, 3으로 올려도 여유 있게
+    잡아내면서 정상적인 2문장 단일 발화 오분리는 피한다."""
+    return len(_SPLIT_SENTENCE_END_PATTERN.findall(text)) >= 3
 
 
 def _split_merged_statement(statement_text: str) -> list[str]:
