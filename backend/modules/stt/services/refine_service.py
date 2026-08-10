@@ -45,6 +45,27 @@ MIN_TURN_SEC = 0.05
 # 소리 조각이라 전사해봐야 헛것이 나온다(MIN_TURN_SEC은 "원래 짧은 발화"를 살리기 위한
 # 값이라 다르다 — 그건 온전한 턴이고, 이건 잘리고 남은 부스러기다).
 MIN_TRIMMED_TURN_SEC = 0.4
+# 전사에 넘길 때만 턴 앞뒤로 더 들려주는 여유.
+#
+# 왜 필요한가 (2026-08-07 실측): 화자 경계는 발화 경계와 정확히 일치하지 않는다.
+# 같은 오디오·같은 모델인데 어디서 자르느냐만 달라도 결과가 뒤집혔다 —
+# 회의 ded1105f의 "온보딩까지 넣으면"이 화자 경계(24.0~28.6초)로 자르면
+# "원본인까지 넘는"이 됐고, 앞뒤로 1초씩 넓혀 자르면 정확히 나왔다.
+# 실시간 경로(자르지 않음)는 같은 구간을 맞혔다 — 즉 오디오 문제가 아니라
+# **우리가 말머리를 잘라 넘긴 것**이었다.
+#
+# 저장되는 start/end는 원래 턴 경계 그대로다. 여유는 모델에게 문맥을 더 들려줄
+# 뿐이고, 여유 구간에만 걸친 전사 조각은 아래에서 버린다(옆 사람 말이 섞이는 것 방지).
+# 앞뒤를 다르게 두는 이유 (2026-08-07 실측): 앞쪽 여유는 말머리를 되살렸지만
+# (원본인→온보딩), 뒤쪽 여유는 **다음 화자의 말을 끌어왔다**("...확정하겠습니다. 네.").
+# 관찰된 고장은 말머리 잘림이지 말꼬리가 아니었다 — 근거 없는 쪽은 0으로 둔다.
+# 뒤쪽이 필요하다는 증거가 나오면 그때 올릴 것.
+TURN_PAD_SEC = 0.3
+TURN_PAD_TAIL_SEC = 0.0
+# 전사 조각을 살릴 기준 — 조각 길이의 이만큼이 턴 본체와 겹쳐야 이 턴의 말로 본다.
+# 절반으로 둔 이유: 경계에 걸친 말은 어느 쪽 것인지 애매한데, 더 많이 겹치는 쪽에
+# 주는 게 자연스럽다. 문턱을 높이면 경계 단어가 양쪽에서 다 사라진다.
+TURN_PAD_KEEP_RATIO = 0.5
 
 
 
@@ -220,11 +241,24 @@ async def _transcribe_turns(
         audio, sample_rate = audio_of(turn)
         if audio is None:
             continue
-        clip = audio[int(start * sample_rate): int(end * sample_rate)]
+        # 턴 경계보다 넓게 들려준다 — 말머리가 잘리면 단어를 통째로 놓친다(TURN_PAD_SEC).
+        # 실제로 넓힌 양을 따로 재는 이유: 오디오 처음/끝에서는 요청한 만큼 못 넓히므로,
+        # 아래에서 본체 위치를 계산할 때 요청값이 아니라 실제값을 써야 어긋나지 않는다.
+        clip_start = max(0.0, start - TURN_PAD_SEC)
+        clip_end = min(len(audio) / sample_rate, end + TURN_PAD_TAIL_SEC)
+        clip = audio[int(clip_start * sample_rate): int(clip_end * sample_rate)]
         if len(clip) == 0:
             continue
 
         engine_segments = await loop.run_in_executor(None, _transcribe_clip, clip)
+        # 여유 구간에만 걸친 조각은 옆 사람 말일 수 있으므로 버린다. 조각 시각은
+        # clip 기준이라 본체는 [start-clip_start, end-clip_start] 구간이다.
+        core_from, core_to = start - clip_start, end - clip_start
+        engine_segments = [
+            seg for seg in engine_segments
+            if (min(seg.end, core_to) - max(seg.start, core_from))
+            >= (seg.end - seg.start) * TURN_PAD_KEEP_RATIO
+        ]
         text = " ".join(seg.text.strip() for seg in engine_segments).strip()
         if not text:
             continue
