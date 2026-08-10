@@ -7,7 +7,9 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query, BackgroundTasks, status
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
+from backend.core.security import create_document_ws_ticket
 from backend.services.document_service import (
     upload_and_process_document,
     delete_processed_document,
@@ -301,3 +303,18 @@ def get_document_file_api(
         media_type=workspace_file.mime_type or "application/octet-stream",
         filename=workspace_file.original_filename,
     )
+
+class DocumentWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 문서/그래프 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=DocumentWsTicketResponse)
+def get_document_ws_ticket(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_document_ws_ticket(current_user_id, str(workspace_id))
+    return DocumentWsTicketResponse(ws_ticket=ticket)
