@@ -27,7 +27,7 @@ async def broadcast_room_event(room_id: uuid.UUID, payload: dict) -> None:
     if not connections:
         return
     stale: list[WebSocket] = []
-    for ws in connections:
+    for ws in list(connections):
         try:
             await ws.send_json(payload)
         except Exception:
