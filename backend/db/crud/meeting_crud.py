@@ -2,7 +2,7 @@
 
 import uuid
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
@@ -546,3 +546,18 @@ def update_decision(db: Session, decision_id: uuid.UUID, **fields) -> Optional[D
     db.commit()
     db.refresh(row)
     return row
+
+def list_meetings_needing_reminder(db: Session, reminder_minutes: int) -> list[Meeting]:
+    """지금부터 reminder_minutes 이내에 시작하는 예약 회의 목록."""
+    now = datetime.now(timezone.utc)
+    window_end = now + timedelta(minutes=reminder_minutes)
+    return (
+        db.query(Meeting)
+        .filter(
+            Meeting.deleted_at.is_(None),
+            Meeting.status == "scheduled",
+            Meeting.scheduled_at > now,
+            Meeting.scheduled_at <= window_end,
+        )
+        .all()
+    )
