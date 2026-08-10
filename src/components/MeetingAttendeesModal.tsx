@@ -9,6 +9,7 @@ interface MeetingAttendeesModalProps {
   meetingTitle: string;
   onClose: () => void;
   onSaved?: () => void;
+  t: any;
 }
 
 export default function MeetingAttendeesModal({
@@ -17,6 +18,7 @@ export default function MeetingAttendeesModal({
   meetingTitle,
   onClose,
   onSaved,
+  t,
 }: MeetingAttendeesModalProps) {
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -82,7 +84,7 @@ export default function MeetingAttendeesModal({
       >
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
           <div className="min-w-0">
-            <p className="text-base font-semibold text-recall-text">참석자 관리</p>
+            <p className="text-base font-semibold text-recall-text">{t.meeting_attendees_manage_title}</p>
             <p className="truncate text-sm text-recall-textMuted">{meetingTitle}</p>
           </div>
           <button onClick={onClose} className="flex-shrink-0 text-recall-textMuted hover:text-recall-text">
@@ -91,7 +93,7 @@ export default function MeetingAttendeesModal({
         </div>
 
         {isLoading ? (
-          <p className="text-base text-recall-textMuted">불러오는 중...</p>
+          <p className="text-base text-recall-textMuted">{t.common_loading}</p>
         ) : (
           (() => {
             const allMembers = members ?? [];
@@ -125,10 +127,10 @@ export default function MeetingAttendeesModal({
               <div className="max-h-80 space-y-3 overflow-y-auto">
                 <div>
                   <p className="mb-1 px-0.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                    시작 시 참석자
+                    {t.meeting_minutes_attendees_initial}
                   </p>
                   {initialMembers.length === 0 ? (
-                    <p className="px-0.5 text-xs text-recall-textMuted">지정된 참석자가 없습니다.</p>
+                    <p className="px-0.5 text-xs text-recall-textMuted">{t.meeting_minutes_attendees_none}</p>
                   ) : (
                     <div className="space-y-1">{initialMembers.map((m) => renderRow(m, true))}</div>
                   )}
@@ -137,7 +139,7 @@ export default function MeetingAttendeesModal({
                 {addedMembers.length > 0 && (
                   <div>
                     <p className="mb-1 px-0.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                      새로 추가한 참석자
+                      {t.meeting_attendees_added_new}
                     </p>
                     <div className="space-y-1">{addedMembers.map((m) => renderRow(m, true))}</div>
                   </div>
@@ -145,10 +147,10 @@ export default function MeetingAttendeesModal({
 
                 <div>
                   <p className="mb-1 px-0.5 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                    팀원 추가
+                    {t.meeting_attendees_add_section}
                   </p>
                   {pickableMembers.length === 0 ? (
-                    <p className="px-0.5 text-xs text-recall-textMuted">추가할 수 있는 팀원이 없습니다.</p>
+                    <p className="px-0.5 text-xs text-recall-textMuted">{t.meeting_attendees_no_addable}</p>
                   ) : (
                     <div className="space-y-1">{pickableMembers.map((m) => renderRow(m, false))}</div>
                   )}
@@ -167,7 +169,7 @@ export default function MeetingAttendeesModal({
             disabled={isSaving}
             className="rounded-lg border border-recall-border px-3.5 py-2 text-sm text-recall-textMuted hover:bg-white/5 disabled:opacity-50"
           >
-            취소
+            {t.task_cancel}
           </button>
           <button
             type="button"
@@ -175,7 +177,7 @@ export default function MeetingAttendeesModal({
             disabled={isSaving || isLoading}
             className="rounded-lg bg-recall-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            {isSaving ? "저장 중..." : "저장"}
+            {isSaving ? t.meeting_export_saving : t.task_save}
           </button>
         </div>
       </div>

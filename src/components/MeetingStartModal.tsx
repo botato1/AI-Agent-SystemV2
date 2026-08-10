@@ -1,27 +1,29 @@
 import { useEffect, useState } from "react";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
+import { getVoiceProfileListApi } from "../services/voice";
 import { RecordingMode } from "../services/meeting";
-import { CloseIcon, ChevronDownIcon, CheckIcon } from "./icons";
+import { CloseIcon, ChevronDownIcon, CheckIcon, MicIcon } from "./icons";
 
 interface MeetingStartModalProps {
   workspaceId: string;
   defaultTitle: string;
   onClose: () => void;
   onStart: (title: string, attendeeIds: string[], location?: string, recordingMode?: RecordingMode) => void;
+  t: any;
 }
 
-function generatePrettyDefaultTitle(): string {
+function generatePrettyDefaultTitle(t: any): string {
   const now = new Date();
   const month = now.getMonth() + 1;
   const date = now.getDate();
   const hours = now.getHours();
   const minutes = now.getMinutes();
 
-  const timePeriod = hours < 12 ? "오전" : "오후";
+  const timePeriod = hours < 12 ? t.meeting_am : t.meeting_pm;
   const displayHours = hours % 12 === 0 ? 12 : hours % 12;
   const displayMinutes = String(minutes).padStart(2, "0");
 
-  return `${month}월 ${date}일 ${timePeriod} ${displayHours}:${displayMinutes} 회의`;
+  return t.meeting_default_pretty_title(month, date, timePeriod, displayHours, displayMinutes);
 }
 
 export default function MeetingStartModal({
@@ -29,13 +31,15 @@ export default function MeetingStartModal({
   defaultTitle,
   onClose,
   onStart,
+  t,
 }: MeetingStartModalProps) {
-  const [title, setTitle] = useState(generatePrettyDefaultTitle);
+  const [title, setTitle] = useState(() => generatePrettyDefaultTitle(t));
   const [location, setLocation] = useState("");
   const [recordingMode, setRecordingMode] = useState<RecordingMode>("single_device");
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  
+  const [voiceRegisteredNames, setVoiceRegisteredNames] = useState<Set<string>>(new Set());
+
   // 드롭다운 및 검색 상태
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -53,6 +57,27 @@ export default function MeetingStartModal({
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // 목소리 등록된 사람 표시용 - STT 서버에 등록된 화자 이름 전체 목록을 받아서,
+  // 워크스페이스 멤버 이름과 매칭되는 사람 옆에 마이크 아이콘을 붙여준다.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadVoiceNames() {
+      const res = await getVoiceProfileListApi();
+      if (!cancelled && res.status === "success") {
+        setVoiceRegisteredNames(new Set(res.names.map((n) => n.trim())));
+      }
+    }
+    loadVoiceNames();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function isVoiceRegistered(member: WorkspaceMemberInfo): boolean {
+    const name = (member.display_name || member.username).trim();
+    return voiceRegisteredNames.has(name);
+  }
 
   function toggleMember(userId: string) {
     setSelectedIds((prev) => {
@@ -92,7 +117,7 @@ export default function MeetingStartModal({
       >
         {/* 모달 헤더 */}
         <div className="mb-5 flex items-center justify-between border-b border-recall-border pb-3">
-          <p className="text-lg font-bold text-recall-text">새 회의 시작</p>
+          <p className="text-lg font-bold text-recall-text">{t.meeting_start_modal_title}</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text transition">
             <CloseIcon size={18} />
           </button>
@@ -101,14 +126,14 @@ export default function MeetingStartModal({
         {/* 1. 회의 제목 입력 */}
         <div className="mb-5">
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-            회의 제목 <span className="text-recall-danger">*</span>
+            {t.meeting_title_field_label} <span className="text-recall-danger">*</span>
           </label>
           <input
             autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            placeholder="회의 제목을 입력하세요"
+            placeholder={t.meeting_title_input_placeholder}
             className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text font-medium outline-none focus:border-recall-accent transition"
           />
         </div>
@@ -116,13 +141,13 @@ export default function MeetingStartModal({
         {/* 1-1. 회의 장소 입력 (선택 항목이라 마커 없음, 필수 항목만 * 표시) */}
         <div className="mb-5">
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-            장소
+            {t.meeting_minutes_location_label}
           </label>
           <input
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            placeholder="예: 3층 회의실, 온라인 등"
+            placeholder={t.meeting_location_placeholder}
             className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text font-medium outline-none focus:border-recall-accent transition"
           />
         </div>
@@ -130,7 +155,7 @@ export default function MeetingStartModal({
         {/* 1-2. 녹음 방식 선택 */}
         <div className="mb-5">
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-            녹음 방식
+            {t.meeting_recording_mode_label}
           </label>
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -142,9 +167,9 @@ export default function MeetingStartModal({
                   : "border-recall-border hover:bg-white/5"
               }`}
             >
-              <p className="text-sm font-semibold text-recall-text">한 공간에서</p>
+              <p className="text-sm font-semibold text-recall-text">{t.meeting_mode_single_title}</p>
               <p className="mt-0.5 text-[11px] text-recall-textMuted leading-relaxed">
-                노트북 한 대로 녹음합니다. 목소리를 구분해 누가 말했는지 자동으로 나눠요.
+                {t.meeting_mode_single_desc}
               </p>
             </button>
             <button
@@ -156,17 +181,17 @@ export default function MeetingStartModal({
                   : "border-recall-border hover:bg-white/5"
               }`}
             >
-              <p className="text-sm font-semibold text-recall-text">각자 PC에서</p>
+              <p className="text-sm font-semibold text-recall-text">{t.meeting_mode_individual_title}</p>
               <p className="mt-0.5 text-[11px] text-recall-textMuted leading-relaxed">
-                각자 PC에서 접속해 통화하듯 진행합니다. 이름이 이미 정해져 있어 화자가 섞이지 않아요.
+                {t.meeting_mode_individual_desc}
               </p>
             </button>
           </div>
 
           {recordingMode === "single_device" && (
             <p className="mt-2 rounded-lg bg-white/5 px-3 py-2 text-[11px] leading-relaxed text-recall-textMuted">
-              프로필에서 <span className="font-medium text-recall-text">목소리를 등록해둔 워크스페이스 멤버</span>는
-              화자가 자동으로 실제 이름으로 표시돼요. (아래에서 참석 팀원을 지정하면 그 사람들 위주로 먼저 찾아요)
+              {t.meeting_voice_hint_prefix} <span className="font-medium text-recall-text">{t.meeting_voice_hint_bold}</span>
+              {t.meeting_voice_hint_suffix}
             </p>
           )}
         </div>
@@ -174,7 +199,7 @@ export default function MeetingStartModal({
         {/* 2. 팀원 선택 영역 (아코디언 방식 - 버튼들을 아래로 밀어냄) */}
         <div className="mb-5">
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-            참석 팀원 선택
+            {t.meeting_select_attendees_label}
           </label>
 
           <button
@@ -182,7 +207,7 @@ export default function MeetingStartModal({
             onClick={() => setIsDropdownOpen((prev) => !prev)}
             className="flex w-full items-center justify-between rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text hover:border-recall-accent/60 transition"
           >
-            <span className="text-recall-textMuted">팀원을 선택해 주세요...</span>
+            <span className="text-recall-textMuted">{t.meeting_select_attendees_placeholder}</span>
             <ChevronDownIcon size={16} className={`text-recall-textMuted transition-transform ${isDropdownOpen ? "rotate-180" : ""}`} />
           </button>
 
@@ -195,7 +220,7 @@ export default function MeetingStartModal({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="팀원 이름 검색..."
+                  placeholder={t.meeting_search_members_placeholder}
                   className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-3 py-1.5 text-xs text-recall-text outline-none focus:border-recall-accent"
                 />
               </div>
@@ -203,10 +228,10 @@ export default function MeetingStartModal({
               {/* 약 2명 높이(max-h-24)로 제한하여 콤팩트하게 스크롤 제공 */}
               <div className="max-h-24 overflow-y-auto p-1.5 space-y-0.5">
                 {members === null ? (
-                  <p className="p-2 text-center text-xs text-recall-textMuted">불러오는 중...</p>
+                  <p className="p-2 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
                 ) : filteredMembers.length === 0 ? (
                   <p className="p-2 text-center text-xs text-recall-textMuted">
-                    {searchQuery ? "검색 결과가 없습니다." : "선택 가능한 팀원이 없습니다."}
+                    {searchQuery ? t.meeting_no_search_results : t.meeting_no_selectable_members}
                   </p>
                 ) : (
                   filteredMembers.map((m) => {
@@ -219,7 +244,12 @@ export default function MeetingStartModal({
                         onClick={() => toggleMember(m.user_id)}
                         className="flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-sm hover:bg-white/5 transition"
                       >
-                        <span className="font-medium text-recall-text">{name}</span>
+                        <span className="flex items-center gap-1.5 font-medium text-recall-text">
+                          {name}
+                          {isVoiceRegistered(m) && (
+                            <MicIcon size={12} className="flex-shrink-0 text-recall-accent" />
+                          )}
+                        </span>
                         {isSelected && (
                           <CheckIcon size={16} className="text-recall-accent flex-shrink-0" />
                         )}
@@ -242,11 +272,16 @@ export default function MeetingStartModal({
                     className="inline-flex items-center gap-1.5 rounded-full border border-recall-border bg-recall-accent/10 px-2.5 py-1 text-xs font-medium text-recall-text"
                   >
                     <span>{name}</span>
+                    {isVoiceRegistered(m) && (
+                      <span title={t.meeting_voice_registered_tooltip}>
+                        <MicIcon size={11} className="flex-shrink-0 text-recall-accent" />
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeMember(m.user_id)}
                       className="text-recall-textMuted hover:text-recall-danger transition"
-                      title="제거"
+                      title={t.meeting_remove_chip}
                     >
                       <CloseIcon size={12} />
                     </button>
@@ -264,7 +299,7 @@ export default function MeetingStartModal({
             onClick={onClose}
             className="rounded-xl border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
           >
-            취소
+            {t.task_cancel}
           </button>
           <button
             type="button"
@@ -272,7 +307,7 @@ export default function MeetingStartModal({
             disabled={!title.trim()}
             className="rounded-xl bg-recall-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition shadow-md shadow-recall-accent/20"
           >
-            회의 시작
+            {t.meeting_start_btn}
           </button>
         </div>
       </div>

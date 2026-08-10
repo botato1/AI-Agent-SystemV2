@@ -5,11 +5,13 @@ import { validatePassword } from "../data/passwordPolicy";
 interface PasswordResetConfirmViewProps {
   resetToken: string; // URL 쿼리 파라미터 등에서 추출한 토큰
   onSuccess: () => void; // 성공 시 로그인 화면으로 이동
+  t: any;
 }
 
 export default function PasswordResetConfirmView({
   resetToken,
   onSuccess,
+  t,
 }: PasswordResetConfirmViewProps) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -22,7 +24,7 @@ export default function PasswordResetConfirmView({
     setError(null);
 
     if (!newPassword) {
-      setError("새 비밀번호를 입력해 주세요.");
+      setError(t.profile_new_password_required);
       return;
     }
 
@@ -33,7 +35,7 @@ export default function PasswordResetConfirmView({
     }
 
     if (newPassword !== confirmPassword) {
-      setError("비밀번호 확인이 일치하지 않습니다.");
+      setError(t.reset_confirm_mismatch);
       return;
     }
 
@@ -56,33 +58,33 @@ export default function PasswordResetConfirmView({
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-recall-bg p-4 text-recall-text">
       <div className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bgSoft p-6 shadow-lg">
-        <h1 className="mb-1 text-xl font-semibold">새 비밀번호 설정</h1>
+        <h1 className="mb-1 text-xl font-semibold">{t.reset_confirm_title}</h1>
         <p className="mb-5 text-sm text-recall-textMuted">
-          새로 사용할 비밀번호를 입력해 주세요.
+          {t.reset_confirm_desc}
         </p>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_password_new}</label>
             <input
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="새 비밀번호 입력"
+              placeholder={t.profile_password_new_placeholder}
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:border-recall-accent focus:outline-none"
             />
             <p className="mt-1 text-xs text-recall-textMuted">
-              8자 이상, 대문자/소문자/숫자/특수문자 중 2종류 이상 조합
+              {t.profile_password_policy_hint}
             </p>
           </div>
 
           <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">새 비밀번호 확인</label>
+            <label className="mb-1 block text-sm text-recall-textMuted">{t.profile_password_confirm}</label>
             <input
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="새 비밀번호 다시 입력"
+              placeholder={t.profile_password_confirm_placeholder}
               className="w-full rounded-lg border border-recall-border bg-transparent px-3 py-2 text-base focus:border-recall-accent focus:outline-none"
             />
           </div>
@@ -95,7 +97,7 @@ export default function PasswordResetConfirmView({
             disabled={isSubmitting}
             className="mt-3 w-full rounded-lg bg-recall-accent py-2 text-base font-medium text-white hover:opacity-90 disabled:opacity-50 transition"
           >
-            {isSubmitting ? "변경 중..." : "비밀번호 변경하기"}
+            {isSubmitting ? t.reset_confirm_submitting : t.reset_confirm_submit}
           </button>
         </form>
       </div>

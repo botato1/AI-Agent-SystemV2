@@ -76,6 +76,8 @@ export default function DocumentOriginalViewer({ workspaceId, documentId, docume
 
   const isImage = contentType.startsWith("image/");
   const isPdf = contentType.includes("pdf") || downloadFilename.toLowerCase().endsWith(".pdf");
+  // 이미지/PDF 외의 파일(docx, hwpx 등)은 브라우저가 직접 렌더링할 수 없어서 iframe에 넣으면
+  // 미리보기 대신 다운로드 팝업만 뜬다 - 그런 형식은 미리보기 없이 다운로드 안내만 보여준다.
 
   // PDF의 경우 툴바/네비게이션 패널을 숨기는 파라미터 추가
   const pdfViewUrl = isPdf ? `${fileUrl}#toolbar=0&navpanes=0` : fileUrl;
@@ -104,13 +106,19 @@ export default function DocumentOriginalViewer({ workspaceId, documentId, docume
             alt={downloadFilename}
             className="max-h-full max-w-full object-contain rounded shadow-sm"
           />
-        ) : (
-          /* PDF 및 문서 파일의 경우 브라우저 툴바 없이 깔끔하게 표시 */
+        ) : isPdf ? (
+          /* PDF는 브라우저 툴바 없이 깔끔하게 표시 */
           <iframe
             src={pdfViewUrl}
             title={downloadFilename}
             className="h-full w-full rounded border-0 bg-white"
           />
+        ) : (
+          <div className="flex flex-col items-center gap-2 py-12 text-center text-recall-textMuted">
+            <DocumentIcon size={28} className="text-recall-textMuted/60" />
+            <p className="text-sm">이 파일 형식은 브라우저에서 미리보기를 지원하지 않아요.</p>
+            <p className="text-xs text-recall-textMuted/70">위의 "원본 다운로드" 버튼으로 받아서 확인해 주세요.</p>
+          </div>
         )}
       </div>
     </div>

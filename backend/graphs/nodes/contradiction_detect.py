@@ -12,7 +12,7 @@ import uuid
 
 import httpx
 
-from backend.db.crud import content_chunk_crud, contradiction_crud
+from backend.db.crud import content_chunk_crud, contradiction_crud, file_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.contradiction_state import (
     ContradictionState,
@@ -38,6 +38,12 @@ CONFIDENCE_THRESHOLD = 0.6
 # (무관한 문서 조각이 어쩌다 confidence threshold를 넘겨 오탐이 나는 것을 원천 차단.
 #  rag_service.py의 실측 기준 "관련있음 0.6~, 무관 0.4 미만"과 동일한 값 사용.)
 RELEVANCE_THRESHOLD = 0.4
+
+# [수정] 문서-발화 모순 판단을 일단 끈다 - decision_judgment.judge() 하나로 판단을
+# 통일하기로 함 (document_judgment.py에서도 같은 이유로 이미 판단 로직을 제거했고,
+# 이 노드만 아직 같은 일을 하고 있었음 - 승주 리뷰 3번 항목). 코드/로직은 그대로
+# 남겨두고 진입점만 막는다 - 다시 켤 때는 이 플래그만 True로.
+DOCUMENT_CONTRADICTION_ENABLED = False
 
 _JUDGE_PROMPT = """당신은 팀 문서와 회의/채팅 발언 사이의 모순을 판단하는 검토자입니다.
 
@@ -111,6 +117,17 @@ def _judge_contradiction(statement: str, reference: str) -> dict:
 
 
 def contradiction_detect_node(state: ContradictionState) -> dict:
+    if not DOCUMENT_CONTRADICTION_ENABLED:
+        # 비활성화 상태 - 호출부(meeting_ws_router.py, meeting_service.py)가 보는
+        # 반환 모양은 "후보 없음"과 동일하게 맞춰서, 이 노드를 끈 것 때문에 호출부가
+        # 별도 분기를 타지 않게 한다.
+        return {
+            "content_chunk_candidates": [],
+            "llm_judgments": [],
+            "detected_contradictions": [],
+            "saved_contradiction_ids": [],
+        }
+
     workspace_id = state["workspace_id"]
     category_id = state["category_id"]
     statement_text = state["statement_text"]
@@ -163,6 +180,15 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
             chunk = content_chunk_crud.get_chunk_by_chroma_id(db, candidate["id"])
             if not chunk:
                 # ChromaDB엔 있는데 Postgres 쪽 원본 청크가 없는 경우(고아 데이터) — 스킵
+                continue
+
+            # 회의 요약 문서(meeting_service.save_summary_as_document)는 방금 그 회의에서
+            # decision_judgment.py가 이미 실시간으로 판정한 변경사항을 그대로 담고 있다.
+            # 이 문서를 여기서 다시 DOCUMENT_COLLECTION으로 스캔하면, 같은 변경이 정보가
+            # 훨씬 부실한(결정 제목/사유/Case 타입 없이 severity만 있는) 카드로 중복
+            # 생성된다 (가동현 리포트). 원본 업로드 문서만 이 노드의 대상으로 삼는다.
+            workspace_file = file_crud.get_file(db, chunk.file_id)
+            if workspace_file and workspace_file.origin_type == "meeting_summary":
                 continue
 
             judgment = _judge_contradiction(statement_text, chunk.chunk_text)

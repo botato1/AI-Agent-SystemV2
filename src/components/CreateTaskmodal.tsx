@@ -16,7 +16,8 @@ interface FormState {
   task: string;
   description: string;
   assignee: string;
-  deadline: string;
+  deadlineDate: string;
+  deadlineTime: string;
   priority: TaskPriority;
   status: TaskStatus;
 }
@@ -65,7 +66,8 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
     task: "",
     description: "",
     assignee: "",
-    deadline: "",
+    deadlineDate: "",
+    deadlineTime: "",
     priority: "medium",
     status: initialStatus, // 👈 전달된 컬럼 상태로 설정
   };
@@ -116,11 +118,13 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
       return;
     }
 
+    const deadline = form.deadlineDate ? `${form.deadlineDate}T${form.deadlineTime || "09:00"}` : null;
+
     onCreate({
       task: form.task.trim(),
       description: form.description.trim() || null,
       assignee: form.assignee.trim() || null,
-      deadline: form.deadline.trim() || null,
+      deadline,
       status: form.status,
       priority: form.priority,
     });
@@ -217,29 +221,42 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
             )}
           </div>
 
-          {/* 마감일 */}
-          <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_deadline}</label>
-            <div
-              onClick={handleOpenDatePicker}
-              className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
-            >
-              <span className={form.deadline ? "text-recall-text" : "text-recall-textMuted"}>
-                {form.deadline
-                  ? formatDisplayDate(form.deadline, isKo)
-                  : isKo
-                  ? "월-일 선택"
-                  : "Select YYYY-MM-DD"}
-              </span>
+          {/* 마감일 (날짜 + 시간) */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_deadline}</label>
+              <div
+                onClick={handleOpenDatePicker}
+                className="relative w-full cursor-pointer rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm min-h-[34px] flex items-center justify-between hover:border-recall-accent transition"
+              >
+                <span className={form.deadlineDate ? "text-recall-text" : "text-recall-textMuted"}>
+                  {form.deadlineDate
+                    ? formatDisplayDate(form.deadlineDate, isKo)
+                    : isKo
+                    ? "월-일 선택"
+                    : "Select YYYY-MM-DD"}
+                </span>
 
-              <CalendarIcon className="text-recall-textMuted flex-shrink-0" size={14} />
+                <CalendarIcon className="text-recall-textMuted flex-shrink-0" size={14} />
 
+                <input
+                  ref={dateInputRef}
+                  type="date"
+                  value={form.deadlineDate}
+                  onChange={(e) => handleChange("deadlineDate", e.target.value)}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer pointer-events-auto"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm text-recall-textMuted">시간</label>
               <input
-                ref={dateInputRef}
-                type="date"
-                value={form.deadline}
-                onChange={(e) => handleChange("deadline", e.target.value)}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer pointer-events-auto"
+                type="time"
+                value={form.deadlineTime}
+                disabled={!form.deadlineDate}
+                onChange={(e) => handleChange("deadlineTime", e.target.value)}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent transition disabled:opacity-50"
               />
             </div>
           </div>

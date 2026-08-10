@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MicIcon, CheckIcon, WarningIcon, ChevronRightIcon } from "./icons";
+import { MicIcon, CheckIcon, AssistIcon, ChevronRightIcon } from "./icons";
 
 interface WelcomeOnboardingProps {
   userName: string;
@@ -10,7 +10,7 @@ interface WelcomeOnboardingProps {
 const TUTORIAL_STEPS = [
   { icon: MicIcon, titleKey: "onboarding_step1_title", bodyKey: "onboarding_step1_body" },
   { icon: CheckIcon, titleKey: "onboarding_step2_title", bodyKey: "onboarding_step2_body" },
-  { icon: WarningIcon, titleKey: "onboarding_step3_title", bodyKey: "onboarding_step3_body" },
+  { icon: AssistIcon, titleKey: "onboarding_step3_title", bodyKey: "onboarding_step3_body" },
 ] as const;
 
 export default function WelcomeOnboarding({ userName, onDone, t }: WelcomeOnboardingProps) {

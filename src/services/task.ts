@@ -3,7 +3,7 @@ import { authFetch } from "./auth";
 
 // --- 타입 정의 ---
 
-export type BackendTaskStatus = "open" | "in_progress" | "done" | "cancelled";
+export type BackendTaskStatus = "open" | "in_progress" | "done" | "cancelled" | "suggested";
 export type TaskPriority = "low" | "medium" | "high";
 
 export interface BackendTask {
@@ -388,6 +388,66 @@ export async function updateTaskPriorityApi(
     return {
       status: "error",
       task: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 6-1. 회의에서 추출된 제안된 할 일 목록 조회 API
+ * (GET /api/workspaces/{workspace_id}/meetings/{meeting_id}/suggested-tasks)
+ * status가 "suggested"인 할 일은 일반 할 일 목록 조회에선 제외되므로 이 API로 따로 조회한다.
+ * 승인은 기존 상태 변경 API(updateTaskStatusApi)로 "open"으로 바꾸면 되고, 거절은 삭제하면 된다.
+ */
+export async function getSuggestedTasksApi(
+  workspaceId: string,
+  meetingId: string
+): Promise<GetTaskListResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      tasks: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/suggested-tasks`,
+      { method: "GET" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "제안된 할 일을 불러오지 못했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 회의입니다.";
+
+      return {
+        status: "error",
+        tasks: [],
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      tasks: data.tasks || [],
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getSuggestedTasksApi error:", error);
+    return {
+      status: "error",
+      tasks: [],
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

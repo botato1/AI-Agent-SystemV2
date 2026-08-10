@@ -15,6 +15,7 @@ from backend.routers.auth_router import router as auth_router
 from backend.routers.workspace_router import router as workspace_router
 from backend.routers.meeting_router import router as meeting_router, decisions_router as decisions_router
 from backend.routers.meeting_ws_router import router as meeting_ws_router
+from backend.routers.room_ws_router import router as room_ws_router
 from backend.routers.contradiction_router import router as contradiction_router
 from backend.routers.worktree_router import router as worktree_router
 from backend.routers.ai_chat_router import router as ai_chat_router, standalone_router as ai_chat_standalone_router
@@ -60,6 +61,7 @@ app.include_router(workspace_router)
 app.include_router(meeting_router)
 app.include_router(decisions_router)
 app.include_router(meeting_ws_router)
+app.include_router(room_ws_router)
 app.include_router(contradiction_router)
 app.include_router(worktree_router)
 app.include_router(ai_chat_router)

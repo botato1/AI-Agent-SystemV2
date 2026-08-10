@@ -11,6 +11,8 @@ import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import AuthView from "./components/AuthView";
 import PasswordResetConfirmView from "./components/PasswordResetConfirmView";
+import { ToastContainer } from "./lib/toast";
+import { ConfirmDialogContainer } from "./lib/confirm";
 
 import { Channel, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
@@ -23,6 +25,7 @@ import {
   getProfileApi,
   logoutApi,
   uploadProfileImageApi,
+  updateProfileApi,
   resolveAvatarUrl,
   deleteAccountApi,
   DeleteAccountResponse,
@@ -98,6 +101,16 @@ export default function App() {
     type: "placeholder",
     key: "home",
   });
+  // 홈 화면 "최근 회의록"에서 클릭한 회의를 음성 회의 화면에서 바로 선택된 상태로 열기 위한 값
+  const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
+  // 모순/회의 도움 카드의 "결정 참조" 배지를 눌렀을 때 대시보드에서 그 결정사항을 바로 펼쳐
+  // 보여주기 위한 값
+  const [pendingDecisionId, setPendingDecisionId] = useState<string | null>(null);
+
+  function openDecision(decisionId: string) {
+    setPendingDecisionId(decisionId);
+    setSelection({ type: "placeholder", key: "dashboard" });
+  }
 
   const [showProfile, setShowProfile] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -116,7 +129,9 @@ export default function App() {
 
       if (profileResult.status === "success" && profileResult.user) {
         const fixedAvatarColor =
-          loadAvatarColor(profileResult.user.username) || hashAvatarColor(profileResult.user.username);
+          profileResult.user.avatar_color ||
+          loadAvatarColor(profileResult.user.username) ||
+          hashAvatarColor(profileResult.user.username);
         saveAvatarColor(profileResult.user.username, fixedAvatarColor);
 
         setCurrentUser({
@@ -230,6 +245,13 @@ export default function App() {
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
   const activeRecorderName = voiceMeetingStatus ? liveMeeting.startedByName : null;
 
+  // 회의 화자 인식은 speaker_user_id 없이 이름 문자열로만 오기 때문에(백엔드 미구현),
+  // 워크스페이스 멤버 이름 -> 프로필 사진 맵으로 우회해서 찾는다.
+  const avatarUrlByName: Record<string, string | null> = {};
+  Object.entries(memberNameById).forEach(([userId, name]) => {
+    avatarUrlByName[name] = memberAvatarById[userId] ?? null;
+  });
+
   const realTasks = useRealTasks(currentWorkspaceId, memberNameById);
 
   // 회원가입
@@ -276,6 +298,11 @@ export default function App() {
       if (!prev) return prev;
       saveAvatarColor(prev.username, color);
       return { ...prev, avatarColor: color, avatarImageUrl: null };
+    });
+    updateProfileApi({ avatarColor: color }).then((res) => {
+      if (res.status !== "success") {
+        console.error("아바타 색상 서버 저장 실패:", res.message);
+      }
     });
   }
 
@@ -435,6 +462,7 @@ export default function App() {
           window.history.replaceState(null, "", window.location.pathname);
           setPasswordResetToken(null);
         }}
+        t={t}
       />
     );
   }
@@ -442,7 +470,7 @@ export default function App() {
   if (isAuthChecking) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
-        로그인 정보를 확인 중입니다...
+        {t.auth_checking_login}
       </div>
     );
   }
@@ -454,6 +482,7 @@ export default function App() {
         onSignUp={handleSignUp}
         onLogIn={handleLogIn}
         inviteToken={inviteToken}
+        t={t}
       />
     );
   }
@@ -461,7 +490,7 @@ export default function App() {
   if (!workspacesLoaded) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-recall-bg text-recall-textMuted text-base">
-        워크스페이스 정보를 불러오는 중입니다...
+        {t.auth_loading_workspace}
       </div>
     );
   }
@@ -483,6 +512,8 @@ export default function App() {
 
   return (
     <div key={currentUser.id} className="flex h-screen w-screen overflow-hidden">
+      <ToastContainer />
+      <ConfirmDialogContainer />
       <Sidebar
         workspaces={workspaces}
         currentWorkspaceId={currentWorkspaceId}
@@ -522,6 +553,7 @@ export default function App() {
           memberNameById={memberNameById}
           memberAvatarById={memberAvatarById}
           activeRecorderName={activeRecorderName}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "home" ? (
@@ -529,11 +561,20 @@ export default function App() {
           workspaceId={currentWorkspaceId}
           userId={currentUser.id}
           userName={currentUser.name}
+          tasks={realTasks.tasks}
+          onCreateTask={realTasks.createTask}
+          onUpdateTask={realTasks.updateTask}
+          onDeleteTask={realTasks.removeTask}
           onNavigate={(key) => setSelection({ type: "placeholder", key })}
+          onOpenMeeting={(meetingId) => {
+            setPendingMeetingId(meetingId);
+            setSelection({ type: "placeholder", key: "voiceMeeting" });
+          }}
           onBeginScheduledMeeting={(meetingId) => {
             liveMeeting.beginScheduled(meetingId);
             setSelection({ type: "placeholder", key: "voiceMeeting" });
           }}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "aiChat" ? (
@@ -541,21 +582,33 @@ export default function App() {
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView
           workspaceId={currentWorkspaceId}
+          avatarUrlByName={avatarUrlByName}
           status={liveMeeting.status}
           meeting={liveMeeting.meeting}
           segments={liveMeeting.segments}
           partial={liveMeeting.partial}
           contradictionAlerts={liveMeeting.contradictionAlerts}
+          onClearContradictionAlert={liveMeeting.clearContradictionAlert}
+          audioQualityAlerts={liveMeeting.audioQualityAlerts}
+          onClearAudioQualityAlert={liveMeeting.clearAudioQualityAlert}
+          agendaReminder={liveMeeting.agendaReminder}
+          onClearAgendaReminder={liveMeeting.clearAgendaReminder}
           errorMessage={liveMeeting.errorMessage}
           joinableMeeting={liveMeeting.joinableMeeting}
+          isViewer={liveMeeting.isViewer}
           onStart={liveMeeting.start}
           onJoin={liveMeeting.join}
           onPause={liveMeeting.pause}
           onResume={liveMeeting.resume}
           onStop={liveMeeting.stop}
+          onLeave={liveMeeting.leave}
           onReset={liveMeeting.reset}
           onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
+          onEditLiveSegment={liveMeeting.editSegmentContent}
           onRenameLive={liveMeeting.renameMeeting}
+          initialMeetingId={pendingMeetingId}
+          onInitialMeetingIdConsumed={() => setPendingMeetingId(null)}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "dashboard" ? (
@@ -568,6 +621,8 @@ export default function App() {
           onStatusChange={realTasks.changeStatus}
           onPriorityChange={realTasks.changePriority}
           onDeleteTask={realTasks.removeTask}
+          initialDecisionId={pendingDecisionId}
+          onInitialDecisionIdConsumed={() => setPendingDecisionId(null)}
           t={t}
         />
       ) : selection.key === "docAnalysis" ? (

@@ -13,21 +13,40 @@ import {
   updateMeetingInfoApi,
   deleteMeetingApi,
 } from "../services/meeting";
-import { PlaceholderKey } from "../types";
-import { MicIcon, WarningIcon, CloseIcon, TrashIcon, PencilIcon, CheckIcon, PersonIcon, PlayIcon } from "./icons";
+import { PlaceholderKey, Task } from "../types";
+import {
+  MicIcon,
+  WarningIcon,
+  CloseIcon,
+  TrashIcon,
+  PencilIcon,
+  CheckIcon,
+  PersonIcon,
+  PlayIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from "./icons";
 import WelcomeOnboarding from "./WelcomeOnboarding";
 import MeetingSearchModal from "./MeetingSearchModal";
 import MeetingAttendeesModal from "./MeetingAttendeesModal";
 import MeetingExportModal from "./MeetingExportModal";
 import ManageMembersModal from "./ManageMembersModal";
 import InviteMemberModal from "./InviteMemberModal";
+import ContradictionCompareModal from "./ContradictionCompareModal";
+import DocumentPreviewModal from "./DocumentPreviewModal";
 
 interface HomeViewProps {
   workspaceId: string;
   userId: string;
   userName: string;
+  tasks: Task[];
+  onCreateTask: (input: Omit<Task, "id">) => void;
+  onUpdateTask: (task: Task) => void;
+  onDeleteTask: (id: string) => void;
   onNavigate: (key: PlaceholderKey) => void;
+  onOpenMeeting: (meetingId: string) => void;
   onBeginScheduledMeeting: (meetingId: string) => void;
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -40,37 +59,13 @@ interface UpcomingFormData {
   attendeeIds: string[];
 }
 
-interface LocalEvent {
-  id: string;
-  title: string;
-  date: string;
-  time: string;
-}
-
-type UpcomingKind = "meeting" | "memo";
+type UpcomingKind = "meeting" | "task";
 type UpcomingListItem =
   | { kind: "meeting"; sortKey: string; data: UpcomingMeeting }
-  | { kind: "memo"; sortKey: string; data: LocalEvent };
+  | { kind: "task"; sortKey: string; data: Task };
 
 function onboardingStorageKey(userId: string): string {
   return `onboarding_seen_${userId}`;
-}
-
-function localEventsStorageKey(workspaceId: string): string {
-  return `home_local_events_${workspaceId}`;
-}
-
-function loadLocalEvents(workspaceId: string): LocalEvent[] {
-  try {
-    const raw = localStorage.getItem(localEventsStorageKey(workspaceId));
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalEvents(workspaceId: string, items: LocalEvent[]) {
-  localStorage.setItem(localEventsStorageKey(workspaceId), JSON.stringify(items));
 }
 
 function formatShortDate(iso: string): string {
@@ -85,7 +80,7 @@ function formatDateTime(iso: string): string {
   ).padStart(2, "0")}`;
 }
 
-function getUpcomingDayLabel(iso: string): { label: string; isRelative: boolean } {
+function getUpcomingDayLabel(t: any, iso: string): { label: string; isRelative: boolean } {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -95,8 +90,8 @@ function getUpcomingDayLabel(iso: string): { label: string; isRelative: boolean 
   const diffTime = target.getTime() - today.getTime();
   const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) return { label: "오늘", isRelative: true };
-  if (diffDays === 1) return { label: "내일", isRelative: true };
+  if (diffDays === 0) return { label: t.home_day_today, isRelative: true };
+  if (diffDays === 1) return { label: t.home_day_tomorrow, isRelative: true };
 
   return { label: `${target.getMonth() + 1}/${target.getDate()}`, isRelative: false };
 }
@@ -125,20 +120,20 @@ function getThisWeekDateRange(): string {
   return `${monday.getMonth() + 1}/${monday.getDate()} - ${sunday.getMonth() + 1}/${sunday.getDate()}`;
 }
 
-function weatherLabel(code: number): string {
-  if (code === 0) return "맑음";
-  if (code <= 3) return "구름 조금";
-  if (code === 45 || code === 48) return "안개";
-  if (code <= 67 || (code >= 80 && code <= 82)) return "비";
-  if (code <= 77 || code === 85 || code === 86) return "눈";
-  if (code >= 95) return "뇌우";
+function weatherLabel(t: any, code: number): string {
+  if (code === 0) return t.home_weather_sunny;
+  if (code <= 3) return t.home_weather_partly_cloudy;
+  if (code === 45 || code === 48) return t.home_weather_fog;
+  if (code <= 67 || (code >= 80 && code <= 82)) return t.home_weather_rain;
+  if (code <= 77 || code === 85 || code === 86) return t.home_weather_snow;
+  if (code >= 95) return t.home_weather_thunderstorm;
   return "-";
 }
 
-function ClockAndWeatherWidget() {
+function ClockAndWeatherWidget({ t }: { t: any }) {
   const [now, setNow] = useState(new Date());
   const [weather, setWeather] = useState<{ temp: number; code: number } | null>(null);
-  const [locationName, setLocationName] = useState<string>("현재 위치");
+  const [locationName, setLocationName] = useState<string>(t.home_weather_current_location);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000 * 30);
@@ -157,11 +152,11 @@ function ClockAndWeatherWidget() {
           fetchLocationAndWeather(lat, lon);
         },
         () => {
-          fetchLocationAndWeather(36.3504, 127.3845, "대전");
+          fetchLocationAndWeather(36.3504, 127.3845, t.home_weather_default_city);
         }
       );
     } else {
-      fetchLocationAndWeather(36.3504, 127.3845, "대전");
+      fetchLocationAndWeather(36.3504, 127.3845, t.home_weather_default_city);
     }
 
     async function fetchLocationAndWeather(lat: number, lon: number, defaultName?: string) {
@@ -179,12 +174,12 @@ function ClockAndWeatherWidget() {
               geoData.address.province ||
               geoData.address.county ||
               geoData.address.town ||
-              "현재 위치";
+              t.home_weather_current_location;
             setLocationName(city);
           }
         }
       } catch {
-        if (!cancelled) setLocationName("현재 위치");
+        if (!cancelled) setLocationName(t.home_weather_current_location);
       }
 
       try {
@@ -225,12 +220,12 @@ function ClockAndWeatherWidget() {
           <div>
             <div className="flex items-baseline justify-end gap-1.5">
               <p className="text-xl font-bold text-recall-text">{weather.temp}°</p>
-              <span className="text-xs font-medium text-recall-textMuted">{weatherLabel(weather.code)}</span>
+              <span className="text-xs font-medium text-recall-textMuted">{weatherLabel(t, weather.code)}</span>
             </div>
             <p className="text-[11px] text-recall-textMuted mt-0.5 font-medium">📍 {locationName}</p>
           </div>
         ) : (
-          <p className="text-xs text-recall-textMuted">날씨 정보 로딩 중...</p>
+          <p className="text-xs text-recall-textMuted">{t.home_weather_loading}</p>
         )}
       </div>
     </div>
@@ -242,22 +237,25 @@ function UpcomingModal({
   editingItem,
   onClose,
   onSave,
+  t,
 }: {
   workspaceId: string;
-  editingItem?: { kind: "meeting"; data: UpcomingMeeting } | { kind: "memo"; data: LocalEvent } | null;
+  editingItem?: { kind: "meeting"; data: UpcomingMeeting } | { kind: "task"; data: Task } | null;
   onClose: () => void;
   onSave: (kind: UpcomingKind, data: UpcomingFormData) => void;
+  t: any;
 }) {
   const isEditing = !!editingItem;
   const editingMeeting = editingItem?.kind === "meeting" ? editingItem.data : null;
-  const editingMemo = editingItem?.kind === "memo" ? editingItem.data : null;
+  const editingTask = editingItem?.kind === "task" ? editingItem.data : null;
+  const editingTaskDeadline = editingTask?.deadline ? editingTask.deadline.split("T") : null;
 
   const [kind, setKind] = useState<UpcomingKind>(editingItem?.kind || "meeting");
-  const [title, setTitle] = useState(editingItem?.data.title || "");
+  const [title, setTitle] = useState(editingMeeting?.title || editingTask?.task || "");
   const [topic, setTopic] = useState(editingMeeting?.topic || "");
   const [location, setLocation] = useState(editingMeeting?.location || "");
-  const [date, setDate] = useState(editingMemo?.date || new Date().toISOString().slice(0, 10));
-  const [time, setTime] = useState(editingMemo?.time || "15:00");
+  const [date, setDate] = useState(editingTaskDeadline?.[0] || new Date().toISOString().slice(0, 10));
+  const [time, setTime] = useState(editingTaskDeadline?.[1] || "15:00");
 
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedAttendeeIds, setSelectedAttendeeIds] = useState<Set<string>>(new Set());
@@ -288,7 +286,7 @@ function UpcomingModal({
 
   function handleFormSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const needsDateTime = kind === "memo" || !isEditing;
+    const needsDateTime = kind === "task" || !isEditing;
     if (!title.trim() || (needsDateTime && (!date || !time))) return;
     onSave(kind, {
       title: title.trim(),
@@ -308,7 +306,7 @@ function UpcomingModal({
       >
         <div className="mb-5 flex items-center justify-between border-b border-recall-border pb-3">
           <p className="text-lg font-bold text-recall-text">
-            {isEditing ? "일정 수정" : "새 일정 추가"}
+            {isEditing ? t.home_upcoming_modal_edit_title : t.home_upcoming_modal_add_title}
           </p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text transition">
             <CloseIcon size={18} />
@@ -324,16 +322,16 @@ function UpcomingModal({
                 kind === "meeting" ? "bg-recall-accent text-white" : "text-recall-textMuted hover:text-recall-text"
               }`}
             >
-              회의 예약
+              {t.home_upcoming_kind_meeting}
             </button>
             <button
               type="button"
-              onClick={() => setKind("memo")}
+              onClick={() => setKind("task")}
               className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
-                kind === "memo" ? "bg-recall-accent text-white" : "text-recall-textMuted hover:text-recall-text"
+                kind === "task" ? "bg-recall-accent text-white" : "text-recall-textMuted hover:text-recall-text"
               }`}
             >
-              일반 일정
+              {t.home_upcoming_kind_task}
             </button>
           </div>
         )}
@@ -341,13 +339,13 @@ function UpcomingModal({
         <form onSubmit={handleFormSubmit} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-              제목 <span className="text-recall-danger">*</span>
+              {t.home_upcoming_field_title} <span className="text-recall-danger">*</span>
             </label>
             <input
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={kind === "meeting" ? "예: 프론트 UI 리뷰 회의" : "예: 발표 준비 마감일"}
+              placeholder={kind === "meeting" ? t.home_upcoming_placeholder_meeting : t.home_upcoming_placeholder_task}
               className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text outline-none focus:border-recall-accent transition font-medium"
             />
           </div>
@@ -356,23 +354,23 @@ function UpcomingModal({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-                  주제
+                  {t.home_upcoming_field_topic}
                 </label>
                 <input
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  placeholder="선택 입력"
+                  placeholder={t.home_upcoming_optional_placeholder}
                   className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3 py-2.5 text-xs text-recall-text outline-none focus:border-recall-accent transition"
                 />
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-                  장소
+                  {t.meeting_minutes_location_label}
                 </label>
                 <input
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  placeholder="선택 입력"
+                  placeholder={t.home_upcoming_optional_placeholder}
                   className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3 py-2.5 text-xs text-recall-text outline-none focus:border-recall-accent transition"
                 />
               </div>
@@ -381,13 +379,13 @@ function UpcomingModal({
 
           {kind === "meeting" && isEditing ? (
             <p className="rounded-xl border border-recall-border/60 bg-recall-bgSoft px-3.5 py-2.5 text-xs text-recall-textMuted">
-              예정 시각·참석자는 지금은 수정할 수 없어요. 바꾸려면 일정을 삭제하고 새로 추가해 주세요.
+              {t.home_upcoming_edit_notice}
             </p>
           ) : (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-                  날짜 선택
+                  {t.home_upcoming_field_date}
                 </label>
                 <input
                   type="date"
@@ -399,7 +397,7 @@ function UpcomingModal({
 
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-                  시간 선택
+                  {t.home_upcoming_field_time}
                 </label>
                 <input
                   type="time"
@@ -414,13 +412,13 @@ function UpcomingModal({
           {kind === "meeting" && !isEditing && (
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
-                참석 팀원
+                {t.home_upcoming_field_attendees}
               </label>
               <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-xl border border-recall-border bg-recall-bgSoft p-1.5">
                 {members === null ? (
-                  <p className="p-2 text-center text-xs text-recall-textMuted">불러오는 중...</p>
+                  <p className="p-2 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
                 ) : members.length === 0 ? (
-                  <p className="p-2 text-center text-xs text-recall-textMuted">팀원 목록이 없습니다.</p>
+                  <p className="p-2 text-center text-xs text-recall-textMuted">{t.home_upcoming_no_members}</p>
                 ) : (
                   members.map((m) => {
                     const name = m.display_name || m.username;
@@ -448,14 +446,14 @@ function UpcomingModal({
               onClick={onClose}
               className="rounded-xl border border-recall-border px-4 py-2 text-sm text-recall-textMuted hover:bg-white/5 transition"
             >
-              취소
+              {t.task_cancel}
             </button>
             <button
               type="submit"
               disabled={!title.trim()}
               className="rounded-xl bg-recall-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition shadow-md shadow-recall-accent/20"
             >
-              {isEditing ? "수정완료" : "일정 저장"}
+              {isEditing ? t.home_upcoming_save_edit : t.home_upcoming_save_new}
             </button>
           </div>
         </form>
@@ -468,10 +466,12 @@ function SelectExportMeetingModal({
   workspaceId,
   onClose,
   onSelect,
+  t,
 }: {
   workspaceId: string;
   onClose: () => void;
   onSelect: (meetingId: string) => void;
+  t: any;
 }) {
   const { recentMeetings, isLoading } = useRecentMeetings(workspaceId, 20);
 
@@ -482,16 +482,16 @@ function SelectExportMeetingModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between border-b border-recall-border pb-3">
-          <p className="text-lg font-bold text-recall-text">내보낼 회의 선택</p>
+          <p className="text-lg font-bold text-recall-text">{t.home_export_select_title}</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text transition">
             <CloseIcon size={18} />
           </button>
         </div>
 
         {isLoading ? (
-          <p className="py-8 text-center text-xs text-recall-textMuted">회의 목록을 불러오는 중...</p>
+          <p className="py-8 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
         ) : recentMeetings.length === 0 ? (
-          <p className="py-8 text-center text-xs text-recall-textMuted">내보낼 회의가 없습니다.</p>
+          <p className="py-8 text-center text-xs text-recall-textMuted">{t.home_export_select_empty}</p>
         ) : (
           <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
             {recentMeetings.map((m) => (
@@ -519,8 +519,14 @@ export default function HomeView({
   workspaceId,
   userId,
   userName,
+  tasks,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
   onNavigate,
+  onOpenMeeting,
   onBeginScheduledMeeting,
+  onOpenDecision,
   t,
 }: HomeViewProps) {
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
@@ -529,14 +535,34 @@ export default function HomeView({
 
   const { meetings } = useRealMeetings(workspaceId);
   const { recentMeetings, isLoading: isRecentLoading } = useRecentMeetings(workspaceId, 4);
-  const { summary: dashboardSummary } = useDashboardSummary(workspaceId);
-  const { contradictions: unresolvedContradictions } = useContradictions(workspaceId);
+  const { summary: dashboardSummary, reload: reloadDashboardSummary } = useDashboardSummary(workspaceId);
+  const {
+    contradictions: unresolvedContradictions,
+    resolve: resolveContradiction,
+    update: updateContradiction,
+  } = useContradictions(workspaceId);
+  // 화살표로 하나씩 넘겨보는 캐러셀 인덱스. 목록이 줄어들면(처리/삭제) 범위를 벗어날 수 있어서
+  // 항상 clampedReviewIndex를 통해서만 읽는다.
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [compareContradictionId, setCompareContradictionId] = useState<string | null>(null);
+  const [referenceDocPreview, setReferenceDocPreview] = useState<{ id: string; name: string } | null>(null);
+  const clampedReviewIndex =
+    unresolvedContradictions.length === 0 ? 0 : Math.min(reviewIndex, unresolvedContradictions.length - 1);
+  const visibleContradiction = unresolvedContradictions[clampedReviewIndex] ?? null;
+  const compareContradiction =
+    unresolvedContradictions.find((c) => c.id === compareContradictionId) ?? null;
+
+  function goToPrevReview() {
+    setReviewIndex(Math.max(0, clampedReviewIndex - 1));
+  }
+  function goToNextReview() {
+    setReviewIndex(Math.min(unresolvedContradictions.length - 1, clampedReviewIndex + 1));
+  }
 
   const [upcoming, setUpcoming] = useState<UpcomingMeeting[]>([]);
-  const [localEvents, setLocalEvents] = useState<LocalEvent[]>(() => loadLocalEvents(workspaceId));
   const [showUpcomingModal, setShowUpcomingModal] = useState(false);
   const [editingItem, setEditingItem] = useState<
-    { kind: "meeting"; data: UpcomingMeeting } | { kind: "memo"; data: LocalEvent } | null
+    { kind: "meeting"; data: UpcomingMeeting } | { kind: "task"; data: Task } | null
   >(null);
 
   const [showSearchModal, setShowSearchModal] = useState(false);
@@ -552,7 +578,6 @@ export default function HomeView({
 
   useEffect(() => {
     loadUpcoming();
-    setLocalEvents(loadLocalEvents(workspaceId));
   }, [workspaceId]);
 
   if (!hasSeenOnboarding) {
@@ -569,17 +594,20 @@ export default function HomeView({
   }
 
   async function handleSaveUpcoming(kind: UpcomingKind, data: UpcomingFormData) {
-    if (kind === "memo") {
-      let next: LocalEvent[];
-      if (editingItem?.kind === "memo") {
-        next = localEvents.map((e) =>
-          e.id === editingItem.data.id ? { ...e, title: data.title, date: data.date, time: data.time } : e
-        );
+    if (kind === "task") {
+      const deadline = `${data.date}T${data.time}`;
+      if (editingItem?.kind === "task") {
+        onUpdateTask({ ...editingItem.data, task: data.title, deadline });
       } else {
-        next = [...localEvents, { id: crypto.randomUUID(), title: data.title, date: data.date, time: data.time }];
+        onCreateTask({
+          task: data.title,
+          description: null,
+          assignee: null,
+          deadline,
+          status: "todo",
+          priority: "medium",
+        });
       }
-      setLocalEvents(next);
-      saveLocalEvents(workspaceId, next);
     } else if (editingItem?.kind === "meeting") {
       const res = await updateMeetingInfoApi(workspaceId, editingItem.data.id, {
         title: data.title,
@@ -612,10 +640,8 @@ export default function HomeView({
   }
 
   async function handleRemoveUpcoming(item: UpcomingListItem) {
-    if (item.kind === "memo") {
-      const next = localEvents.filter((e) => e.id !== item.data.id);
-      setLocalEvents(next);
-      saveLocalEvents(workspaceId, next);
+    if (item.kind === "task") {
+      onDeleteTask(item.data.id);
       return;
     }
     const res = await deleteMeetingApi(workspaceId, item.data.id);
@@ -631,10 +657,15 @@ export default function HomeView({
     onBeginScheduledMeeting(id);
   }
 
+  // 마감일이 지정돼 있고 아직 완료 안 된 할 일만 "예정된 회의" 목록에 같이 보여준다
+  const upcomingTasks = tasks.filter((t) => t.deadline && t.status !== "done");
+
   const upcomingListItems: UpcomingListItem[] = [
     ...upcoming.map((m): UpcomingListItem => ({ kind: "meeting", sortKey: m.scheduled_at, data: m })),
-    ...localEvents.map((e): UpcomingListItem => ({ kind: "memo", sortKey: `${e.date}T${e.time}`, data: e })),
-  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+    ...upcomingTasks.map((t): UpcomingListItem => ({ kind: "task", sortKey: t.deadline as string, data: t })),
+    // 회의(scheduled_at)는 UTC ISO 문자열, 할일(deadline)은 로컬 시간 문자열(Z 없음)이라
+    // 문자열 그대로 비교하면 형식이 달라 순서가 어긋난다 - 실제 시각(ms)으로 비교해야 한다.
+  ].sort((a, b) => new Date(a.sortKey).getTime() - new Date(b.sortKey).getTime());
 
   const now = new Date();
 
@@ -666,15 +697,15 @@ export default function HomeView({
         </div>
 
         <div className="w-full px-12">
-          <p className="pt-4 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">회의 어시스턴트</p>
+          <p className="pt-4 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">{t.home_banner_eyebrow}</p>
           <p className="mt-1 text-2xl font-bold text-recall-text">Re:Call</p>
           <p className="mt-1.5 max-w-xl text-sm text-recall-textMuted">{t.home_tagline}</p>
           <p className="mt-3 text-xs text-recall-textMuted">
-            {dashboardSummary?.total_meeting_count ?? 0}건의 회의록
+            {t.home_stats_total_meetings(dashboardSummary?.total_meeting_count ?? 0)}
             {" · "}
-            {dashboardSummary?.member_count ?? 0}명 참여 중
+            {t.home_stats_member_count(dashboardSummary?.member_count ?? 0)}
             {dashboardSummary?.last_meeting_at
-              ? ` · 최근 회의 ${formatDateTime(dashboardSummary.last_meeting_at)}`
+              ? ` · ${t.home_stats_last_meeting(formatDateTime(dashboardSummary.last_meeting_at))}`
               : ""}
           </p>
         </div>
@@ -692,7 +723,7 @@ export default function HomeView({
               {t.home_start_card_greeting(userName)}
             </h2>
             <p className="text-xs sm:text-sm text-recall-textMuted mt-1.5 leading-relaxed">
-              실시간 음성 인식(STT) 및 AI 대화 요약과 함께 즉시 새로운 회의를 진행해보세요.
+              {t.home_start_card_desc}
             </p>
           </div>
 
@@ -704,7 +735,7 @@ export default function HomeView({
             className="flex items-center gap-2.5 rounded-xl bg-recall-accent px-6 py-3.5 text-sm sm:text-base font-bold text-white hover:opacity-95 transition shadow-md shadow-recall-accent/20 group-hover:translate-x-1 shrink-0"
           >
             <MicIcon size={18} />
-            <span>{t.home_start_meeting || "지금 회의 시작하기"}</span>
+            <span>{t.home_start_meeting}</span>
             <span>→</span>
           </button>
         </div>
@@ -718,10 +749,10 @@ export default function HomeView({
             {/* 예정된 회의 */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between border-b border-recall-border/60 pb-2">
-                <p className="text-base font-bold text-recall-text">예정된 회의</p>
+                <p className="text-base font-bold text-recall-text">{t.home_upcoming_title}</p>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-recall-textMuted">
-                    {now.getFullYear()}년 {now.getMonth() + 1}월
+                    {t.home_month_label(now.getFullYear(), now.getMonth() + 1)}
                   </span>
                   <button
                     onClick={() => {
@@ -730,7 +761,7 @@ export default function HomeView({
                     }}
                     className="text-xs font-semibold text-recall-accent hover:underline"
                   >
-                    + 추가
+                    {t.home_upcoming_add}
                   </button>
                 </div>
               </div>
@@ -741,11 +772,12 @@ export default function HomeView({
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
                   {upcomingListItems.map((item) => {
                     const isMeeting = item.kind === "meeting";
-                    const iso = isMeeting ? item.data.scheduled_at : `${item.data.date}T${item.data.time}`;
-                    const dayInfo = getUpcomingDayLabel(iso);
+                    const iso = isMeeting ? item.data.scheduled_at : (item.data.deadline as string);
+                    const dayInfo = getUpcomingDayLabel(t, iso);
+                    const itemTitle = isMeeting ? item.data.title : item.data.task;
                     const subLabel = isMeeting
-                      ? item.data.attendees.map((a) => a.display_name).join(", ") || "참석자 미정"
-                      : "일정";
+                      ? item.data.attendees.map((a) => a.display_name).join(", ") || t.home_upcoming_no_attendees
+                      : t.home_upcoming_task_label;
                     return (
                       <div
                         key={`${item.kind}-${item.data.id}`}
@@ -759,8 +791,8 @@ export default function HomeView({
                         </div>
 
                         <div className="min-w-0 flex-1 pl-2">
-                          <p className="truncate text-xs font-bold text-recall-text" title={item.data.title}>
-                            {item.data.title}
+                          <p className="truncate text-xs font-bold text-recall-text" title={itemTitle}>
+                            {itemTitle}
                           </p>
                           <p className="truncate text-[10px] text-recall-textMuted mt-0.5" title={subLabel}>
                             {subLabel}
@@ -772,7 +804,7 @@ export default function HomeView({
                             <button
                               onClick={() => handleBeginUpcoming(item.data.id)}
                               className="text-recall-textMuted hover:text-emerald-500 transition"
-                              title="지금 시작"
+                              title={t.home_upcoming_start_now}
                             >
                               <PlayIcon size={12} />
                             </button>
@@ -783,14 +815,14 @@ export default function HomeView({
                               setShowUpcomingModal(true);
                             }}
                             className="text-recall-textMuted hover:text-recall-accent transition"
-                            title="수정"
+                            title={t.meeting_export_edit}
                           >
                             <PencilIcon size={12} />
                           </button>
                           <button
                             onClick={() => handleRemoveUpcoming(item)}
                             className="text-recall-textMuted hover:text-recall-danger transition"
-                            title="삭제"
+                            title={t.task_delete}
                           >
                             <TrashIcon size={12} />
                           </button>
@@ -810,44 +842,60 @@ export default function HomeView({
                 </p>
                 {unresolvedContradictions.length > 0 && (
                   <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-400">
-                    모순 {unresolvedContradictions.length}건
+                    {t.home_review_pending_count(unresolvedContradictions.length)}
                   </span>
                 )}
               </div>
 
-              {unresolvedContradictions.length === 0 ? (
+              {!visibleContradiction ? (
                 <p className="py-6 text-center text-xs text-recall-textMuted">{t.home_review_empty}</p>
               ) : (
-                <div className="space-y-3">
-                  {unresolvedContradictions.slice(0, 1).map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex flex-col gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5"
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={goToPrevReview}
+                      disabled={clampedReviewIndex === 0}
+                      aria-label={t.home_review_prev}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
                     >
+                      <ChevronLeftIcon size={14} />
+                    </button>
+
+                    <div className="flex flex-1 flex-col gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
                       <p className="text-xs text-recall-text leading-relaxed font-medium">
-                        {c.display_message || c.statement_text_snapshot}
+                        {visibleContradiction.display_message || visibleContradiction.statement_text_snapshot}
                       </p>
 
                       <p className="text-[11px] text-recall-textMuted">
-                        {c.reference_source_name || "회의록 내용"} · {formatShortDate(c.detected_at)}
+                        {visibleContradiction.reference_source_name || t.home_review_default_source} ·{" "}
+                        {formatShortDate(visibleContradiction.detected_at)}
                       </p>
 
-                      <div className="flex items-center gap-2 pt-1 border-t border-amber-500/10">
+                      <div className="pt-1 border-t border-amber-500/10">
                         <button
-                          onClick={() => onNavigate("voiceMeeting")}
-                          className="flex-1 rounded-lg border border-recall-border bg-recall-bgSoft py-1.5 text-xs font-semibold text-recall-text hover:bg-white/10 transition text-center"
+                          onClick={() => setCompareContradictionId(visibleContradiction.id)}
+                          className="w-full rounded-lg border border-recall-border bg-recall-bgSoft py-1.5 text-xs font-semibold text-recall-text hover:bg-white/10 transition text-center"
                         >
-                          두 발언 비교
-                        </button>
-                        <button
-                          onClick={() => onNavigate("voiceMeeting")}
-                          className="flex-1 rounded-lg border border-recall-border/60 bg-transparent py-1.5 text-xs font-medium text-recall-textMuted hover:text-recall-text hover:bg-white/5 transition text-center"
-                        >
-                          넘어가기
+                          {t.contradiction_compare_title}
                         </button>
                       </div>
                     </div>
-                  ))}
+
+                    <button
+                      onClick={goToNextReview}
+                      disabled={clampedReviewIndex === unresolvedContradictions.length - 1}
+                      aria-label={t.home_review_next}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
+                    >
+                      <ChevronRightIcon size={14} />
+                    </button>
+                  </div>
+
+                  {unresolvedContradictions.length > 1 && (
+                    <p className="text-center text-[11px] text-recall-textMuted">
+                      {clampedReviewIndex + 1} / {unresolvedContradictions.length}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -866,7 +914,7 @@ export default function HomeView({
                     onClick={() => onNavigate("voiceMeeting")}
                     className="text-xs font-semibold text-recall-textMuted hover:text-recall-text"
                   >
-                    전체 {recentMeetings.length}건 →
+                    {t.home_recent_view_all(recentMeetings.length)}
                   </button>
                 </div>
 
@@ -879,7 +927,7 @@ export default function HomeView({
                     {recentMeetings.map((m) => (
                       <button
                         key={m.id}
-                        onClick={() => onNavigate("voiceMeeting")}
+                        onClick={() => onOpenMeeting(m.id)}
                         className="flex w-full flex-col gap-1.5 rounded-xl border border-recall-border/60 bg-recall-bgSoft p-3.5 text-left hover:border-recall-accent/60 transition group"
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -889,11 +937,11 @@ export default function HomeView({
                           <div className="flex items-center gap-1.5 flex-shrink-0">
                             {m.contradiction_count === 0 ? (
                               <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
-                                깨끗함
+                                {t.home_recent_clean_badge}
                               </span>
                             ) : (
                               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
-                                모순 {m.contradiction_count}
+                                {t.home_recent_contradiction_badge(m.contradiction_count)}
                               </span>
                             )}
                             <span className="text-xs text-recall-textMuted font-medium">
@@ -910,7 +958,7 @@ export default function HomeView({
 
                         <div className="flex items-center gap-1 text-xs text-recall-textMuted mt-1">
                           <PersonIcon size={12} />
-                          <span>참석 {m.attendee_count}명</span>
+                          <span>{t.home_recent_attendee_count(m.attendee_count)}</span>
                         </div>
                       </button>
                     ))}
@@ -923,11 +971,11 @@ export default function HomeView({
           {/* 3열 (오른쪽): 현재시각+날씨 / 바로 가기 / 이번 주 요약 */}
           <div className="col-span-4 space-y-4">
             
-            <ClockAndWeatherWidget />
+            <ClockAndWeatherWidget t={t} />
 
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm">
-              <p className="mb-3 text-base font-bold text-recall-text">바로 가기</p>
-              
+              <p className="mb-3 text-base font-bold text-recall-text">{t.home_quick_actions_title}</p>
+
               <div className="divide-y divide-recall-border/60 border-t border-recall-border/60 text-sm">
                 <button
                   onClick={() => setShowSearchModal(true)}
@@ -935,7 +983,7 @@ export default function HomeView({
                 >
                   <div className="flex items-center gap-2.5 font-semibold group-hover:text-recall-accent transition">
                     <span className="text-base">🔍</span>
-                    <span>회의록 검색</span>
+                    <span>{t.home_quick_search}</span>
                   </div>
                 </button>
 
@@ -945,7 +993,7 @@ export default function HomeView({
                 >
                   <div className="flex items-center gap-2.5 font-semibold group-hover:text-recall-accent transition">
                     <span className="text-base">👥</span>
-                    <span>팀원 관리</span>
+                    <span>{t.settings_member_count}</span>
                   </div>
                   {dashboardSummary?.member_count && (
                     <span className="text-xs text-recall-textMuted font-medium">
@@ -960,7 +1008,7 @@ export default function HomeView({
                 >
                   <div className="flex items-center gap-2.5 font-semibold group-hover:text-recall-accent transition">
                     <span className="text-base">📄</span>
-                    <span>회의록 내보내기</span>
+                    <span>{t.meeting_export_title}</span>
                   </div>
                 </button>
               </div>
@@ -968,7 +1016,7 @@ export default function HomeView({
 
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between border-b border-recall-border/60 pb-3">
-                <p className="text-base font-bold text-recall-text">이번 주</p>
+                <p className="text-base font-bold text-recall-text">{t.home_week_plain_title}</p>
                 <span className="text-xs text-recall-textMuted font-medium">
                   {getThisWeekDateRange()}
                 </span>
@@ -979,21 +1027,21 @@ export default function HomeView({
                   <p className="text-2xl font-bold text-recall-text">
                     {dashboardSummary?.week_meeting_count ?? 0}
                   </p>
-                  <p className="text-xs text-recall-textMuted font-medium mt-2">회의</p>
+                  <p className="text-xs text-recall-textMuted font-medium mt-2">{t.home_week_meetings}</p>
                 </div>
 
                 <div className="p-3.5 flex flex-col justify-between text-center">
                   <p className="text-2xl font-bold text-recall-text">
                     {formatMsToHoursMinutes(dashboardSummary?.week_duration_ms ?? 0)}
                   </p>
-                  <p className="text-xs text-recall-textMuted font-medium mt-2">기록된 시간</p>
+                  <p className="text-xs text-recall-textMuted font-medium mt-2">{t.home_week_recorded_time}</p>
                 </div>
 
                 <div className="p-3.5 flex flex-col justify-between text-center">
                   <p className="text-2xl font-bold text-recall-danger">
                     {dashboardSummary?.week_contradiction_count ?? 0}
                   </p>
-                  <p className="text-xs text-recall-textMuted font-medium mt-2">짚어낸 모순</p>
+                  <p className="text-xs text-recall-textMuted font-medium mt-2">{t.home_week_missed_contradictions}</p>
                 </div>
               </div>
             </div>
@@ -1011,6 +1059,7 @@ export default function HomeView({
             setEditingItem(null);
           }}
           onSave={handleSaveUpcoming}
+          t={t}
         />
       )}
 
@@ -1019,24 +1068,28 @@ export default function HomeView({
           workspaceId={workspaceId}
           onClose={() => setShowSearchModal(false)}
           onSelectMeeting={() => onNavigate("voiceMeeting")}
+          t={t}
         />
       )}
 
       {showManageMembersModal && (
         <ManageMembersModal
           workspaceId={workspaceId}
-          workspaceName="현재 워크스페이스"
+          workspaceName={t.workspace_current_name}
           currentUserId={userId}
           onClose={() => setShowManageMembersModal(false)}
           onOpenInviteModal={() => setShowInviteModal(true)}
+          onMembersChanged={reloadDashboardSummary}
+          t={t}
         />
       )}
 
       {showInviteModal && (
         <InviteMemberModal
           workspaceId={workspaceId}
-          workspaceName="현재 워크스페이스"
+          workspaceName={t.workspace_current_name}
           onClose={() => setShowInviteModal(false)}
+          onMembersChanged={reloadDashboardSummary}
         />
       )}
 
@@ -1048,6 +1101,7 @@ export default function HomeView({
             setShowSelectExportModal(false);
             setSelectedExportMeetingId(meetingId);
           }}
+          t={t}
         />
       )}
 
@@ -1056,6 +1110,61 @@ export default function HomeView({
           workspaceId={workspaceId}
           meetingId={selectedExportMeetingId}
           onClose={() => setSelectedExportMeetingId(null)}
+          t={t}
+        />
+      )}
+
+      {compareContradiction && (
+        <ContradictionCompareModal
+          contradiction={compareContradiction}
+          onClose={() => setCompareContradictionId(null)}
+          onResolve={(id, resolutionType) => {
+            resolveContradiction(id, resolutionType);
+            setCompareContradictionId(null);
+          }}
+          onUpdate={updateContradiction}
+          onViewInMeeting={
+            compareContradiction.source_type === "meeting_segment"
+              ? () => {
+                  setCompareContradictionId(null);
+                  // meeting_id가 내려오면 그 회의를 바로 열고, 아직 없으면(구버전 응답)
+                  // 예전처럼 회의 목록 화면으로만 이동한다.
+                  if (compareContradiction.meeting_id) {
+                    onOpenMeeting(compareContradiction.meeting_id);
+                  } else {
+                    onNavigate("voiceMeeting");
+                  }
+                }
+              : undefined
+          }
+          onViewReference={
+            compareContradiction.reference_type === "content_chunk"
+              ? () =>
+                  setReferenceDocPreview({
+                    id: compareContradiction.reference_file_id,
+                    name: compareContradiction.reference_source_name || t.home_review_default_source,
+                  })
+              : undefined
+          }
+          onViewDecision={
+            compareContradiction.reference_type === "decision" && compareContradiction.reference_decision_id
+              ? () => {
+                  setCompareContradictionId(null);
+                  onOpenDecision(compareContradiction.reference_decision_id!);
+                }
+              : undefined
+          }
+          t={t}
+        />
+      )}
+
+      {referenceDocPreview && (
+        <DocumentPreviewModal
+          workspaceId={workspaceId}
+          documentId={referenceDocPreview.id}
+          documentName={referenceDocPreview.name}
+          onClose={() => setReferenceDocPreview(null)}
+          t={t}
         />
       )}
     </div>

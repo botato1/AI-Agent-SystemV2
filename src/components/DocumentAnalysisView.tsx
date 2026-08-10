@@ -78,13 +78,13 @@ export default function DocumentAnalysisView({
             onClick={() => setTab("document")}
             className="px-2 pb-2 text-sm text-recall-textMuted hover:text-recall-text"
           >
-            개별 문서
+            {t.doc_tab_individual}
           </button>
           <button
             onClick={() => setTab("worktree")}
             className="border-b-2 border-recall-accent px-2 pb-2 text-sm text-recall-accent font-medium"
           >
-            코드 폴더
+            {t.doc_tab_worktree}
           </button>
         </div>
         <div className="flex flex-1 overflow-hidden">
@@ -104,13 +104,13 @@ export default function DocumentAnalysisView({
           onClick={() => setTab("document")}
           className="border-b-2 border-recall-accent px-2 pb-2 text-sm text-recall-accent font-medium"
         >
-          개별 문서
+          {t.doc_tab_individual}
         </button>
         <button
           onClick={() => setTab("worktree")}
           className="px-2 pb-2 text-sm text-recall-textMuted hover:text-recall-text"
         >
-          코드 폴더
+          {t.doc_tab_worktree}
         </button>
       </div>
 
@@ -119,7 +119,7 @@ export default function DocumentAnalysisView({
         <div className="flex h-full w-64 flex-shrink-0 flex-col border-r border-recall-border p-3">
           <div className="mb-3 flex items-center justify-between">
             <p className="text-sm font-medium uppercase tracking-wide text-recall-textMuted">
-              {t.doc_list_title || "회의 자료"}
+              {t.doc_tab_individual}
             </p>
             <input
               ref={fileInputRef}
@@ -133,7 +133,7 @@ export default function DocumentAnalysisView({
               disabled={isUploading}
               className="rounded-lg border border-recall-border px-2.5 py-1 text-sm hover:bg-white/5 disabled:opacity-50 transition"
             >
-              {isUploading ? "업로드 중..." : t.doc_btn_upload || "업로드"}
+              {isUploading ? t.doc_uploading : t.doc_btn_upload || "업로드"}
             </button>
           </div>
 
@@ -163,7 +163,7 @@ export default function DocumentAnalysisView({
                     {doc.status === "analyzing"
                       ? t.analyzing_msg || "AI 분석 중..."
                       : doc.status === "failed"
-                      ? "분석 실패"
+                      ? t.doc_status_failed_short
                       : "DOCUMENT"}
                   </span>
 
@@ -174,7 +174,7 @@ export default function DocumentAnalysisView({
                           e.stopPropagation();
                           retryDocument(doc.id);
                         }}
-                        title="재분석"
+                        title={t.doc_reanalyze}
                         className="rounded p-1 text-recall-textMuted hover:text-recall-accent transition"
                       >
                         <RepeatIcon size={12} />
@@ -186,7 +186,7 @@ export default function DocumentAnalysisView({
                           e.stopPropagation();
                           deleteDocument(doc.id);
                         }}
-                        title="삭제"
+                        title={t.task_delete}
                         className="rounded p-1 text-recall-textMuted hover:text-recall-danger transition"
                       >
                         <TrashIcon size={12} />
@@ -206,23 +206,15 @@ export default function DocumentAnalysisView({
             <div className="mb-3 flex items-center justify-between pb-3 border-b border-recall-border/60">
               <div>
                 <p className="text-base font-bold text-recall-text">{activeDoc.name}</p>
-                <p className="text-xs text-recall-textMuted mt-0.5">DOCUMENT · 회의 참조 자료</p>
+                <p className="text-xs text-recall-textMuted mt-0.5">DOCUMENT · {t.doc_meeting_reference_label}</p>
               </div>
               <div className="flex gap-1.5">
-                {activeDoc.status === "failed" && retryDocument && (
+                {retryDocument && (
                   <button
                     onClick={() => retryDocument(activeDoc.id)}
                     className="rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-text hover:bg-white/5"
                   >
-                    재분석
-                  </button>
-                )}
-                {deleteDocument && (
-                  <button
-                    onClick={() => deleteDocument(activeDoc.id)}
-                    className="rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-textMuted hover:border-recall-danger hover:text-recall-danger transition"
-                  >
-                    삭제
+                    {t.doc_reanalyze}
                   </button>
                 )}
               </div>
@@ -239,7 +231,7 @@ export default function DocumentAnalysisView({
                       : "text-recall-textMuted hover:text-recall-text"
                   }`}
                 >
-                  정리된 내용
+                  {t.doc_tab_summary_view}
                 </button>
                 <button
                   onClick={() => setDetailContentTab("original")}
@@ -249,7 +241,7 @@ export default function DocumentAnalysisView({
                       : "text-recall-textMuted hover:text-recall-text"
                   }`}
                 >
-                  원본 파일
+                  {t.doc_tab_original_view}
                 </button>
               </div>
             )}
@@ -262,7 +254,7 @@ export default function DocumentAnalysisView({
               </div>
             ) : activeDoc.status === "failed" ? (
               <div className="flex flex-1 items-center justify-center rounded-xl border border-recall-danger/30 bg-recall-danger/5">
-                <p className="text-sm text-recall-danger">문서 분석에 실패했습니다.</p>
+                <p className="text-sm text-recall-danger">{t.doc_analysis_failed_msg}</p>
               </div>
             ) : detailContentTab === "summary" ? (
               /* [정리된 내용 탭] AI가 본문을 추출하고 요약/정리한 인사이트 화면 */
@@ -295,7 +287,7 @@ export default function DocumentAnalysisView({
               {t.doc_not_selected || "문서를 선택하거나 여기에 드래그하여 업로드하세요"}
             </p>
             <p className="text-xs text-recall-textMuted">
-              PDF, Word, TXT 등의 회의 자료를 업로드하면 AI가 사전 분석을 진행합니다.
+              {t.doc_upload_hint}
             </p>
           </div>
         )}

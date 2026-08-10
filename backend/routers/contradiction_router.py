@@ -17,6 +17,7 @@ from backend.schemas.contradiction_schema import (
     ContradictionListResponse,
     ContradictionResolveRequest,
     ChangeSummaryDraftSchema,
+    ContradictionUpdateRequest,
 )
 from backend.schemas.type_schema import ContradictionStatus
 
@@ -53,14 +54,19 @@ def _check_meeting_not_recording(db: Session, contradiction) -> None:
             detail="회의가 진행 중일 때는 모순을 처리할 수 없습니다. 회의 종료 후 처리해주세요.",
         )
     
-def _check_not_chat_sourced(contradiction) -> None:
-    """채팅발 모순은 알림 전용 — resolve/dismiss 처리 자체를 막는다.
-    이유: 반영 시 RAG(decision_collection) 재인덱싱이 안 되는 문제 때문에
-    회의처럼 실제로 변경을 확정하는 액션을 아직 지원할 수 없음."""
-    if contradiction.source_type == "room_message":
+def _check_not_chat_sourced(contradiction, resolution_type: str | None = None) -> None:
+    """채팅발 모순 중, decision 변경을 실제로 확정(전이)하는 조합만 막는다.
+    change_acknowledged + reference_type='decision'이면 decisions 테이블 전이가
+    일어나는데 RAG(decision_collection) 재인덱싱이 안 됨 - dismiss/keep_reference/
+    문서(content_chunk) 참조는 이 경로를 안 타므로 막을 이유 없음."""
+    if (
+        contradiction.source_type == "room_message"
+        and contradiction.reference_type == "decision"
+        and resolution_type == "change_acknowledged"
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="채팅에서 감지된 모순은 알림 용도로만 제공됩니다. 처리하려면 회의에서 다시 확인해주세요.",
+            detail="채팅에서 감지된 결정 변경은 아직 반영할 수 없습니다. 회의에서 다시 확인해주세요.",
         )
 
 
@@ -85,7 +91,19 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
 
     excerpt = " ".join((contradiction.reference_text_snapshot or "").split())[:100]
 
-    if source_name and excerpt:
+    if contradiction.reference_type == "decision" and contradiction.judgment_case:
+        reason_text = contradiction.reason or "사유 미기재"
+        if contradiction.judgment_case == "reasoned_change":
+            display_message = (
+                f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{contradiction.statement_text_snapshot}'"
+                f" (기존: '{contradiction.reference_text_snapshot}', 사유: {reason_text})."
+            )
+        else:  # unreasoned_change
+            display_message = (
+                f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{contradiction.statement_text_snapshot}'"
+                f" (기존: '{contradiction.reference_text_snapshot}', 사유: {reason_text})."
+            )
+    elif source_name and excerpt:
         display_message = (
             f"'{contradiction.statement_text_snapshot}'라고 하셨는데, "
             f"기존 자료({source_name})의 '{excerpt}'와 다릅니다."
@@ -111,6 +129,8 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     if source_meeting:
         schema.source_meeting_title = source_meeting.title
         schema.source_meeting_time = source_meeting.started_at
+        if contradiction.source_type == "meeting_segment":
+            schema.meeting_id = source_meeting.id
 
     reference_meeting = _resolve_reference_meeting(db, contradiction)
     if reference_meeting:
@@ -195,8 +215,8 @@ def resolve_contradiction_api(
             detail="이미 처리된 모순입니다.",
         )
     _check_meeting_not_recording(db, contradiction)
-    _check_not_chat_sourced(contradiction)    
-
+    _check_not_chat_sourced(contradiction, request.resolution_type)
+    
     resolution = contradiction_crud.resolve_contradiction(
         db,
         contradiction_id=contradiction_id,
@@ -248,7 +268,6 @@ def dismiss_contradiction_api(
             detail="이미 처리된 모순입니다.",
         )
     _check_meeting_not_recording(db, contradiction)
-    _check_not_chat_sourced(contradiction)
     
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
     return _to_contradiction_schema(db, updated)
@@ -297,4 +316,36 @@ def reopen_contradiction_api(
         )
 
     updated = contradiction_crud.reopen_contradiction(db, contradiction_id)
+    return _to_contradiction_schema(db, updated)
+
+
+# 잘못 감지된 모순 내용 수정
+@router.patch("/{contradiction_id}", response_model=ContradictionSchema)
+def update_contradiction_api(
+    workspace_id: uuid.UUID,
+    contradiction_id: uuid.UUID,
+    request: ContradictionUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    contradiction = _get_contradiction_or_404(db, contradiction_id, workspace_id)
+
+    if request.statement_text_snapshot is None and request.reference_text_snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+    if contradiction.status != "unresolved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 처리된 모순입니다.",
+        )
+    _check_meeting_not_recording(db, contradiction)
+
+    updated = contradiction_crud.update_contradiction_snapshots(
+        db, contradiction_id,
+        statement_text_snapshot=request.statement_text_snapshot,
+        reference_text_snapshot=request.reference_text_snapshot,
+    )
     return _to_contradiction_schema(db, updated)

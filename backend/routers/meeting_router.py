@@ -16,7 +16,7 @@ from backend.core.dependencies import get_current_user_id, require_workspace_mem
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud
 from backend.modules.rag.document_loader import load_document
-from backend.services import meeting_service
+from backend.services import document_service, meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
 from backend.modules.judgment import agenda_reminder
@@ -1097,3 +1097,29 @@ def get_meeting_documents_api(
     return MeetingDocumentListResponse(
         documents=[MeetingDocumentResponse.model_validate(f) for f in files]
     )
+
+# 회의 첨부 문서 삭제(연결 해제)
+@router.delete("/{meeting_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_meeting_document_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    document_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    try:
+        result = document_service.unlink_or_delete_meeting_document(db, document_id, meeting_id)
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="회의에 첨부된 문서를 찾을 수 없습니다.",
+        )
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"문서 삭제 중 오류가 발생했습니다: {result.get('error')}",
+        )

@@ -221,6 +221,7 @@ def _call_ollama(
     timeout: float = 150.0,
     model: str = OLLAMA_MODEL_LIGHT,
     response_format: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """
     Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회).
@@ -234,14 +235,27 @@ def _call_ollama(
     쓰는 호출부(contradiction_detect 등)가 이 공용 함수를 쓰면서도 기존의
     format:json 보장을 잃지 않게 하기 위함. 기본값 None이면 payload에 아예
     포함하지 않으므로 기존 호출부 동작은 그대로다.
+
+    [추가] temperature 인자 추가. 기본값 None이면 Ollama 기본값(모델 Modelfile에
+    별도 설정 없으면 0.8 근처)이 그대로 적용되어, 완전히 같은 입력에도 매번 다른
+    출력이 나올 수 있다. 실시간 판단 파이프라인(decision_judgment.py)처럼 같은
+    입력에는 항상 같은 판단이 나와야 하는 호출부는 temperature=0으로 명시해서
+    호출해야 한다 - 재현성이 필요 없는 다른 호출부(채팅 답변, 요약 등)는 기본값
+    그대로 두면 기존 동작이 안 바뀐다.
     """
     # 프롬프트 끝에 한국어 강제 지시 추가
     ko_suffix = "\n\n[중요] 반드시 한국어로만 답하세요. 중국어 사용 절대 금지."
 
     def _payload(p: str) -> dict:
-        body = {"model": model, "prompt": p, "stream": False}
+        # [추가] keep_alive - 모델을 GPU 메모리에 계속 상주시켜 호출마다 재로드되는
+        # 오버헤드를 없앤다. 실시간 판단 파이프라인처럼 발화 하나당 여러 번 순차
+        # 호출하는 경우, 이게 없으면 매 호출이 로드→추론→언로드를 반복해 체감
+        # 지연이 크게 늘어난다.
+        body = {"model": model, "prompt": p, "stream": False, "keep_alive": "30m"}
         if response_format is not None:
             body["format"] = response_format
+        if temperature is not None:
+            body["options"] = {"temperature": temperature}
         return body
 
     response = httpx.post(

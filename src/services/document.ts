@@ -50,6 +50,8 @@ export interface UploadDocumentResponse {
   filename: string;
   linkStatus: string | null;
   summary: string | null;
+  meetingId: string | null;
+  roomId: string | null;
   message: string;
   error: string | null;
 }
@@ -69,7 +71,9 @@ export interface DeleteDocumentResponse {
 
 export interface RetryDocumentResponse {
   status: "success" | "error";
-  summary: string | null;
+  documentId: string | null;
+  analysisStatus: string | null;
+  retryCount: number | null;
   message: string;
   error: string | null;
 }
@@ -196,12 +200,15 @@ export async function getDocumentListApi(workspaceId: string): Promise<GetDocume
  *
  * 주의: 8003 문서 처리 서버를 동기 호출하므로 응답이 오기까지 최대 5분 정도 걸릴 수 있다.
  * roomId를 넘기면 백엔드가 업로드와 동시에 해당 채팅방에도 자동으로 연결한다.
+ * 지원 포맷은 pdf/hwpx/png/jpg/jpeg/docx/txt다(백엔드 ALLOWED_DOCUMENT_EXTENSIONS 확인 완료).
+ * meetingId를 넘기면 채팅방 없이도 해당 회의에 바로 첨부된다(둘 다 넘기면 meetingId 우선).
  */
 export async function uploadDocumentApi(
   workspaceId: string,
   file: File,
   roomId?: string,
-  documentType: "document" | "meeting" = "document"
+  documentType: "document" | "meeting" = "document",
+  meetingId?: string
 ): Promise<UploadDocumentResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -213,6 +220,8 @@ export async function uploadDocumentApi(
       filename: file.name,
       linkStatus: null,
       summary: null,
+      meetingId: null,
+      roomId: null,
       message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
       error: "UNAUTHORIZED",
     };
@@ -221,9 +230,11 @@ export async function uploadDocumentApi(
   try {
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("type", documentType);
     if (roomId) {
       formData.append("room_id", roomId);
+    }
+    if (meetingId) {
+      formData.append("meeting_id", meetingId);
     }
 
     const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/documents/upload`, {
@@ -236,7 +247,7 @@ export async function uploadDocumentApi(
     if (!response.ok || data.status === "error") {
       let defaultMsg = "문서 업로드에 실패했습니다.";
       if (data.error === "unsupported_file_type" || data.error === "unsupported_document_type") {
-        defaultMsg = "지원하지 않는 파일 형식입니다. (pdf/hwpx/png/jpg/jpeg)";
+        defaultMsg = "지원하지 않는 파일 형식입니다. (pdf/hwpx/png/jpg/jpeg/docx/txt)";
       } else if (data.error === "use_stt_upload_api") {
         defaultMsg = "음성 파일은 회의 업로드 기능을 이용해 주세요.";
       } else if (response.status === 401) {
@@ -244,7 +255,7 @@ export async function uploadDocumentApi(
       } else if (response.status === 403) {
         defaultMsg = "워크스페이스 멤버만 업로드할 수 있습니다.";
       } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 채팅방입니다.";
+        defaultMsg = "존재하지 않는 워크스페이스이거나 채팅방/회의입니다.";
       } else if (response.status === 502) {
         defaultMsg = "문서 처리 서버 연결에 실패했습니다.";
       }
@@ -255,6 +266,8 @@ export async function uploadDocumentApi(
         filename: file.name,
         linkStatus: null,
         summary: null,
+        meetingId: null,
+        roomId: null,
         message: data.message || defaultMsg,
         error: data.error || `HTTP_${response.status}`,
       };
@@ -266,6 +279,8 @@ export async function uploadDocumentApi(
       filename: data.filename || file.name,
       linkStatus: data.link_status,
       summary: data.summary,
+      meetingId: data.meeting_id ?? null,
+      roomId: data.room_id ?? null,
       message: data.message || "문서 업로드가 완료되었습니다.",
       error: null,
     };
@@ -277,6 +292,8 @@ export async function uploadDocumentApi(
       filename: file.name,
       linkStatus: null,
       summary: null,
+      meetingId: null,
+      roomId: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };
@@ -406,7 +423,7 @@ export async function deleteDocumentApi(
 /**
  * 5. 문서 재분석 요청 API (POST /api/workspaces/{workspace_id}/documents/{document_id}/retry)
  *
- * 주의: 실제 응답엔 문서에 있는 analysis_status/retry_count 필드가 없다 (성공 시 summary만 옴).
+ * failed 상태인 문서만 재분석 가능 (완료/처리중인 문서는 400 not_failed로 거부됨).
  */
 export async function retryDocumentApi(
   workspaceId: string,
@@ -418,7 +435,9 @@ export async function retryDocumentApi(
   if (!token) {
     return {
       status: "error",
-      summary: null,
+      documentId: null,
+      analysisStatus: null,
+      retryCount: null,
       message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
       error: "UNAUTHORIZED",
     };
@@ -446,7 +465,9 @@ export async function retryDocumentApi(
 
       return {
         status: "error",
-        summary: null,
+        documentId: null,
+        analysisStatus: null,
+        retryCount: null,
         message: data.message || defaultMsg,
         error: data.error || `HTTP_${response.status}`,
       };
@@ -454,15 +475,19 @@ export async function retryDocumentApi(
 
     return {
       status: "success",
-      summary: data.summary ?? null,
-      message: data.message || "재분석이 완료되었습니다.",
+      documentId: data.document_id ?? documentId,
+      analysisStatus: data.analysis_status ?? null,
+      retryCount: data.retry_count ?? null,
+      message: data.message || "재분석이 요청되었습니다.",
       error: null,
     };
   } catch (error) {
     console.error("retryDocumentApi error:", error);
     return {
       status: "error",
-      summary: null,
+      documentId: null,
+      analysisStatus: null,
+      retryCount: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };
@@ -646,8 +671,9 @@ export async function getDocumentFileApi(
     const contentType = response.headers.get("Content-Type") || "application/octet-stream";
     const disposition = response.headers.get("Content-Disposition") || "";
     
-    // 파일명 추출 (filename*=utf-8''...)
-    let filename = "original_file";
+    // 파일명 추출 (filename*=utf-8''...) - 서버가 헤더를 안 주면 빈 문자열로 둬서,
+    // 호출하는 쪽이 이미 알고 있는 문서명으로 대체할 수 있게 한다.
+    let filename = "";
     const filenameMatch = disposition.match(/filename\*=utf-8''([^;]+)/i) || disposition.match(/filename="?([^";]+)"?/i);
     if (filenameMatch && filenameMatch[1]) {
       filename = decodeURIComponent(filenameMatch[1]);
