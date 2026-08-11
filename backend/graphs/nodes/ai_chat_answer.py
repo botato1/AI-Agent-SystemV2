@@ -17,7 +17,7 @@ from backend.db.crud import content_chunk_crud
 from backend.db.modules import Decision
 from backend.db.session import SessionLocal
 from backend.graphs.states.ai_chat_state import AIChatState
-from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama, extract_search_query
 from backend.modules.rag.chroma_client import (
     DECISION_COLLECTION,
     DOCUMENT_COLLECTION,
@@ -268,17 +268,24 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
     user_message = state["user_message"]
     chat_history = state.get("chat_history")
 
+    # [추가] 대화체 발화("아 근데 코드리뷰 규칙 뭐였는지 기억이 안 나는데 그것만
+    # 따로 알려줄 수 있어?")를 그대로 벡터 검색에 넘기면, 잡음 토큰이 임베딩을
+    # 흐려 핵심 키워드와의 유사도가 낮아짐 - 검색용으로만 별도 쿼리를 뽑는다.
+    # 실패해도 user_message가 그대로 반환되므로(extract_search_query 자체
+    # 안전장치) 검색이 아예 안 되는 회귀는 없다.
+    search_query = extract_search_query(user_message)
+
     try:
         doc_results = search_hybrid(
-            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            query_text=search_query, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=DOCUMENT_COLLECTION,
         )
         meeting_results = search_hybrid(
-            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            query_text=search_query, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=MEETING_COLLECTION,
         )
         decision_results = search_hybrid(
-            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            query_text=search_query, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=DECISION_COLLECTION,
         )
     except Exception as e:
