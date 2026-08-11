@@ -3,7 +3,7 @@ import { AnalyzedDocument } from "../types";
 import { getDocumentGraphApi } from "../services/document";
 
 import DocumentPreviewModal from "./DocumentPreviewModal";
-import { CloseIcon, MenuIcon, PlusIcon, MinusIcon, RepeatIcon } from "./icons";
+import { CloseIcon, MenuIcon, PlusIcon, MinusIcon, RepeatIcon, SearchIcon } from "./icons";
 
 interface GraphViewProps {
   workspaceId: string;
@@ -30,6 +30,13 @@ function getExtGroup(filename: string): number {
 
 function getGroupColor(group: number): string {
   return GROUP_COLORS[(group - 1) % GROUP_COLORS.length];
+}
+
+// 노드 아래 상시 라벨 - 그래프가 복잡해질 때 라벨끼리 너무 뒤엉키지 않도록 글자 수를 제한한다
+const MAX_LABEL_CHARS = 16;
+function truncateLabel(name: string): string {
+  if (name.length <= MAX_LABEL_CHARS) return name;
+  return `${name.slice(0, MAX_LABEL_CHARS - 1)}…`;
 }
 
 interface Node {
@@ -65,6 +72,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
   );
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
+  const [docSearch, setDocSearch] = useState("");
 
   // 뷰 팬/줌 상태
   const viewRef = useRef({ offsetX: 0, offsetY: 0, scale: 1 });
@@ -156,11 +164,15 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
     if (!ctx) return;
 
     let animId: number;
-    const REPEL_K = 1600;
+    const REPEL_K = 1000;
     const SPRING_K = 0.02;
     const REST_LENGTH = 90;
     const BASE_RADIUS = 10;
     const HOVER_RADIUS = 16;
+    // 처음 배치된 노드끼리 우연히 가까우면 반발력이 순간적으로 튀는데(distSq가 작을수록
+    // force가 급증), 그걸 그대로 속도에 실으면 시작하자마자 사방으로 튕겨나가는 것처럼
+    // 보인다 - 프레임당 속도 상한을 둬서 그 첫 튕김 폭을 눌러준다.
+    const MAX_SPEED = 10;
 
     const render = () => {
       const parent = canvas.parentElement;
@@ -266,10 +278,15 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
         }
       });
 
-      // 4. 감쇄 및 위치 업데이트
+      // 4. 감쇄 및 위치 업데이트 (감쇄를 좀 더 세게 줘서 초반에 통통 튀는 느낌을 줄인다)
       nodes.forEach((n) => {
-        n.vx *= 0.82;
-        n.vy *= 0.82;
+        n.vx *= 0.72;
+        n.vy *= 0.72;
+        const speed = Math.hypot(n.vx, n.vy);
+        if (speed > MAX_SPEED) {
+          n.vx = (n.vx / speed) * MAX_SPEED;
+          n.vy = (n.vy / speed) * MAX_SPEED;
+        }
         if (draggingNodeRef.current !== n) {
           n.x += n.vx;
           n.y += n.vy;
@@ -361,6 +378,15 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
           ctx.stroke();
         }
+
+        // 확대/축소를 해도 글자 크기가 화면 기준으로 일정하게 보이도록 scale의 역수를 곱한다
+        // (안 그러면 ctx.scale(scale)이 걸린 채로 그려서 축소 시 라벨이 안 보일 정도로 작아짐)
+        ctx.font = `${11 / scale}px -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = isSelected || isHovered ? "rgba(226, 232, 240, 0.95)" : "rgba(226, 232, 240, 0.7)";
+        ctx.fillText(truncateLabel(node.name), node.x, node.y + displayRadius + 4 / scale);
+
         ctx.restore();
       });
 
@@ -497,6 +523,10 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
     (a, b) => a - b
   );
 
+  const filteredDocs = docSearch.trim()
+    ? analyzedDocs.filter((d) => d.name.toLowerCase().includes(docSearch.trim().toLowerCase()))
+    : analyzedDocs;
+
   return (
     <div className="flex h-full w-full flex-col bg-recall-bgMain p-4 text-recall-text">
       <div className="mb-4">
@@ -610,7 +640,10 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
               <div className="flex max-h-[calc(100vh-8rem)] w-72 flex-col gap-3 overflow-hidden">
                 <div className="flex flex-col overflow-hidden rounded-xl border border-recall-border bg-recall-bgMain/95 shadow-xl backdrop-blur-sm">
                   <div className="flex items-center justify-between border-b border-recall-border px-3.5 py-2.5">
-                    <p className="text-sm font-semibold text-recall-text">전체 문서 ({analyzedDocs.length})</p>
+                    <p className="text-sm font-semibold text-recall-text">
+                      전체 문서 (
+                      {docSearch.trim() ? `${filteredDocs.length}/${analyzedDocs.length}` : analyzedDocs.length})
+                    </p>
                     <button
                       onClick={() => setIsPanelOpen(false)}
                       className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
@@ -619,25 +652,49 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
                     </button>
                   </div>
 
-                  <div className="max-h-48 space-y-0.5 overflow-y-auto p-1.5">
-                    {analyzedDocs.map((doc) => {
-                      const isSelected = doc.id === selectedDoc?.id;
-                      return (
+                  <div className="border-b border-recall-border p-2">
+                    <div className="flex items-center gap-1.5 rounded-lg border border-recall-border bg-recall-bg px-2 py-1.5">
+                      <SearchIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
+                      <input
+                        value={docSearch}
+                        onChange={(e) => setDocSearch(e.target.value)}
+                        placeholder="문서 이름 검색"
+                        className="w-full bg-transparent text-sm text-recall-text placeholder:text-recall-textMuted focus:outline-none"
+                      />
+                      {docSearch && (
                         <button
-                          key={doc.id}
-                          onClick={() => setSelectedDocId(doc.id)}
-                          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
-                            isSelected ? "bg-recall-accent/15 text-recall-accent" : "text-recall-text hover:bg-white/5"
-                          }`}
+                          onClick={() => setDocSearch("")}
+                          className="flex-shrink-0 text-recall-textMuted hover:text-recall-text"
                         >
-                          <span
-                            className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                            style={{ background: getGroupColor(getExtGroup(doc.name)) }}
-                          />
-                          <span className="truncate">{doc.name}</span>
+                          <CloseIcon size={12} />
                         </button>
-                      );
-                    })}
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="max-h-48 space-y-0.5 overflow-y-auto p-1.5">
+                    {filteredDocs.length === 0 ? (
+                      <p className="px-2 py-3 text-center text-xs text-recall-textMuted">검색 결과가 없어요</p>
+                    ) : (
+                      filteredDocs.map((doc) => {
+                        const isSelected = doc.id === selectedDoc?.id;
+                        return (
+                          <button
+                            key={doc.id}
+                            onClick={() => setSelectedDocId(doc.id)}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+                              isSelected ? "bg-recall-accent/15 text-recall-accent" : "text-recall-text hover:bg-white/5"
+                            }`}
+                          >
+                            <span
+                              className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                              style={{ background: getGroupColor(getExtGroup(doc.name)) }}
+                            />
+                            <span className="truncate">{doc.name}</span>
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
 
