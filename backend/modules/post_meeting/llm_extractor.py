@@ -30,6 +30,10 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
 - 인사말/날씨/안부 등 회의 주제와 무관한 잡담은 full_summary/discussion_points/topics
   어디에도 포함하지 마라. 대신 그런 발화의 번호를 chit_chat_segment_indexes에 전부 나열하라.
 - title은 이 회의 내용을 대표하는 15자 내외의 짧은 제목이다.
+- full_summary, meeting_purpose, next_steps, discussion_points, topics의 evidence/reason,
+  action_items의 description은 전부 회의록/보고서에 쓰는 개조식("~함", "~임", "~됨" 등으로
+  끝나는 명사형 종결)으로 작성한다. "~습니다", "~했어요" 같은 평서문/구어체로 쓰지 않는다.
+  (예: "출시일을 9월 15일로 확정함", "배포 인프라 변경 필요성 논의함")
 
 [회의 전체 발화]
 {transcript}
