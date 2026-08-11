@@ -28,7 +28,6 @@ from backend.schemas.meeting_schema import (
     MeetingListResponse,
     MeetingSegmentListResponse,
     MeetingSegmentResponse,
-    MeetingSummaryResponse,
     DecisionListResponse,
     DecisionResponse,
     MeetingStartResponse,
@@ -57,6 +56,9 @@ from backend.schemas.meeting_schema import (
     MeetingDocumentListResponse,
     DecisionCreateRequest,
     DecisionUpdateRequest,
+    MeetingSummaryResponse,
+    MeetingExportDecisionResponse,
+    MeetingExportTaskResponse,
 )
 
 
@@ -769,6 +771,8 @@ def get_meeting_export_api(
     summary = meeting_crud.get_meeting_summary(db, meeting_id)
     attendee_rows = meeting_crud.get_attendees(db, meeting_id)
     segments = meeting_crud.get_segments(db, meeting_id)
+    decisions = meeting_crud.list_decisions_by_meeting(db, meeting_id)
+    tasks = meeting_crud.list_suggested_tasks_by_meeting(db, meeting_id)
 
     return MeetingExportResponse(
         meeting_id=meeting.id,
@@ -780,7 +784,24 @@ def get_meeting_export_api(
             MeetingAttendeeResponse(user_id=attendee.user_id, display_name=user.display_name)
             for attendee, user in attendee_rows
         ],
+        meeting_purpose=summary.meeting_purpose if summary else None,
+        full_summary=summary.full_summary if summary else None,
         short_summary=summary.short_summary if summary else None,
+        discussion_points=summary.discussion_points if summary else None,
+        next_steps=summary.next_steps if summary else None,
+        decisions=[
+            MeetingExportDecisionResponse(
+                title=d.title, decision_text=d.decision_text, reason=d.reason,
+            )
+            for d in decisions
+        ],
+        action_items=[
+            MeetingExportTaskResponse(
+                title=t.title, description=t.description,
+                assignee_label=t.assignee_label, due_at=t.due_at,
+            )
+            for t in tasks
+        ],
         filtered_transcript=summary.filtered_transcript if summary else None,
         segments=[MeetingSegmentResponse.model_validate(s) for s in segments],
     )
@@ -794,10 +815,14 @@ def _build_export_document_text(meeting, summary, attendee_rows, segments) -> st
     attendee_names = ", ".join(user.display_name for _, user in attendee_rows)
     if attendee_names:
         lines.append(f"참석자: {attendee_names}")
+    if summary and summary.meeting_purpose:
+        lines.append(f"\n## 회의 목적\n{summary.meeting_purpose}")
     if summary and summary.full_summary:
         lines.append(f"\n## 전체 내용\n{summary.full_summary}")
     if summary and summary.short_summary:
         lines.append(f"\n## 요약\n{summary.short_summary}")
+    if summary and summary.next_steps:
+        lines.append(f"\n## 향후 계획\n{summary.next_steps}")
     if segments:
         transcript = "\n".join(f"[{s.speaker_label or '화자 미상'}] {s.content}" for s in segments)
         lines.append(f"\n## 스크립트\n{transcript}")
