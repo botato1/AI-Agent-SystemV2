@@ -39,6 +39,16 @@ def index_decisions(
     새로 active가 된 decision들을 DECISION_COLLECTION에 벡터로 저장.
     decision_text(+reason)를 통째로 1개 벡터로 저장한다 - 이미 짧게 정리된
     텍스트라 content_chunks처럼 크기 기반으로 쪼갤 필요가 없다 (설계 문서 참조).
+
+    [수정 - decision_transition.py의 pending→active 전이 추가하며 발견] 이 함수는
+    원래 "새로 db.add()된, 아직 Chroma에 없는 decision"만 받는다는 전제로
+    insert_document()(내부적으로 collection.add() 사용, upsert 아님)를 그대로
+    호출했다. pending→active 전이는 이미 Chroma에 pending 상태 텍스트로 색인된
+    "기존" decision을 내용만 바꿔서 다시 넘기므로, add()가 중복 id를 만나 실패하거나
+    (버전에 따라) 조용히 무시되어 오래된 pending 텍스트가 Chroma에 그대로 남는
+    문제가 있었다. insert 전에 항상 delete_document()로 먼저 지우도록 해서
+    upsert처럼 동작하게 한다 - 새 decision(아직 없음)엔 안전한 no-op이고,
+    기존 decision(이미 있음)엔 실제로 갱신되게 한다.
     """
     saved = 0
     for decision in decisions:
@@ -46,6 +56,9 @@ def index_decisions(
         if decision.reason:
             content = f"{content}\n{decision.reason}"
 
+        chroma_client.delete_document(
+            str(decision.id), str(workspace_id), collection_name=chroma_client.DECISION_COLLECTION
+        )
         chroma_client.insert_document({
             "id": str(decision.id),
             "content": content,
