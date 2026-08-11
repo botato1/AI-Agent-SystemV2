@@ -40,7 +40,9 @@ export interface LiveSegment {
 }
 
 export type ContradictionAlertSource = "document" | "decision";
-export type JudgmentCase = "reasoned_change" | "unreasoned_change";
+// decision_reminder(Case0) - 근거 있는/없는 변경(Case2/3)과 달리 비교·해결 대상이 아니라
+// "예전에 이렇게 결정했었다"는 단순 리마인더. 같은 큐에 합쳐서 보여주되 배지로만 구분한다.
+export type JudgmentCase = "reasoned_change" | "unreasoned_change" | "decision_reminder";
 export type ContradictionAlertAction = "change_acknowledged" | "keep_reference";
 
 export interface ContradictionAlert {
@@ -60,6 +62,8 @@ export interface ContradictionAlert {
   source: ContradictionAlertSource;
   judgmentCase: JudgmentCase | null;
   actions: ContradictionAlertAction[] | null;
+  // decision_reminder(Case0) 전용 필드 - 리마인더가 참조하는 결정 id (해결 대상이 아니라 링크용)
+  decisionId: string | null;
 }
 
 interface CurrentUserInfo {
@@ -335,6 +339,25 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
           setSegments((prev) => [...prev, ...newSegments]);
         }
         setPartial({ confirmed: "", tentative: "" });
+      } else if (data.type === "decision_reminder") {
+        // Case0(결정 리마인더) - 별도 이벤트 타입. contradiction_id/actions가 없어 해결 대상이 아니고
+        // 가벼운 확인용 토스트로만 보여준다. decision_id를 큐 키로 대신 쓴다.
+        const alert: ContradictionAlert = {
+          contradiction_id: data.decision_id ? `reminder-${data.decision_id}` : `reminder-${crypto.randomUUID()}`,
+          statement_text: data.statement_text || "",
+          reason: "",
+          severity: "low",
+          confidence_score: 0,
+          displayMessage: data.display_message || null,
+          referenceSourceName: null,
+          referenceFileId: null,
+          meetingSegmentId: null,
+          source: "decision",
+          judgmentCase: "decision_reminder",
+          actions: null,
+          decisionId: data.decision_id || null,
+        };
+        setContradictionAlerts((prev) => [...prev, alert]);
       } else if (data.type === "contradiction_alert") {
         const alert: ContradictionAlert = {
           contradiction_id: data.contradiction_id,
@@ -351,6 +374,9 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
             ? data.judgment_case
             : null,
           actions: Array.isArray(data.actions) ? data.actions : null,
+          // 결정 기반 모순(Case2/3)의 "근거"는 예전 결정 그 자체라, 문서 미리보기처럼
+          // 그 결정으로 바로 이동(모달)할 수 있게 id를 같이 받아둔다.
+          decisionId: data.reference_decision_id || null,
         };
         setContradictionAlerts((prev) => [...prev, alert]);
       } else if (data.type === "audio_quality") {

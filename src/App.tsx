@@ -9,6 +9,7 @@ import GraphView from "./components/GraphView";
 import AiChatView from "./components/AiChatView";
 import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
+import DecisionPreviewModal from "./components/DecisionPreviewModal";
 import AuthView from "./components/AuthView";
 import PasswordResetConfirmView from "./components/PasswordResetConfirmView";
 import { ToastContainer } from "./lib/toast";
@@ -19,12 +20,14 @@ import { useTheme } from "./hooks/useTheme";
 import { useLiveMeeting } from "./hooks/useLiveMeeting";
 import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
 import { useRealTasks } from "./hooks/useRealTasks";
+import { useAiChat } from "./hooks/useAiChat";
 import { Language, translations } from "./data/translations";
 import { hashAvatarColor, loadAvatarColor, saveAvatarColor } from "./data/avatarColors";
 import {
   getProfileApi,
   logoutApi,
   uploadProfileImageApi,
+  deleteProfileImageApi,
   updateProfileApi,
   resolveAvatarUrl,
   deleteAccountApi,
@@ -103,13 +106,18 @@ export default function App() {
   });
   // 홈 화면 "최근 회의록"에서 클릭한 회의를 음성 회의 화면에서 바로 선택된 상태로 열기 위한 값
   const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
-  // 모순/회의 도움 카드의 "결정 참조" 배지를 눌렀을 때 대시보드에서 그 결정사항을 바로 펼쳐
-  // 보여주기 위한 값
-  const [pendingDecisionId, setPendingDecisionId] = useState<string | null>(null);
+  // 모순/회의 도움 카드의 "결정 참조"(근거 보기)를 눌렀을 때 여는 결정 미리보기 모달 -
+  // 예전엔 대시보드 화면으로 통째로 이동시켰는데, 문서 참조(미리보기 모달)랑 경험이 안 맞고
+  // 보던 화면(회의/채팅) 맥락이 날아가는 문제가 있어서 모달로 통일했다.
+  const [previewDecisionId, setPreviewDecisionId] = useState<string | null>(null);
 
   function openDecision(decisionId: string) {
-    setPendingDecisionId(decisionId);
-    setSelection({ type: "placeholder", key: "dashboard" });
+    setPreviewDecisionId(decisionId);
+  }
+
+  function openMeeting(meetingId: string) {
+    setPendingMeetingId(meetingId);
+    setSelection({ type: "placeholder", key: "voiceMeeting" });
   }
 
   const [showProfile, setShowProfile] = useState(false);
@@ -253,6 +261,11 @@ export default function App() {
   });
 
   const realTasks = useRealTasks(currentWorkspaceId, memberNameById);
+  // AiChatView 안에서 직접 useAiChat을 부르면, 다른 화면으로 이동할 때 AiChatView가
+  // 언마운트되면서 대화 상태(메시지, 답변 생성 중 표시)가 통째로 날아간다 - 답변 생성
+  // 중에 다른 곳 갔다 돌아오면 질문/생성중 표시가 잠깐 안 보이던 게 이것 때문이었음.
+  // 다른 화면 전환에도 안 없어지도록 여기(App)로 끌어올려서 항상 마운트 상태로 유지한다.
+  const aiChat = useAiChat(currentWorkspaceId);
 
   // 회원가입
   const handleSignUp = (account: RegisteredAccount) => {
@@ -319,6 +332,21 @@ export default function App() {
       }
     } else {
       alert(`프로필 이미지 변경 실패: ${res.message}`);
+    }
+  }
+
+  async function handleRemoveAvatarImage() {
+    const res = await deleteProfileImageApi();
+    if (res.status === "success") {
+      const fallbackColor = currentUser ? loadAvatarColor(currentUser.username) : null;
+      setCurrentUser((prev) =>
+        prev ? { ...prev, avatarImageUrl: null, avatarColor: fallbackColor || prev.avatarColor } : prev
+      );
+      if (currentUser) {
+        setMemberAvatarById((prev) => ({ ...prev, [currentUser.id]: null }));
+      }
+    } else {
+      alert(`프로필 이미지 삭제 실패: ${res.message}`);
     }
   }
 
@@ -566,10 +594,7 @@ export default function App() {
           onUpdateTask={realTasks.updateTask}
           onDeleteTask={realTasks.removeTask}
           onNavigate={(key) => setSelection({ type: "placeholder", key })}
-          onOpenMeeting={(meetingId) => {
-            setPendingMeetingId(meetingId);
-            setSelection({ type: "placeholder", key: "voiceMeeting" });
-          }}
+          onOpenMeeting={openMeeting}
           onBeginScheduledMeeting={(meetingId) => {
             liveMeeting.beginScheduled(meetingId);
             setSelection({ type: "placeholder", key: "voiceMeeting" });
@@ -578,7 +603,7 @@ export default function App() {
           t={t}
         />
       ) : selection.key === "aiChat" ? (
-        <AiChatView workspaceId={currentWorkspaceId} t={t} />
+        <AiChatView workspaceId={currentWorkspaceId} chat={aiChat} t={t} />
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView
           workspaceId={currentWorkspaceId}
@@ -609,6 +634,7 @@ export default function App() {
           initialMeetingId={pendingMeetingId}
           onInitialMeetingIdConsumed={() => setPendingMeetingId(null)}
           onOpenDecision={openDecision}
+          onTaskApproved={realTasks.refetchTasks}
           t={t}
         />
       ) : selection.key === "dashboard" ? (
@@ -621,8 +647,6 @@ export default function App() {
           onStatusChange={realTasks.changeStatus}
           onPriorityChange={realTasks.changePriority}
           onDeleteTask={realTasks.removeTask}
-          initialDecisionId={pendingDecisionId}
-          onInitialDecisionIdConsumed={() => setPendingDecisionId(null)}
           t={t}
         />
       ) : selection.key === "docAnalysis" ? (
@@ -641,12 +665,26 @@ export default function App() {
         </div>
       )}
 
+      {previewDecisionId && (
+        <DecisionPreviewModal
+          workspaceId={currentWorkspaceId}
+          decisionId={previewDecisionId}
+          onClose={() => setPreviewDecisionId(null)}
+          onOpenMeeting={(meetingId) => {
+            setPreviewDecisionId(null);
+            openMeeting(meetingId);
+          }}
+          t={t}
+        />
+      )}
+
       {showProfile && (
         <ProfileModal
           user={currentUser}
           onClose={() => setShowProfile(false)}
           onChangeAvatarColor={handleChangeAvatarColor}
           onChangeAvatarImage={handleChangeAvatarImage}
+          onRemoveAvatarImage={handleRemoveAvatarImage}
           onUpdateSuccess={(updatedUser) => setCurrentUser(updatedUser)}
           t={t}
         />

@@ -13,7 +13,7 @@ export type MeetingStatus =
   | "failed"
   | "cancelled";
 export type GenerationStatus = "pending" | "processing" | "completed" | "failed";
-export type DecisionStatus = "active" | "superseded" | "cancelled";
+export type DecisionStatus = "active" | "superseded" | "cancelled" | "pending";
 export type RecordingMode = "single_device" | "individual";
 
 export interface Meeting {
@@ -92,10 +92,13 @@ export interface Decision {
   id: string;
   workspace_id: string;
   meeting_id: string;
+  source_segment_id?: string | null;
   title: string;
   decision_text: string;
   reason?: string | null;
   status: DecisionStatus;
+  supersedes_decision_id?: string | null;
+  confidence_score?: number | null;
   decided_at: string;
   created_at: string;
   updated_at: string;
@@ -147,6 +150,28 @@ export interface GetMeetingDecisionsResponse {
   decisions: Decision[];
   message: string;
   error: string | null;
+}
+
+export interface MeetingDecisionResponse {
+  status: "success" | "error";
+  decision: Decision | null;
+  message: string;
+  error: string | null;
+}
+
+export interface CreateDecisionRequest {
+  title: string;
+  decision_text: string;
+  reason?: string;
+  status?: DecisionStatus;
+  decided_at?: string;
+}
+
+export interface UpdateDecisionRequest {
+  title?: string;
+  decision_text?: string;
+  reason?: string;
+  status?: DecisionStatus;
 }
 
 export interface MeetingAttendee {
@@ -776,6 +801,134 @@ export async function getMeetingDecisionsApi(
     return {
       status: "error",
       decisions: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 6-1. 회의 결정사항 수동 생성 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/decisions)
+ */
+export async function createMeetingDecisionApi(
+  workspaceId: string,
+  meetingId: string,
+  body: CreateDecisionRequest
+): Promise<MeetingDecisionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      decision: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/decisions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      let defaultMsg = "결정사항 생성에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 생성할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+
+      return {
+        status: "error",
+        decision: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      decision: data as Decision,
+      message: "결정사항이 생성되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("createMeetingDecisionApi error:", error);
+    return {
+      status: "error",
+      decision: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 6-2. 회의 결정사항 수정 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/decisions/{decision_id})
+ */
+export async function updateMeetingDecisionApi(
+  workspaceId: string,
+  meetingId: string,
+  decisionId: string,
+  body: UpdateDecisionRequest
+): Promise<MeetingDecisionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      decision: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/decisions/${decisionId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      let defaultMsg = "결정사항 수정에 실패했습니다.";
+      if (response.status === 400) defaultMsg = "수정할 내용을 입력해 주세요.";
+      else if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 결정사항입니다.";
+
+      return {
+        status: "error",
+        decision: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      decision: data as Decision,
+      message: "결정사항이 수정되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("updateMeetingDecisionApi error:", error);
+    return {
+      status: "error",
+      decision: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };
