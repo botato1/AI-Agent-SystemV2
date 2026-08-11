@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Task, TaskPriority, TaskStatus } from "../types";
 import { CloseIcon } from "./icons";
 import { getWorkspaceMembersApi } from "../services/workspace";
+import { resolveAssigneeName } from "../lib/resolveAssigneeName";
 
 interface Props {
   workspaceId?: string;
@@ -118,12 +119,19 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
       return;
     }
 
-    const deadline = form.deadlineDate ? `${form.deadlineDate}T${form.deadlineTime || "09:00"}` : null;
+    // 시간을 따로 안 골랐으면 굳이 채워 넣지 않고 날짜만 저장한다
+    const deadline = form.deadlineDate
+      ? form.deadlineTime
+        ? `${form.deadlineDate}T${form.deadlineTime}`
+        : form.deadlineDate
+      : null;
 
+    const trimmedAssignee = form.assignee.trim();
     onCreate({
       task: form.task.trim(),
       description: form.description.trim() || null,
-      assignee: form.assignee.trim() || null,
+      // "나연", "승주"처럼 성 없이 입력됐어도 멤버 중 한 명으로 유일하게 좁혀지면 성까지 채워 저장한다
+      assignee: trimmedAssignee ? resolveAssigneeName(trimmedAssignee, memberList) : null,
       deadline,
       status: form.status,
       priority: form.priority,
@@ -261,18 +269,33 @@ export default function CreateTaskModal({ workspaceId, initialStatus = "todo", o
             </div>
           </div>
 
-          {/* 우선순위 */}
-          <div>
-            <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_priority}</label>
-            <select
-              value={form.priority}
-              onChange={(e) => handleChange("priority", e.target.value as TaskPriority)}
-              className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
-            >
-              <option value="high">{t.priority_high}</option>
-              <option value="medium">{t.priority_medium}</option>
-              <option value="low">{t.priority_low}</option>
-            </select>
+          {/* 상태 + 우선순위 */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_status}</label>
+              <select
+                value={form.status}
+                onChange={(e) => handleChange("status", e.target.value as TaskStatus)}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
+              >
+                <option value="todo">{t.status_todo}</option>
+                <option value="in_progress">{t.status_in_progress}</option>
+                <option value="done">{t.status_done}</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm text-recall-textMuted">{t.modal_priority}</label>
+              <select
+                value={form.priority}
+                onChange={(e) => handleChange("priority", e.target.value as TaskPriority)}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text focus:outline-none focus:border-recall-accent"
+              >
+                <option value="high">{t.priority_high}</option>
+                <option value="medium">{t.priority_medium}</option>
+                <option value="low">{t.priority_low}</option>
+              </select>
+            </div>
           </div>
         </div>
 
