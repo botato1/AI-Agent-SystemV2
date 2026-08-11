@@ -247,6 +247,17 @@ def list_open_tasks(db: Session, workspace_id: uuid.UUID) -> list[Task]:
         .all()
     )
 
+def list_tasks(db: Session, workspace_id: uuid.UUID, include_done: bool = False) -> list[Task]:
+    """워크스페이스의 할 일 목록을 조회한다.
+    include_done=False(기본)면 open/in_progress만, True면 done/cancelled/suggested까지 전부 포함."""
+    query = db.query(Task).filter(
+        Task.workspace_id == workspace_id,
+        Task.deleted_at.is_(None),
+    )
+    if not include_done:
+        query = query.filter(Task.status.in_(["open", "in_progress"]))
+    return query.all()
+
 
 def list_open_tasks_by_category(db: Session, category_id: uuid.UUID) -> list[Task]:
     """대시보드(카테고리 단위) 담당자별 할 일 요약용."""
