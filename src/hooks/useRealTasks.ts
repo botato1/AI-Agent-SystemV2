@@ -1,5 +1,5 @@
 // src/hooks/useRealTasks.ts
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Task, TaskStatus, TaskPriority } from "../types";
 import {
   BackendTask,
@@ -13,12 +13,14 @@ import {
   deleteTaskApi,
 } from "../services/task";
 
+const POLL_INTERVAL_MS = 15000;
+
 function toBackendStatus(status: TaskStatus): BackendTaskStatus {
   return status === "todo" ? "open" : status;
 }
 
 function toLocalStatus(status: BackendTaskStatus): TaskStatus {
-  // "suggested"(제안됨)는 일반 할 일 목록 조회 API에서 제외되므로 여기 들어올 일이 없다 - 방어적으로만 처리
+  // "suggested"는 loadTasks에서 미리 걸러내므로 여기 들어올 일이 없다 - 타입만 맞춰주는 방어 코드
   if (status === "open" || status === "suggested") return "todo";
   return status;
 }
@@ -30,6 +32,14 @@ function toLocalDateTimeInput(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 시간을 안 정한 마감일(날짜만, "T" 없음)은 자정(로컬 기준)으로 저장한다 - 그냥 new Date("2026-08-12")로
+// 넘기면 UTC 자정으로 해석돼서, 한국 시간대에서 되돌아올 때 09:00으로 둔갑해버린다(9시가 도로
+// 나타나는 원인). "T00:00"을 붙여 로컬 자정으로 명시하면 왕복해도 그대로 자정으로 남는다.
+function toIsoDeadline(deadline: string): string {
+  const withTime = deadline.includes("T") ? deadline : `${deadline}T00:00`;
+  return new Date(withTime).toISOString();
 }
 
 function toLocalTask(bt: BackendTask, memberNameById: Record<string, string>): Task {
@@ -47,18 +57,39 @@ function toLocalTask(bt: BackendTask, memberNameById: Record<string, string>): T
 export function useRealTasks(workspaceId: string, memberNameById: Record<string, string>) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  // 방금 내가 직접 바꾼(생성/수정/상태변경/삭제) 시각 - 백그라운드 폴링 요청이 그 이후에도
+  // 계속 날아가고 있다가, 변경이 반영되기 "전" 스냅샷을 늦게 받아서 방금 한 변경을 조용히
+  // 되돌려버리는 경우가 있었다("완료로 옮겼는데 사라진다"는 게 이 레이스 컨디션이었음).
+  // 요청을 시작한 시점이 마지막 로컬 변경보다 이르면 그 응답은 낡은 것이니 무시한다.
+  const lastMutationAtRef = useRef(0);
 
   async function loadTasks() {
     if (!workspaceId) return;
-    const res = await getTaskListApi(workspaceId);
+    const requestStartedAt = Date.now();
+    // status=all로 done/cancelled/suggested까지 다 받아온다 (칸반보드 "완료" 칸에 필요)
+    const res = await getTaskListApi(workspaceId, true);
+    if (requestStartedAt < lastMutationAtRef.current) return;
     if (res.status === "success") {
-      setTasks(res.tasks.map((t) => toLocalTask(t, memberNameById)));
+      // "suggested"(회의에서 제안됐지만 아직 승인 안 된 항목)는 회의 화면의 별도 승인
+      // 플로우에서 다루는 것이라, 칸반보드에 미리 보이면 승인 전인데 할 일처럼 보여 혼동을
+      // 준다 - 여기선 제외한다.
+      const boardTasks = res.tasks.filter((t) => t.status !== "suggested");
+      setTasks(boardTasks.map((t) => toLocalTask(t, memberNameById)));
     }
   }
 
   useEffect(() => {
     setIsLoading(true);
     loadTasks().finally(() => setIsLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  // 다른 팀원이 추가/수정/삭제한 할 일은 내 화면엔 신호가 안 오므로(전용 웹소켓 없음),
+  // 알림벨과 같은 방식으로 백그라운드에서 조용히 주기적 재조회해서 새로고침 없이 반영한다
+  useEffect(() => {
+    if (!workspaceId) return;
+    const timer = setInterval(loadTasks, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
@@ -69,11 +100,24 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
       description: input.description || undefined,
       assignee_label: input.assignee || undefined,
       priority: input.priority,
-      due_at: input.deadline ? new Date(input.deadline).toISOString() : undefined,
+      status: toBackendStatus(input.status),
+      due_at: input.deadline ? toIsoDeadline(input.deadline) : undefined,
     });
 
     if (res.status === "success" && res.task) {
-      setTasks((prev) => [toLocalTask(res.task as BackendTask, memberNameById), ...prev]);
+      let created = res.task as BackendTask;
+      const wantedStatus = toBackendStatus(input.status);
+      // 일부 생성 API는 status 필드를 받아도 무시하고 항상 기본 상태로 만드는 경우가 있다 -
+      // "완료"를 선택해 만들었는데 "해야 할 일"에 생기는 문제가 여기서 나므로, 생성 직후
+      // 상태가 원하는 값과 다르면 상태 변경 API로 한 번 더 강제로 맞춰준다.
+      if (created.status !== wantedStatus) {
+        const statusRes = await updateTaskStatusApi(workspaceId, created.id, wantedStatus);
+        if (statusRes.status === "success" && statusRes.task) {
+          created = statusRes.task as BackendTask;
+        }
+      }
+      lastMutationAtRef.current = Date.now();
+      setTasks((prev) => [toLocalTask(created, memberNameById), ...prev]);
     } else {
       alert(`할 일 생성 실패: ${res.message}`);
     }
@@ -87,7 +131,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
       assignee_label: updatedTask.assignee ? updatedTask.assignee : null,
       priority: updatedTask.priority,
       status: toBackendStatus(updatedTask.status),
-      due_at: updatedTask.deadline ? new Date(updatedTask.deadline).toISOString() : null,
+      due_at: updatedTask.deadline ? toIsoDeadline(updatedTask.deadline) : null,
     };
 
     const res = await updateTaskApi(workspaceId, updatedTask.id, payload);
@@ -96,6 +140,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
       const rawTask = res.task || (res as unknown as BackendTask);
       const updatedLocalTask = rawTask && rawTask.id ? toLocalTask(rawTask, memberNameById) : updatedTask;
 
+      lastMutationAtRef.current = Date.now();
       setTasks((prev) =>
         prev.map((t) => (t.id === updatedTask.id ? updatedLocalTask : t))
       );
@@ -108,6 +153,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
   async function changeStatus(taskId: string, newStatus: TaskStatus) {
     const res = await updateTaskStatusApi(workspaceId, taskId, toBackendStatus(newStatus));
     if (res.status === "success" && res.task) {
+      lastMutationAtRef.current = Date.now();
       setTasks((prev) =>
         prev.map((t) => (t.id === taskId ? toLocalTask(res.task as BackendTask, memberNameById) : t))
       );
@@ -120,6 +166,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
   async function changePriority(taskId: string, newPriority: TaskPriority) {
     const res = await updateTaskPriorityApi(workspaceId, taskId, newPriority);
     if (res.status === "success" && res.task) {
+      lastMutationAtRef.current = Date.now();
       setTasks((prev) =>
         prev.map((t) => (t.id === taskId ? toLocalTask(res.task as BackendTask, memberNameById) : t))
       );
@@ -132,6 +179,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
   async function removeTask(taskId: string) {
     const res = await deleteTaskApi(workspaceId, taskId);
     if (res.status === "success") {
+      lastMutationAtRef.current = Date.now();
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
     } else {
       alert(`삭제 실패: ${res.message}`);
@@ -147,5 +195,6 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
     changeStatus,
     changePriority,
     removeTask,
+    refetchTasks: loadTasks,
   };
 }
