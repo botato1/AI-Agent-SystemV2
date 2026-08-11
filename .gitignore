@@ -5,6 +5,7 @@ build/
 .env
 *.log
 frontend/
+*.tsbuildinfo
 
 # Python
 __pycache__/
