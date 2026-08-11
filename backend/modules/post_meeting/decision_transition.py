@@ -70,13 +70,21 @@ def process_topics(
 ) -> list[Decision]:
     """
     llm_extractor.extract()가 뽑은 topics[]를 순회하며 decisions 테이블을 전이시킨다.
-    기존 active/pending decision과 매칭되는 경우("값이 바뀌었는지")는 여기서
-    다루지 않는다 - 실시간 판단 파이프라인(decision_judgment.py)이 이미 처리한다.
+    기존 active decision과 매칭되는 경우("값이 바뀌었는지")는 여기서 다루지
+    않는다 - 실시간 판단 파이프라인(decision_judgment.py)이 이미 처리한다.
+    단, 기존 decision이 pending(미해결) 상태면 confirmed/reconfirmed로 다시
+    매칭됐을 때 active로 전이시킨다(아래 [추가] 참조) - "값이 바뀌었는지"가
+    아니라 "미해결이 해소됐는지"라 실시간 판단 파이프라인의 스코프 밖이다.
 
     [수정 - 리뷰 반영 9번] commit 옵션 추가 (post_meeting 파이프라인 단일 트랜잭션용).
 
+    [추가] pending → active 전이 지원. 이전엔 미해결 안건이 나중 회의에서
+    명확히 결론나도 계속 미해결로 남는 gap이 있었음.
+
     Returns:
-        새로 생성되거나 새로 pending이 된 decision 목록 (2-5 인덱싱 대상).
+        새로 생성/pending이 된 decision + 이번에 pending에서 active로
+        전이된 decision 목록 (2-5 인덱싱 대상 - 전이된 것도 내용이 바뀌므로
+        재인덱싱 필요).
     """
     newly_active_decisions: list[Decision] = []
     now = datetime.now(timezone.utc)
@@ -138,7 +146,22 @@ def process_topics(
 
         # 기존 active/pending decision과 매칭된 경우 - "값이 바뀌었는지"는 여기서
         # 다시 판단하지 않는다 (위 [수정] 참조, 실시간 판단 파이프라인이 이미 처리).
-        # pending 상태의 정식 확정 전이는 스코프 밖(후속 작업).
+        #
+        # [추가 - 이전엔 스코프 밖(후속 작업)으로 남겨뒀던 부분] pending 상태의
+        # 결정이 이번 회의에서 confirmed/reconfirmed로 다시 매칭되면 active로
+        # 전이시킨다. 이게 없으면 한 번 미해결(pending)로 남은 안건은 나중에
+        # 아무리 명확하게 결론이 나도 미해결 안건 리마인더(agenda_reminder)에
+        # 영원히 남는 문제가 있었다. 값/사유/제목도 이번에 확정된 내용으로
+        # 갱신하고, 재인덱싱 대상(newly_active_decisions)에 포함시켜 ChromaDB
+        # DECISION_COLLECTION에도 최신 내용이 반영되게 한다.
+        if existing.status == "pending":
+            existing.title = topic.get("title", "")[:200]
+            existing.decision_text = topic_text
+            existing.reason = topic.get("reason")
+            existing.meeting_id = meeting_id
+            existing.decided_at = now
+            existing.status = "active"
+            newly_active_decisions.append(existing)
 
     if commit:
         db.commit()
