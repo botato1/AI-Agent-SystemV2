@@ -33,7 +33,7 @@ reasoned_change/unreasoned_change로 구분한다. 팝업은 세션 내 (decisio
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -223,6 +223,25 @@ def _extract_change_reason(statement: str) -> str:
         return statement
 
 
+# [추가 - 리뷰 반영] Case 0/2/3 메시지에 decision.decided_at(datetime)을 그대로
+# f-string에 넣으면 마이크로초(.831488)/타임존 오프셋(+00:00)까지 그대로
+# 노출된다. 이 메시지가 popup["message"]로 Notification 저장용과 WS push용
+# 양쪽에 동일하게 재사용되므로, 포맷 함수 하나로 통일해서 앞으로 이런
+# 불일치가 다시 안 생기게 한다.
+#
+# [수정 - 리뷰 반영] decided_at은 DateTime(timezone=True) 컬럼에 UTC로
+# 저장됨(decision_transition.py가 datetime.now(timezone.utc) 사용). 변환 없이
+# 바로 strftime하면 KST 새벽 0~9시 사이에 결정된 항목은 날짜가 하루 전으로
+# 잘못 표시됨 - astimezone(KST) 거친 뒤 포맷하도록 수정.
+KST = timezone(timedelta(hours=9))
+
+
+def _format_decided_at(decided_at) -> str:
+    if decided_at is None:
+        return "날짜 미상"
+    return decided_at.astimezone(KST).strftime("%Y-%m-%d")
+
+
 def _get_candidate_decisions(
     db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, statement: str
 ) -> list[Decision]:
@@ -321,7 +340,7 @@ def judge(
             "popup": {
                 "type": "decision_reminder",
                 "message": f"이미 '{decision.decision_text}'로 결정된 이력이 있습니다"
-                           f" ({decision.decided_at}, {decision.reason or '사유 미기재'})",
+                           f" ({_format_decided_at(decision.decided_at)}, {decision.reason or '사유 미기재'})",
             },
             "decision_id": str(decision.id),
         }
@@ -341,7 +360,7 @@ def judge(
     if reason_is_clear:
         case, judgment_case = "2", "reasoned_change"
         message = (f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{statement}'"
-                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" (기존: {_format_decided_at(decision.decided_at)}에 결정된 '{decision.decision_text}')."
                    f" 바꾸시겠습니까?")
         # [수정 - 리뷰 반영] 새 발언의 근거를 별도 추출 - 기존 decision.reason(예전
         # 사유)이 아니라 "왜 지금 바뀌는지"를 보여줘야 함
@@ -349,7 +368,7 @@ def judge(
     else:
         case, judgment_case = "3", "unreasoned_change"
         message = (f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{statement}'"
-                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" (기존: {_format_decided_at(decision.decided_at)}에 결정된 '{decision.decision_text}')."
                    f" 바꾸시겠습니까?")
         # [수정 - 라이브 테스트 발견] Case 3은 "근거가 명확하지 않음"이 핵심인데
         # 예전엔 여기에 decision.reason(기존 결정을 왜 그렇게 정했었는지)을 그대로
