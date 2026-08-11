@@ -328,10 +328,12 @@ class MeetingSegmentListResponse(BaseModel):
 class MeetingSummaryResponse(TimestampSchema):
     id: UUID
     meeting_id: UUID
+    meeting_purpose: Optional[str] = None
     full_summary: Optional[str] = None
     short_summary: Optional[str] = None
     filtered_transcript: Optional[str] = None
     discussion_points: Optional[Any] = None
+    next_steps: Optional[str] = None
     generation_status: GenerationStatus
     generated_at: Optional[datetime] = None
 
@@ -402,9 +404,28 @@ class MeetingExportResponse(BaseModel):
     location: Optional[str] = None
     started_at: Optional[datetime] = None
     attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
+    meeting_purpose: Optional[str] = None
+    full_summary: Optional[str] = None
     short_summary: Optional[str] = None
+    discussion_points: Optional[Any] = None
+    next_steps: Optional[str] = None
+    decisions: list["MeetingExportDecisionResponse"] = Field(default_factory=list)
+    action_items: list["MeetingExportTaskResponse"] = Field(default_factory=list)
     filtered_transcript: Optional[str] = None
     segments: list[MeetingSegmentResponse] = Field(default_factory=list)
+
+class MeetingExportDecisionResponse(BaseModel):
+    title: str
+    decision_text: str
+    reason: Optional[str] = None
+
+
+class MeetingExportTaskResponse(BaseModel):
+    title: str
+    description: Optional[str] = None
+    assignee_label: Optional[str] = None
+    due_at: Optional[datetime] = None
+
 
 class MeetingExportFileResponse(BaseModel):
     export_id: UUID
