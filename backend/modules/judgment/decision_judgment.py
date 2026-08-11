@@ -242,6 +242,40 @@ def _format_decided_at(decided_at) -> str:
     return decided_at.astimezone(KST).strftime("%Y-%m-%d")
 
 
+# [추가 - 팀 결정] Case 0(재확인/질문)과 Case 1(새 값처럼 말했지만 사실상 기존
+# 결정과 동일)은 둘 다 "이미 이렇게 결정된 이력이 있다"는 같은 성격의 FYI라,
+# 같은 decision_reminder 팝업을 공유한다. 세션당 1회 dedup도 case 구분 없이
+# reference_decision_id 하나로 공유 - 어느 쪽이 먼저 뜨든 같은 문구가 두 번
+# 뜨는 건 의미가 없으므로 의도된 동작이다.
+def _decision_reminder_result(
+    db: Session, *, case: str, workspace_id: uuid.UUID, category_id: uuid.UUID,
+    source_type: str, decision: "Decision", session_kwargs: dict,
+) -> dict:
+    already_shown = history_crud.already_notified_in_session(
+        db, reference_decision_id=decision.id, **session_kwargs
+    )
+    if already_shown:
+        return {"case": case, "popup": None, "decision_id": str(decision.id)}
+
+    history_crud.record_match(
+        db,
+        workspace_id=workspace_id, category_id=category_id,
+        source_type=source_type, match_type="decision_reminder",
+        reference_decision_id=decision.id,
+        confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
+        **session_kwargs,
+    )
+    return {
+        "case": case,
+        "popup": {
+            "type": "decision_reminder",
+            "message": f"이미 '{decision.decision_text}'로 결정된 이력이 있습니다"
+                       f" ({_format_decided_at(decision.decided_at)}, {decision.reason or '사유 미기재'})",
+        },
+        "decision_id": str(decision.id),
+    }
+
+
 def _get_candidate_decisions(
     db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, statement: str
 ) -> list[Decision]:
@@ -321,36 +355,23 @@ def judge(
 
     if not presents_new_value:
         # Case 0: 리마인더 - 세션당 1회
-        already_shown = history_crud.already_notified_in_session(
-            db, reference_decision_id=decision.id, **session_kwargs
+        return _decision_reminder_result(
+            db, case="0", workspace_id=workspace_id, category_id=category_id,
+            source_type=source_type, decision=decision, session_kwargs=session_kwargs,
         )
-        if already_shown:
-            return {"case": "0", "popup": None, "decision_id": str(decision.id)}
-
-        history_crud.record_match(
-            db,
-            workspace_id=workspace_id, category_id=category_id,
-            source_type=source_type, match_type="decision_reminder",
-            reference_decision_id=decision.id,
-            confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
-            **session_kwargs,
-        )
-        return {
-            "case": "0",
-            "popup": {
-                "type": "decision_reminder",
-                "message": f"이미 '{decision.decision_text}'로 결정된 이력이 있습니다"
-                           f" ({_format_decided_at(decision.decided_at)}, {decision.reason or '사유 미기재'})",
-            },
-            "decision_id": str(decision.id),
-        }
 
     # 2단계: 값이 같은가?
     same_as_existing = _ask_judgment_step("same_as_existing", decision_text, decision_reason, statement)
 
     if same_as_existing:
-        # Case 1: 팝업 없음
-        return {"case": "1", "popup": None, "decision_id": str(decision.id)}
+        # [수정 - 팀 결정] Case 1: 새 값을 제시하는 것처럼 말했지만 실제로는 기존
+        # 결정과 같은 내용 - 이것도 "이미 결정된 이력이 있다"는 걸 알려주는 게
+        # 사용자에게 유용하다고 판단, Case 0과 동일한 리마인더 팝업을 띄우도록 변경.
+        # (예전엔 팝업 없이 조용히 무시했음)
+        return _decision_reminder_result(
+            db, case="1", workspace_id=workspace_id, category_id=category_id,
+            source_type=source_type, decision=decision, session_kwargs=session_kwargs,
+        )
 
     # 3단계: 근거가 명확한가?
     reason_is_clear = _ask_judgment_step("reason_is_clear", decision_text, decision_reason, statement)
