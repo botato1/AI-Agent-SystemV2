@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
@@ -30,16 +30,18 @@ def _get_task_or_404(db: Session, task_id: UUID, workspace_id: UUID):
     return item
 
 
-# 워크스페이스 내 진행 중인 할 일 목록 조회
+# 워크스페이스 내 할 일 목록 조회 (기본: 진행 중인 것만, status=all이면 완료 포함 전체)
 @router.get("", response_model=TaskListResponse)
 def get_task_list(
     workspace_id: UUID,
+    status: str | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    items = meeting_crud.list_open_tasks(db, workspace_id)
+    include_done = status == "all"
+    items = meeting_crud.list_tasks(db, workspace_id, include_done=include_done)
     return TaskListResponse(
         tasks=[TaskResponse.model_validate(i) for i in items]
     )

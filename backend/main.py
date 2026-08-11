@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import asyncio
 
 from backend.db.base import init_db
 from backend.routers.chat_router import router as chat_router
@@ -28,6 +29,7 @@ from backend.modules.rag.chroma_client import warm_up_reranker
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.services.auth_service import PROFILE_IMAGE_STORAGE_DIR
+from backend.services.meeting_reminder_service import check_and_send_meeting_reminders
 
 app = FastAPI(
     title="AI-Agent-System Backend",
@@ -51,6 +53,15 @@ app.mount("/static/profile_images", StaticFiles(directory=PROFILE_IMAGE_STORAGE_
 
 # 서버 시작 시 리랭커 모델 미리 로딩
 warm_up_reranker()
+
+async def _meeting_reminder_loop():
+    while True:
+        await asyncio.to_thread(check_and_send_meeting_reminders)
+        await asyncio.sleep(60)
+
+@app.on_event("startup")
+async def _start_meeting_reminder_loop():
+    asyncio.create_task(_meeting_reminder_loop())
 
 app.include_router(auth_router)
 app.include_router(chat_router)
