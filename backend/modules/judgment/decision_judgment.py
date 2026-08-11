@@ -33,7 +33,7 @@ reasoned_change/unreasoned_change로 구분한다. 팝업은 세션 내 (decisio
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -228,10 +228,18 @@ def _extract_change_reason(statement: str) -> str:
 # 노출된다. 이 메시지가 popup["message"]로 Notification 저장용과 WS push용
 # 양쪽에 동일하게 재사용되므로, 포맷 함수 하나로 통일해서 앞으로 이런
 # 불일치가 다시 안 생기게 한다.
+#
+# [수정 - 리뷰 반영] decided_at은 DateTime(timezone=True) 컬럼에 UTC로
+# 저장됨(decision_transition.py가 datetime.now(timezone.utc) 사용). 변환 없이
+# 바로 strftime하면 KST 새벽 0~9시 사이에 결정된 항목은 날짜가 하루 전으로
+# 잘못 표시됨 - astimezone(KST) 거친 뒤 포맷하도록 수정.
+KST = timezone(timedelta(hours=9))
+
+
 def _format_decided_at(decided_at) -> str:
     if decided_at is None:
         return "날짜 미상"
-    return decided_at.strftime("%Y-%m-%d")
+    return decided_at.astimezone(KST).strftime("%Y-%m-%d")
 
 
 def _get_candidate_decisions(
