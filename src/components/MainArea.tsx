@@ -12,12 +12,16 @@ import {
   LinkIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronDownIcon,
+  RepeatIcon,
 } from "./icons";
-import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRuntime";
+import { useChannelRuntime, ChatMessage, DocItem, DecisionReminderToast } from "../hooks/useChannelRuntime";
 import { useRoomFiles } from "../hooks/useRoomFiles";
 import { useContradictions } from "../hooks/useContradictions";
+import { useDecisionReminders } from "../hooks/useDecisionReminders";
 import { RoomFile } from "../services/roomFile";
 import { Contradiction, ContradictionSeverity } from "../services/contradiction";
+import { AppNotification } from "../services/notification";
 import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
@@ -256,11 +260,15 @@ function ContradictionPanel({
   contradictions,
   onViewReference,
   onViewDecision,
+  reminderNotifications,
+  onMarkReminderRead,
   t,
 }: {
   contradictions: Contradiction[];
   onViewReference: (fileId: string, name: string) => void;
   onViewDecision: (decisionId: string, name: string) => void;
+  reminderNotifications: AppNotification[];
+  onMarkReminderRead: (id: string) => void;
   t: any;
 }) {
   const [isOpen, setIsOpen] = useState(true);
@@ -295,6 +303,11 @@ function ContradictionPanel({
             {contradictions.length}
           </span>
         )}
+        {reminderNotifications.filter((r) => !r.is_read).length > 0 && (
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-semibold text-white">
+            {reminderNotifications.filter((r) => !r.is_read).length}
+          </span>
+        )}
         <ChevronLeftIcon size={11} className="opacity-50 transition-opacity group-hover:opacity-100" />
       </button>
     );
@@ -314,6 +327,30 @@ function ContradictionPanel({
           {t.contradiction_title}
         </p>
       </div>
+
+      {reminderNotifications.length > 0 && (
+        <div className="mb-3 space-y-1.5 border-b border-recall-border pb-3">
+          <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-recall-textMuted">
+            {t.meeting_live_alert_reminder_title}
+            <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal">
+              {reminderNotifications.length}
+            </span>
+          </p>
+          {reminderNotifications.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => !r.is_read && onMarkReminderRead(r.id)}
+              className={`block w-full rounded-lg border px-2.5 py-2 text-left text-xs transition ${
+                r.is_read
+                  ? "border-recall-border/50 text-recall-textMuted hover:bg-white/5"
+                  : "border-amber-500/30 bg-amber-500/5 text-recall-text hover:bg-amber-500/10"
+              }`}
+            >
+              {r.message}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="flex-1 space-y-2 overflow-y-auto">
         {contradictions.length === 0 ? (
@@ -344,6 +381,50 @@ function ContradictionPanel({
   );
 }
 
+// Case0(결정 리마인더) - contradiction_alert처럼 해결 버튼이 있는 카드가 아니라,
+// 몇 초 후 자동으로 사라지는 가벼운 확인용 토스트로 보여준다.
+function DecisionReminderToastCard({
+  toast,
+  onDismiss,
+  onOpenDecision,
+  t,
+}: {
+  toast: DecisionReminderToast;
+  onDismiss: (id: string) => void;
+  onOpenDecision: (decisionId: string) => void;
+  t: any;
+}) {
+  useEffect(() => {
+    const timer = setTimeout(() => onDismiss(toast.id), 6000);
+    return () => clearTimeout(timer);
+  }, [toast.id]);
+
+  return (
+    <div className="pointer-events-auto flex items-start gap-2 rounded-xl border border-amber-500/30 bg-recall-bgSoft/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
+      <RepeatIcon size={13} className="mt-0.5 flex-shrink-0 text-amber-400" />
+      <div className="min-w-0 flex-1">
+        <p className="font-bold text-amber-400">{t.meeting_live_alert_reminder_title}</p>
+        <p className="text-recall-text">{toast.displayMessage || toast.statementText}</p>
+        {toast.decisionId && (
+          <button
+            onClick={() => onOpenDecision(toast.decisionId!)}
+            className="mt-1 text-[11px] text-recall-accent underline hover:opacity-80"
+          >
+            {t.meeting_live_alert_reminder_view_btn}
+          </button>
+        )}
+      </div>
+      <button
+        onClick={() => onDismiss(toast.id)}
+        className="flex-shrink-0 text-recall-textMuted hover:text-recall-text"
+        aria-label={t.btn_close}
+      >
+        <CloseIcon size={12} />
+      </button>
+    </div>
+  );
+}
+
 function MessageTab({
   messages,
   onSend,
@@ -353,6 +434,10 @@ function MessageTab({
   onOpenPreview,
   contradictions,
   onOpenDecision,
+  decisionReminders,
+  onDismissDecisionReminder,
+  reminderNotifications,
+  onMarkReminderRead,
   currentUser,
   memberAvatarById,
   t,
@@ -365,6 +450,10 @@ function MessageTab({
   onOpenPreview: (documentId: string, name: string) => void;
   contradictions: Contradiction[];
   onOpenDecision: (decisionId: string) => void;
+  decisionReminders: DecisionReminderToast[];
+  onDismissDecisionReminder: (id: string) => void;
+  reminderNotifications: AppNotification[];
+  onMarkReminderRead: (id: string) => void;
   currentUser: MainAreaProps["currentUser"];
   memberAvatarById: Record<string, string | null>;
   t: any;
@@ -375,10 +464,24 @@ function MessageTab({
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const shouldScrollToBottomRef = useRef(false);
+  const isAtBottomRef = useRef(true);
+  const lastMessageIdRef = useRef<string | null>(null);
+  const [newMessagePreview, setNewMessagePreview] = useState<ChatMessage | null>(null);
 
   function scrollToBottom() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // 위로 스크롤해서 옛날 메시지를 보는 중인지 판단 (하단에서 40px 이상 떨어지면 "떠났다"고 간주)
+  function handleScroll() {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceFromBottom < 40;
+    isAtBottomRef.current = atBottom;
+    if (atBottom) setNewMessagePreview(null);
   }
 
   // 메시지 전송은 서버 응답을 기다린 뒤에야 목록에 반영되므로(낙관적 업데이트 아님),
@@ -387,6 +490,16 @@ function MessageTab({
     if (shouldScrollToBottomRef.current) {
       shouldScrollToBottomRef.current = false;
       scrollToBottom();
+    }
+  }, [messages]);
+
+  // 옛날 메시지를 보고 있는 동안 상대방이 새 메시지를 보내면, 카톡처럼 입력창 위에 짧게 미리보기 표시
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.id === lastMessageIdRef.current) return;
+    lastMessageIdRef.current = last.id;
+    if (!last.isMine && !isAtBottomRef.current) {
+      setNewMessagePreview(last);
     }
   }, [messages]);
 
@@ -464,8 +577,22 @@ function MessageTab({
         </div>
       )}
 
+      {decisionReminders.length > 0 && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-20 w-full max-w-sm -translate-x-1/2 space-y-2 px-3">
+          {decisionReminders.map((r) => (
+            <DecisionReminderToastCard
+              key={r.id}
+              toast={r}
+              onDismiss={onDismissDecisionReminder}
+              onOpenDecision={onOpenDecision}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex-1 space-y-3 overflow-y-auto">
+        <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 space-y-3 overflow-y-auto">
           {memberActivities.map((activity: MemberActivity) =>
             activity.isAi ? (
               <div
@@ -549,6 +676,20 @@ function MessageTab({
           </div>
         )}
 
+        {newMessagePreview && (
+          <button
+            onClick={() => {
+              scrollToBottom();
+              setNewMessagePreview(null);
+            }}
+            className="mx-auto mb-2 flex w-fit max-w-xs items-center gap-2 rounded-xl border border-recall-border bg-recall-bgSoft px-3 py-1.5 text-left text-xs text-recall-text shadow-md hover:bg-white/5"
+          >
+            <ChevronDownIcon size={13} className="flex-shrink-0 text-recall-accent" />
+            <span className="flex-shrink-0 truncate max-w-[5rem] font-medium">{newMessagePreview.author}</span>
+            <span className="truncate text-recall-textMuted">{newMessagePreview.text}</span>
+          </button>
+        )}
+
         <ComposerBar
           pendingFiles={pendingFiles}
           onAddFiles={addPendingFiles}
@@ -562,6 +703,8 @@ function MessageTab({
         contradictions={contradictions}
         onViewReference={onOpenPreview}
         onViewDecision={(decisionId) => onOpenDecision(decisionId)}
+        reminderNotifications={reminderNotifications}
+        onMarkReminderRead={onMarkReminderRead}
         t={t}
       />
     </div>
@@ -733,12 +876,8 @@ export default function MainArea({
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
 
-  const { chatMessages, sendChatMessage, deleteMessage } = useChannelRuntime(
-    workspaceId,
-    channel.id,
-    currentUser,
-    memberNameById
-  );
+  const { chatMessages, sendChatMessage, deleteMessage, decisionReminders, dismissDecisionReminder } =
+    useChannelRuntime(workspaceId, channel.id, currentUser, memberNameById);
 
   const roomFiles = useRoomFiles(workspaceId, channel.id);
 
@@ -746,6 +885,12 @@ export default function MainArea({
 
   const roomContradictions = workspaceContradictions.filter(
     (c) => c.source_type === "room_message" && c.room_message_id && chatMessages.some((m) => m.id === c.room_message_id)
+  );
+
+  const { reminders: allDecisionReminderNotifications, markRead: markReminderRead } =
+    useDecisionReminders(workspaceId);
+  const roomReminders = allDecisionReminderNotifications.filter(
+    (n) => n.ref_type === "room_message" && n.room_id === channel.id
   );
 
   const mergedDocs: DocItem[] = roomFiles.files.map((f) => ({
@@ -851,6 +996,10 @@ export default function MainArea({
           onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           contradictions={roomContradictions}
           onOpenDecision={onOpenDecision}
+          decisionReminders={decisionReminders}
+          onDismissDecisionReminder={dismissDecisionReminder}
+          reminderNotifications={roomReminders}
+          onMarkReminderRead={markReminderRead}
           currentUser={currentUser}
           memberAvatarById={memberAvatarById}
           t={t}

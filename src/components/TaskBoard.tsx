@@ -23,6 +23,7 @@ import {
   WarningIcon,
 } from "./icons";
 import { getWorkspaceMembersApi } from "../services/workspace";
+import { resolveAssigneeName } from "../lib/resolveAssigneeName";
 
 interface Props {
   taskList: Task[];
@@ -77,7 +78,10 @@ function formatDeadline(deadline: string | null): string {
     const month = parseInt(parts[1], 10);
     const day = parseInt(parts[2], 10);
     if (!isNaN(month) && !isNaN(day)) {
-      return timePart ? `${month}월 ${day}일 ${timePart}` : `${month}월 ${day}일`;
+      // "00:00"은 사용자가 시간을 따로 지정하지 않았다는 뜻으로 쓰는 값이라(날짜만 고른 경우),
+      // 그대로 보여주면 마치 자정이 마감시간인 것처럼 보인다 - 날짜만 표시한다.
+      const showTime = timePart && timePart !== "00:00";
+      return showTime ? `${month}월 ${day}일 ${timePart}` : `${month}월 ${day}일`;
     }
   }
   return "-";
@@ -92,7 +96,8 @@ function parseDeadline(deadline: string | null): number | null {
 function splitDeadline(deadline: string | null): { date: string; time: string } {
   if (!deadline) return { date: "", time: "" };
   const [date, time] = deadline.split("T");
-  return { date: date || "", time: time || "" };
+  // "00:00"은 시간 미지정을 나타내는 값이라, 편집 폼에도 실제로 고른 시간처럼 채워두지 않는다
+  return { date: date || "", time: time && time !== "00:00" ? time : "" };
 }
 
 function isOverdue(deadline: string | null): boolean {
@@ -224,6 +229,15 @@ function TaskDetailModal({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // 상세 모달은 내용이 길어지면 스크롤이 생기는데, 담당자 드롭다운이 스크롤 영역
+  // 아래쪽에서 열리면 사용자가 직접 스크롤하지 않는 한 안 보인다 - 열릴 때 자동으로
+  // 보이는 위치까지 스크롤해준다.
+  useEffect(() => {
+    if (isAssigneeOpen) {
+      assigneeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [isAssigneeOpen]);
+
   const filteredMembers = memberList.filter((name) =>
     name.toLowerCase().includes((form.assignee || "").trim().toLowerCase())
   );
@@ -241,7 +255,9 @@ function TaskDetailModal({
 
   function handleSave() {
     if (!form.task.trim()) return;
-    onSave(form);
+    // "나연", "승주"처럼 성 없이 입력됐어도 멤버 중 한 명으로 유일하게 좁혀지면 성까지 채워 저장한다
+    const resolvedAssignee = form.assignee ? resolveAssigneeName(form.assignee, memberList) : form.assignee;
+    onSave({ ...form, assignee: resolvedAssignee });
     onClose();
   }
 
@@ -320,6 +336,7 @@ function TaskDetailModal({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
+                    setForm((prev) => ({ ...prev, assignee: resolveAssigneeName(prev.assignee || "", memberList) }));
                     setIsAssigneeOpen(false);
                   }
                 }}
@@ -364,8 +381,10 @@ function TaskDetailModal({
                     type="date"
                     value={splitDeadline(form.deadline).date}
                     onChange={(e) => {
-                      const time = splitDeadline(form.deadline).time || "09:00";
-                      setForm({ ...form, deadline: e.target.value ? `${e.target.value}T${time}` : null });
+                      // 시간을 이미 골라둔 상태면 유지하고, 아니면 굳이 시간을 채우지 않고 날짜만 남긴다
+                      const time = splitDeadline(form.deadline).time;
+                      const date = e.target.value;
+                      setForm({ ...form, deadline: date ? (time ? `${date}T${time}` : date) : null });
                     }}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer pointer-events-auto"
                   />
@@ -377,7 +396,9 @@ function TaskDetailModal({
                   disabled={!form.deadline}
                   onChange={(e) => {
                     const date = splitDeadline(form.deadline).date;
-                    if (date) setForm({ ...form, deadline: `${date}T${e.target.value}` });
+                    if (!date) return;
+                    // 시간 입력을 지우면(빈 값) 다시 날짜만 있는 상태로 되돌린다
+                    setForm({ ...form, deadline: e.target.value ? `${date}T${e.target.value}` : date });
                   }}
                   className="w-24 flex-shrink-0 rounded-lg border border-recall-border bg-recall-bgSoft px-2 py-2 text-sm text-recall-text outline-none focus:border-recall-accent disabled:opacity-50"
                 />
@@ -390,6 +411,9 @@ function TaskDetailModal({
           <button
             type="button"
             onClick={() => {
+              // 완료된 할 일은 서버가 새로고침 후엔 다시 조회해주지 않아서 지금 지우면 되돌릴
+              // 방법이 없다 - 실수로 누르는 걸 막기 위해 꼭 한 번 확인을 받는다
+              if (!window.confirm(t.task_delete_confirm)) return;
               onDelete(task.id);
               onClose();
             }}
@@ -604,11 +628,25 @@ export default function TaskBoard({
     const taskId = active.id as string;
     const overId = over.id as string;
     const task = taskList.find((t) => t.id === taskId);
-    if (!task || !overId.startsWith("gap:")) return;
+    if (!task) return;
 
-    const [, columnId, indexStr] = overId.split(":");
-    const insertIndex = parseInt(indexStr, 10);
-    const newStatus = columnId as TaskStatus;
+    let newStatus: TaskStatus;
+    let insertIndex: number;
+
+    if (overId.startsWith("gap:")) {
+      const [, columnId, indexStr] = overId.split(":");
+      newStatus = columnId as TaskStatus;
+      insertIndex = parseInt(indexStr, 10);
+    } else if (columns.some((c) => c.id === overId)) {
+      // 카드 사이 좁은 여백이 아니라 컬럼의 빈 공간에 놓였을 때도 그 컬럼 맨 끝으로 이동시킨다 -
+      // 안 그러면 (특히 카드가 적어 여백이 좁은 "완료" 칸에서) 아무 반응 없이 조용히 무시되어
+      // 카드가 그냥 사라진 것처럼 보인다.
+      newStatus = overId as TaskStatus;
+      const targetCol = columnsWithTasks.find((c) => c.id === newStatus);
+      insertIndex = targetCol ? targetCol.tasks.length : 0;
+    } else {
+      return;
+    }
 
     if (task.status !== newStatus) {
       onStatusChange(taskId, newStatus);
@@ -641,7 +679,7 @@ export default function TaskBoard({
 
   return (
     <div>
-      <div className="mb-3 flex justify-end">
+      <div className="mb-3 flex items-center justify-end gap-2">
         <div className="relative" ref={sortMenuRef}>
           <button
             onClick={() => setSortMenuOpen((v) => !v)}
@@ -669,6 +707,14 @@ export default function TaskBoard({
             </div>
           )}
         </div>
+
+        <button
+          onClick={() => onOpenModal()}
+          className="flex items-center gap-1 rounded-lg bg-recall-accent px-2.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
+        >
+          <PlusIcon size={13} />
+          {t.task_add_btn}
+        </button>
       </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -683,6 +729,7 @@ export default function TaskBoard({
                 </div>
                 <button
                   onClick={() => onOpenModal(col.id)}
+                  title={t.task_add_btn}
                   className="flex h-5 w-5 items-center justify-center rounded hover:bg-white/5"
                 >
                   <PlusIcon size={13} className="text-recall-textMuted" />
@@ -702,13 +749,6 @@ export default function TaskBoard({
                     <InsertionGap id={`gap:${col.id}:${i + 1}`} />
                   </div>
                 ))}
-
-                <button
-                  onClick={() => onOpenModal(col.id)}
-                  className="mt-2 w-full rounded-xl border border-dashed border-recall-border py-2 text-sm text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
-                >
-                  {t.task_add_btn}
-                </button>
               </DroppableColumn>
             </div>
           ))}
