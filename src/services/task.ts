@@ -47,6 +47,7 @@ export interface CreateTaskParams {
   assignee_id?: string;
   assignee_label?: string;
   priority?: TaskPriority;
+  status?: BackendTaskStatus;
   due_at?: string;
 }
 
@@ -66,8 +67,10 @@ export interface UpdateTaskParams {
 
 /**
  * 1. 할 일 목록 조회 API (GET /api/workspaces/{workspace_id}/tasks)
+ * includeAll=true면 ?status=all을 붙여서 done/cancelled/suggested까지 다 받아온다.
+ * 기본값(false)은 예전과 동일하게 open/in_progress만 온다.
  */
-export async function getTaskListApi(workspaceId: string): Promise<GetTaskListResponse> {
+export async function getTaskListApi(workspaceId: string, includeAll = false): Promise<GetTaskListResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
 
@@ -81,7 +84,8 @@ export async function getTaskListApi(workspaceId: string): Promise<GetTaskListRe
   }
 
   try {
-    const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/tasks`, {
+    const query = includeAll ? "?status=all" : "";
+    const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/tasks${query}`, {
       method: "GET",
     });
 

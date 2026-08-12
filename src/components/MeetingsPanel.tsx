@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert, ContradictionAlertAction, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
-import { Meeting, MeetingStatus, MeetingAttendee, RecordingMode, AgendaReminderPopup, AgendaReminderItem } from "../services/meeting";
+import { useDecisionReminders } from "../hooks/useDecisionReminders";
+import { Meeting, MeetingStatus, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision } from "../services/meeting";
 import { ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
 import {
   UploadIcon,
@@ -24,6 +25,7 @@ import {
   HeadphoneIcon,
   SplitIcon,
   CheckIcon,
+  PlusIcon,
 } from "./icons";
 import ContradictionMessage from "./ContradictionMessage";
 import ContradictionEditForm from "./ContradictionEditForm";
@@ -39,7 +41,7 @@ import Avatar from "./Avatar";
 import { hashAvatarColor } from "../data/avatarColors";
 import { getVoiceProfileListApi } from "../services/voice";
 import { getMeetingExportsApi, MeetingExportRecord, SplitSegmentParams } from "../services/meeting";
-import { getDocumentFileApi, uploadDocumentApi } from "../services/document";
+import { getDocumentFileApi } from "../services/document";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -93,13 +95,6 @@ function formatTimeOnly(iso?: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function groupAttendees(attendees: MeetingAttendee[]) {
-  return {
-    initial: attendees.filter((a) => a.is_initial !== false),
-    added: attendees.filter((a) => a.is_initial === false),
-  };
 }
 
 function isRawSpeakerLabel(label: string | null | undefined): label is string {
@@ -452,6 +447,7 @@ function UploadModal({
 
 interface MeetingsPanelProps {
   workspaceId: string;
+  currentUserId: string;
   avatarUrlByName: Record<string, string | null>;
   liveStatus: LiveMeetingStatus;
   liveMeeting: Meeting | null;
@@ -486,7 +482,12 @@ interface MeetingsPanelProps {
   // 소비하고 나면 상위(App)에서 null로 리셋해줘야 뒤로 갔다 다시 들어와도 강제로 재선택되지 않는다.
   initialMeetingId?: string | null;
   onInitialMeetingIdConsumed?: () => void;
+  // 결정 근거 팝업의 "원본 회의로 이동"에서 세그먼트 id까지 같이 넘어온 경우, 스크립트 탭에서
+  // 그 발언까지 스크롤 + 하이라이트해준다.
+  initialSegmentId?: string | null;
+  onInitialSegmentIdConsumed?: () => void;
   onOpenDecision: (decisionId: string) => void;
+  onTaskApproved: () => void;
   t: any;
 }
 
@@ -539,6 +540,127 @@ function EditableMeetingTitle({ title, onRename, t }: { title: string; onRename:
 
 function EditableFullSummary({
   text,
+  isEditing,
+  onSave,
+  t,
+}: {
+  text: string;
+  isEditing: boolean;
+  onSave: (text: string) => void;
+  t: any;
+}) {
+  const [draft, setDraft] = useState(text);
+
+  useEffect(() => {
+    setDraft(text);
+  }, [text, isEditing]);
+
+  if (isEditing) {
+    return (
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          const trimmed = draft.trim();
+          if (trimmed !== text) onSave(trimmed);
+        }}
+        rows={10}
+        placeholder={t.meeting_full_summary_empty}
+        className="w-full rounded-xl border border-recall-border bg-recall-bgMain px-3 py-2 text-xs leading-relaxed text-recall-text outline-none focus:border-recall-accent"
+      />
+    );
+  }
+
+  return (
+    <div className="p-3.5 rounded-xl bg-white/5 border border-recall-border/30">
+      <p className="whitespace-pre-line text-xs leading-relaxed text-recall-textMuted">
+        {text || t.meeting_full_summary_empty}
+      </p>
+    </div>
+  );
+}
+
+function DecisionItem({
+  decision,
+  isEditing,
+  onSave,
+  t,
+}: {
+  decision: Decision;
+  isEditing: boolean;
+  onSave: (input: { title: string; decisionText: string; reason: string | null }) => Promise<boolean>;
+  t: any;
+}) {
+  const [title, setTitle] = useState(decision.title);
+  const [decisionText, setDecisionText] = useState(decision.decision_text);
+  const [reason, setReason] = useState(decision.reason || "");
+
+  useEffect(() => {
+    setTitle(decision.title);
+    setDecisionText(decision.decision_text);
+    setReason(decision.reason || "");
+  }, [decision.id, decision.title, decision.decision_text, decision.reason, isEditing]);
+
+  function commit() {
+    const trimmedTitle = title.trim();
+    const trimmedText = decisionText.trim();
+    // [수정 - 리뷰 반영] 이유를 지워서 빈 문자열로 만들면 여기서 undefined가 되는데,
+    // JSON.stringify는 undefined인 키를 아예 빼버려서 서버(Pydantic exclude_unset)가
+    // "이유는 안 건드림"으로 해석해 기존 값이 그대로 남아있었다 - null로 명시해서 보낸다.
+    const trimmedReason = reason.trim() || null;
+    if (!trimmedTitle || !trimmedText) return;
+    if (
+      trimmedTitle === decision.title &&
+      trimmedText === decision.decision_text &&
+      trimmedReason === (decision.reason || null)
+    ) {
+      return;
+    }
+    onSave({ title: trimmedTitle, decisionText: trimmedText, reason: trimmedReason });
+  }
+
+  if (isEditing) {
+    return (
+      <li className="space-y-1.5 rounded-lg bg-white/5 p-2">
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={commit}
+          placeholder={t.meeting_decision_title_placeholder}
+          className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs font-bold text-recall-text outline-none focus:border-recall-accent"
+        />
+        <textarea
+          value={decisionText}
+          onChange={(e) => setDecisionText(e.target.value)}
+          onBlur={commit}
+          rows={2}
+          placeholder={t.meeting_decision_text_placeholder}
+          className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs text-recall-text outline-none focus:border-recall-accent"
+        />
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          onBlur={commit}
+          placeholder={t.meeting_decision_reason_placeholder}
+          className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs text-recall-textMuted outline-none focus:border-recall-accent"
+        />
+      </li>
+    );
+  }
+
+  return (
+    <li className="flex gap-2 text-xs text-recall-text p-2 rounded-lg bg-white/5">
+      <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-recall-accent" />
+      <span className="flex-1">
+        <span className="font-bold">{decision.title}</span>
+        <span className="text-recall-textMuted"> — {decision.decision_text}</span>
+      </span>
+    </li>
+  );
+}
+
+function EditableShortSummaryField({
+  text,
   onSave,
   t,
 }: {
@@ -546,55 +668,161 @@ function EditableFullSummary({
   onSave: (text: string) => void;
   t: any;
 }) {
-  const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(text);
 
-  if (isEditing) {
+  useEffect(() => {
+    setDraft(text);
+  }, [text]);
+
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const trimmed = draft.trim();
+        if (trimmed !== text) onSave(trimmed);
+      }}
+      placeholder={t.meeting_short_summary_label}
+      className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-sm font-bold text-recall-text outline-none focus:border-recall-accent"
+    />
+  );
+}
+
+function EditableTitleField({
+  title,
+  onSave,
+  t,
+}: {
+  title: string;
+  onSave: (title: string) => void;
+  t: any;
+}) {
+  const [draft, setDraft] = useState(title);
+
+  useEffect(() => {
+    setDraft(title);
+  }, [title]);
+
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const trimmed = draft.trim();
+        if (trimmed && trimmed !== title) onSave(trimmed);
+      }}
+      className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-sm font-bold text-recall-text outline-none focus:border-recall-accent"
+    />
+  );
+}
+
+function EditableLocationField({
+  location,
+  onSave,
+  t,
+}: {
+  location: string;
+  onSave: (location: string) => void;
+  t: any;
+}) {
+  const [draft, setDraft] = useState(location);
+
+  useEffect(() => {
+    setDraft(location);
+  }, [location]);
+
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const trimmed = draft.trim();
+        if (trimmed !== location) onSave(trimmed);
+      }}
+      placeholder={t.meeting_minutes_datetime_unset}
+      className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs text-recall-text outline-none focus:border-recall-accent"
+    />
+  );
+}
+
+function AddDecisionForm({
+  onAdd,
+  t,
+}: {
+  onAdd: (input: { title: string; decisionText: string; reason?: string }) => Promise<boolean>;
+  t: any;
+}) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [decisionText, setDecisionText] = useState("");
+  const [reason, setReason] = useState("");
+
+  if (!isAdding) {
     return (
-      <div className="space-y-2">
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={10}
-          className="w-full rounded-xl border border-recall-border bg-recall-bgMain px-3 py-2 text-xs leading-relaxed text-recall-text outline-none focus:border-recall-accent"
-        />
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={() => setIsEditing(false)}
-            className="rounded-lg border border-recall-border px-3 py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
-          >
-            {t.task_cancel}
-          </button>
-          <button
-            onClick={() => {
-              onSave(draft.trim());
-              setIsEditing(false);
-            }}
-            className="rounded-lg bg-recall-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
-          >
-            {t.task_save}
-          </button>
-        </div>
-      </div>
+      <button
+        onClick={() => setIsAdding(true)}
+        className="flex items-center gap-1 rounded-lg border border-dashed border-recall-border px-2 py-1 text-[11px] text-recall-textMuted transition hover:text-recall-text hover:border-recall-accent"
+      >
+        <PlusIcon size={11} />
+        {t.meeting_decision_add_btn}
+      </button>
     );
   }
 
   return (
-    <div className="group relative">
-      <p className="whitespace-pre-line text-xs leading-relaxed text-recall-textMuted p-3.5 rounded-xl bg-white/5 border border-recall-border/30">
-        {text || t.meeting_full_summary_empty}
-      </p>
-      <button
-        onClick={() => {
-          setDraft(text);
-          setIsEditing(true);
-        }}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-recall-border bg-recall-bgMain/80 px-2 py-1 text-[11px] text-recall-textMuted opacity-0 transition hover:text-recall-text group-hover:opacity-100"
-      >
-        <PencilIcon size={11} />
-        {t.meeting_export_edit}
-      </button>
+    <div className="space-y-1.5 rounded-lg bg-white/5 p-2">
+      <input
+        autoFocus
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder={t.meeting_decision_title_placeholder}
+        className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs font-bold text-recall-text outline-none focus:border-recall-accent"
+      />
+      <textarea
+        value={decisionText}
+        onChange={(e) => setDecisionText(e.target.value)}
+        rows={2}
+        placeholder={t.meeting_decision_text_placeholder}
+        className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs text-recall-text outline-none focus:border-recall-accent"
+      />
+      <input
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder={t.meeting_decision_reason_placeholder}
+        className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs text-recall-textMuted outline-none focus:border-recall-accent"
+      />
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={() => {
+            setIsAdding(false);
+            setTitle("");
+            setDecisionText("");
+            setReason("");
+          }}
+          className="rounded-lg border border-recall-border px-3 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
+        >
+          {t.task_cancel}
+        </button>
+        <button
+          onClick={async () => {
+            if (!title.trim() || !decisionText.trim()) return;
+            const ok = await onAdd({
+              title: title.trim(),
+              decisionText: decisionText.trim(),
+              reason: reason.trim() || undefined,
+            });
+            if (ok) {
+              setIsAdding(false);
+              setTitle("");
+              setDecisionText("");
+              setReason("");
+            }
+          }}
+          className="rounded-lg bg-recall-accent px-3 py-1 text-[11px] font-medium text-white hover:opacity-90"
+        >
+          {t.task_save}
+        </button>
+      </div>
     </div>
   );
 }
@@ -603,6 +831,7 @@ function judgmentCaseLabel(t: any, judgmentCase: string): string {
   const map: Record<string, string> = {
     reasoned_change: t.meeting_live_alert_reasoned,
     unreasoned_change: t.meeting_live_alert_unreasoned,
+    decision_reminder: t.meeting_live_alert_reminder,
   };
   return map[judgmentCase] ?? judgmentCase;
 }
@@ -640,6 +869,7 @@ function LiveContradictionToast({
   onResolve,
   onDismiss,
   onViewReference,
+  onViewDecision,
   onEditSegment,
   t,
 }: {
@@ -648,12 +878,24 @@ function LiveContradictionToast({
   onResolve: (contradictionId: string, resolutionType: ContradictionResolutionType) => void;
   onDismiss: (contradictionId: string) => void;
   onViewReference?: () => void;
+  onViewDecision?: (decisionId: string) => void;
   onEditSegment?: (segmentId: string, content: string) => Promise<boolean>;
   t: any;
 }) {
   const isDecision = alert.source === "decision";
-  // actions가 안 오면(문서 기반, 또는 아직 안 붙은 구버전 응답) 기본 두 액션을 보여준다
-  const actions = alert.actions ?? (["keep_reference", "change_acknowledged"] as ContradictionAlertAction[]);
+  const isReminder = alert.judgmentCase === "decision_reminder";
+  // actions가 안 오면(문서 기반, 또는 아직 안 붙은 구버전 응답) 기본 두 액션을 보여준다 -
+  // 단, 리마인더(Case0)는 해결 대상이 아니라 애초에 액션이 없다.
+  const actions = isReminder
+    ? []
+    : alert.actions ?? (["keep_reference", "change_acknowledged"] as ContradictionAlertAction[]);
+
+  // 리마인더는 해결할 때까지 기다릴 필요가 없으니, 확인 안 해도 몇 초 뒤 자동으로 큐에서 빠진다
+  useEffect(() => {
+    if (!isReminder) return;
+    const timer = setTimeout(() => onDismiss(alert.contradiction_id), 6000);
+    return () => clearTimeout(timer);
+  }, [isReminder, alert.contradiction_id]);
 
   // STT 오인식(예: "9월"을 "구월"로 인식)으로 뜬 모순은, 무시하기보다 원본 발화를 직접
   // 고쳐서 근본 원인을 없애는 게 더 유용하다 - 세그먼트가 있을 때만 이 옵션을 보여준다.
@@ -735,7 +977,11 @@ function LiveContradictionToast({
           }`}
         >
           {isDecision && <RepeatIcon size={13} />}
-          {isDecision ? t.meeting_live_alert_decision_title : t.contradiction_title}
+          {isReminder
+            ? t.meeting_live_alert_reminder_title
+            : isDecision
+            ? t.meeting_live_alert_decision_title
+            : t.contradiction_title}
           {alert.judgmentCase && (
             <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold">
               {judgmentCaseLabel(t, alert.judgmentCase)}
@@ -759,48 +1005,80 @@ function LiveContradictionToast({
       <p className="mb-1.5 text-recall-text">{alert.displayMessage || alert.reason || alert.statement_text}</p>
 
       {alert.referenceSourceName &&
-        (onViewReference ? (
-          <button
-            type="button"
-            onClick={onViewReference}
-            className="mb-2 text-[11px] text-recall-accent underline hover:opacity-80"
-          >
-            {t.agenda_reminder_reason_label}: {alert.referenceSourceName}
-          </button>
-        ) : (
-          <p className="mb-2 text-[11px] text-recall-textMuted">
-            {t.agenda_reminder_reason_label}: {alert.referenceSourceName}
-          </p>
-        ))}
+        (() => {
+          // 근거가 결정사항이면 결정 미리보기로, 문서면 문서 미리보기로 - 문서 참조든
+          // 결정 참조든 항상 "그곳으로 이동"할 수 있는 링크가 뜨게 통일한다.
+          const onClick =
+            alert.source === "decision"
+              ? alert.decisionId && onViewDecision
+                ? () => onViewDecision(alert.decisionId!)
+                : undefined
+              : onViewReference;
+
+          return onClick ? (
+            <button
+              type="button"
+              onClick={onClick}
+              className="mb-2 text-[11px] text-recall-accent underline hover:opacity-80"
+            >
+              {t.agenda_reminder_reason_label}: {alert.referenceSourceName}
+            </button>
+          ) : (
+            <p className="mb-2 text-[11px] text-recall-textMuted">
+              {t.agenda_reminder_reason_label}: {alert.referenceSourceName}
+            </p>
+          );
+        })()}
 
       <div className="flex gap-1.5">
-        {canEditSegment && (
-          <button
-            onClick={() => setIsEditing(true)}
-            className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
-          >
-            {t.meeting_live_alert_edit_btn}
-          </button>
+        {isReminder ? (
+          <>
+            {alert.decisionId && onViewDecision && (
+              <button
+                onClick={() => onViewDecision(alert.decisionId!)}
+                className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-text hover:bg-white/5"
+              >
+                {t.meeting_live_alert_reminder_view_btn}
+              </button>
+            )}
+            <button
+              onClick={() => onDismiss(alert.contradiction_id)}
+              className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+            >
+              {t.meeting_live_alert_reminder_ack_btn}
+            </button>
+          </>
+        ) : (
+          <>
+            {canEditSegment && (
+              <button
+                onClick={() => setIsEditing(true)}
+                className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
+              >
+                {t.meeting_live_alert_edit_btn}
+              </button>
+            )}
+            {actions.map((action) => (
+              <button
+                key={action}
+                onClick={async () => {
+                  if (action === "change_acknowledged") {
+                    const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                    if (!ok) return;
+                  }
+                  onResolve(alert.contradiction_id, action);
+                }}
+                className={`flex-1 rounded px-2 py-1 text-[11px] font-medium ${
+                  action === "change_acknowledged"
+                    ? "bg-recall-accent text-white hover:opacity-90"
+                    : "border border-recall-border text-recall-text hover:bg-white/5"
+                }`}
+              >
+                {actionLabel(t, action)}
+              </button>
+            ))}
+          </>
         )}
-        {actions.map((action) => (
-          <button
-            key={action}
-            onClick={async () => {
-              if (action === "change_acknowledged") {
-                const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
-                if (!ok) return;
-              }
-              onResolve(alert.contradiction_id, action);
-            }}
-            className={`flex-1 rounded px-2 py-1 text-[11px] font-medium ${
-              action === "change_acknowledged"
-                ? "bg-recall-accent text-white hover:opacity-90"
-                : "border border-recall-border text-recall-text hover:bg-white/5"
-            }`}
-          >
-            {actionLabel(t, action)}
-          </button>
-        ))}
       </div>
     </div>
   );
@@ -810,12 +1088,16 @@ function LiveContradictionToast({
 // 감지와 같은 큐에 합쳐서 한 번에 하나씩 non-blocking 배너로 보여준다.
 function LiveAgendaCard({
   item,
+  position,
   total,
+  onPrev,
   onNext,
   t,
 }: {
   item: AgendaReminderItem;
+  position: number;
   total: number;
+  onPrev?: () => void;
   onNext: () => void;
   t: any;
 }) {
@@ -827,7 +1109,7 @@ function LiveAgendaCard({
           {t.agenda_reminder_title}
           {total > 1 && (
             <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold">
-              {t.meeting_live_alert_count(total)}
+              {position}/{total}
             </span>
           )}
         </span>
@@ -841,12 +1123,22 @@ function LiveAgendaCard({
         </p>
       )}
 
-      <button
-        onClick={onNext}
-        className="w-full rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
-      >
-        {t.meeting_live_alert_next_btn}
-      </button>
+      <div className="flex gap-1.5">
+        {onPrev && (
+          <button
+            onClick={onPrev}
+            className="rounded border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10"
+          >
+            {t.meeting_live_alert_prev_btn}
+          </button>
+        )}
+        <button
+          onClick={onNext}
+          className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+        >
+          {t.meeting_live_alert_next_btn}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1013,6 +1305,7 @@ function MeetingExportsList({ workspaceId, t }: { workspaceId: string; t: any })
 
 export default function MeetingsPanel({
   workspaceId,
+  currentUserId,
   avatarUrlByName,
   liveStatus,
   liveMeeting,
@@ -1039,7 +1332,10 @@ export default function MeetingsPanel({
   onRenameLive,
   initialMeetingId,
   onInitialMeetingIdConsumed,
+  initialSegmentId,
+  onInitialSegmentIdConsumed,
   onOpenDecision,
+  onTaskApproved,
   t,
 }: MeetingsPanelProps) {
   const {
@@ -1051,24 +1347,25 @@ export default function MeetingsPanel({
     segments,
     summary,
     decisions,
+    addDecision,
+    updateDecision,
     attendees,
-    documents,
     suggestedTasks,
     approveSuggestedTask,
     rejectSuggestedTask,
     reloadAttendees,
-    reloadDocuments,
-    removeDocument,
     isDetailLoading,
     isUploading,
     uploadAudio,
     removeMeeting,
     renameMeeting,
+    updateMeetingLocation,
     mapSpeakerNames,
     assignSegmentSpeaker,
     updateSegmentContent,
     splitSegment,
     updateFullSummary,
+    updateShortSummary,
     reload,
   } = useRealMeetings(workspaceId);
 
@@ -1080,9 +1377,6 @@ export default function MeetingsPanel({
     onInitialMeetingIdConsumed?.();
   }, [initialMeetingId]);
 
-  // 회의록 탭 관련 자료 - 조회/업로드 모두 회의 ID 기준 전용 API를 사용한다(채팅방 연결 여부와 무관).
-  const meetingDocInputRef = useRef<HTMLInputElement>(null);
-  const [isUploadingMeetingDoc, setIsUploadingMeetingDoc] = useState(false);
   const [splitTargetSegmentId, setSplitTargetSegmentId] = useState<string | null>(null);
 
   // 스크립트 전체 수정 - 줄마다 수정 버튼을 따로 누르지 않고, 한 번에 전부 편집 가능한 상태로 켰다가
@@ -1122,18 +1416,6 @@ export default function MeetingsPanel({
     setBulkEditDrafts(null);
   }
 
-  async function handleMeetingDocUpload(file: File) {
-    if (!selectedRealMeeting) return;
-    setIsUploadingMeetingDoc(true);
-    const res = await uploadDocumentApi(workspaceId, file, undefined, "document", selectedRealMeeting.id);
-    setIsUploadingMeetingDoc(false);
-    if (res.status === "success") {
-      reloadDocuments();
-    } else {
-      alert(`문서 업로드 실패: ${res.message}`);
-    }
-  }
-
   const [registeredSpeakerNames, setRegisteredSpeakerNames] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -1161,6 +1443,16 @@ export default function MeetingsPanel({
     closeChangeSummary,
   } = useContradictions(workspaceId);
 
+  const { reminders: allDecisionReminders, markRead: markReminderRead } = useDecisionReminders(workspaceId);
+  const meetingSegmentIds = new Set(
+    [...(segments || []).map((s) => s.id), ...(liveSegments || []).map((s) => s.id)].filter(
+      (id): id is string => !!id
+    )
+  );
+  const meetingReminders = allDecisionReminders.filter(
+    (n) => n.ref_type === "meeting_segment" && n.ref_id && meetingSegmentIds.has(n.ref_id)
+  );
+
   async function handleLiveAlertResolve(contradictionId: string, resolutionType: ContradictionResolutionType) {
     await resolve(contradictionId, resolutionType);
     onClearContradictionAlert(contradictionId);
@@ -1174,15 +1466,19 @@ export default function MeetingsPanel({
   // 결정 리마인더 + 모순/결정변경 감지를 하나의 큐로 합쳐서 한 번에 하나씩만 보여준다 -
   // 예전엔 리마인더는 회의 시작 시 블로킹 모달로, 모순은 스크립트 위에 각각 배너로 쌓여서
   // 여러 개가 한꺼번에 뜨면 화면이 복잡해 보였다.
-  const [seenAgendaItemIds, setSeenAgendaItemIds] = useState<Set<string>>(new Set());
+  // [수정 - 리뷰 반영] 예전엔 "다음"을 누른 안건을 seen Set에 넣어 큐에서 영영 빼버려서,
+  // "이전" 버튼을 만들 수가 없었다(빠진 항목은 다시 못 불러옴). items 안에서의 위치를
+  // 가리키는 인덱스로 바꿔서, 안건들 사이는 앞뒤로 자유롭게 오갈 수 있게 한다.
+  const [agendaIndex, setAgendaIndex] = useState(0);
   useEffect(() => {
-    if (agendaReminder) setSeenAgendaItemIds(new Set());
+    if (agendaReminder) setAgendaIndex(0);
   }, [agendaReminder]);
 
+  const currentAgendaItem =
+    agendaReminder && agendaIndex < agendaReminder.items.length ? agendaReminder.items[agendaIndex] : null;
+
   const liveAlertQueue: LiveAlertQueueItem[] = [
-    ...(agendaReminder?.items || [])
-      .filter((item) => !seenAgendaItemIds.has(item.id))
-      .map((item) => ({ kind: "agenda" as const, id: `agenda-${item.id}`, item })),
+    ...(currentAgendaItem ? [{ kind: "agenda" as const, id: `agenda-${currentAgendaItem.id}`, item: currentAgendaItem }] : []),
     ...liveContradictionAlerts.map((alert) => ({
       kind: "contradiction" as const,
       id: alert.contradiction_id,
@@ -1191,12 +1487,17 @@ export default function MeetingsPanel({
   ];
   const currentLiveAlert = liveAlertQueue[0] ?? null;
 
-  function handleAgendaItemNext(itemId: string) {
-    const nextSeen = new Set(seenAgendaItemIds).add(itemId);
-    setSeenAgendaItemIds(nextSeen);
-    if (agendaReminder && agendaReminder.items.every((i) => nextSeen.has(i.id))) {
+  function handleAgendaItemNext() {
+    if (!agendaReminder) return;
+    if (agendaIndex + 1 < agendaReminder.items.length) {
+      setAgendaIndex(agendaIndex + 1);
+    } else {
       onClearAgendaReminder();
     }
+  }
+
+  function handleAgendaItemPrev() {
+    setAgendaIndex((i) => Math.max(0, i - 1));
   }
 
   const prevAlertCountRef = useRef(liveContradictionAlerts.length);
@@ -1209,6 +1510,10 @@ export default function MeetingsPanel({
 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
+  // 회의록 내보내기의 "수정" 버튼처럼, 하나의 토글로 요약/회의록 탭을 한 번에 편집 모드로
+  // 전환한다 - 탭을 옮겨 다녀도 편집 모드가 유지된다 (같은 컴포넌트 안의 state라 탭 전환에
+  // 안 날아감). 스크립트 탭은 원래부터 항상 줄 단위로 바로 수정 가능해서 이 토글과 무관하다.
+  const [isMeetingEditMode, setIsMeetingEditMode] = useState(false);
   const [isMeetingListOpen, setIsMeetingListOpen] = useState(true);
   const [isContradictionListOpen, setIsContradictionListOpen] = useState(true);
   const [expandedContradictionIds, setExpandedContradictionIds] = useState<Set<string>>(new Set());
@@ -1219,6 +1524,33 @@ export default function MeetingsPanel({
   const [showStartModal, setShowStartModal] = useState(false);
   const [topTab, setTopTab] = useState<"meetings" | "exports">("meetings");
   const audioPlayerRef = useRef<MeetingAudioPlayerHandle>(null);
+
+  // 결정 근거 팝업의 "원본 회의로 이동"에서 세그먼트 id까지 넘어온 경우 - 그 회의가 선택되고
+  // 스크립트(segments)까지 로딩된 다음에야 실제 DOM에 해당 줄이 존재하므로, segments가 그
+  // 세그먼트를 포함하게 될 때까지 기다렸다가 스크립트 탭으로 전환 + 스크롤/하이라이트한다.
+  const [highlightSegmentId, setHighlightSegmentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!initialSegmentId) return;
+    if (!segments.some((s) => s.id === initialSegmentId)) return;
+    setDetailTab("script");
+    setHighlightSegmentId(initialSegmentId);
+    onInitialSegmentIdConsumed?.();
+  }, [initialSegmentId, segments]);
+
+  useEffect(() => {
+    if (!highlightSegmentId) return;
+    document.getElementById(`segment-${highlightSegmentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlightSegmentId(null), 3000);
+    return () => clearTimeout(timer);
+  }, [highlightSegmentId]);
+
+  // 실시간 회의 스크립트 - 새 발화가 쌓여도 자동으로 안 내려가서, 계속 손으로 스크롤해야
+  // 방금 나온 말을 볼 수 있었다. 확정 발화든 진행 중인 부분 인식(partial)이든 바뀔 때마다
+  // 맨 아래로 스크롤한다.
+  const liveScriptBottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    liveScriptBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [liveSegments.length, livePartial.confirmed, livePartial.tentative]);
 
   function toggleContradictionExpanded(id: string) {
     setExpandedContradictionIds((prev) => {
@@ -1257,6 +1589,23 @@ export default function MeetingsPanel({
     }
     prevContradictionCountRef.current = contradictions.length;
   }, [contradictions.length]);
+
+  // 회의를 바꿔 볼 때마다 패널을 열지/접을지 다시 정한다 - 진행 중인 회의는 실시간 배너가
+  // 이미 알려주고 있으니 접어두고, 다 끝난 회의를 나중에 열어볼 땐 미해결 모순이나 안 읽은
+  // 리마인더가 있으면 처음부터 펼쳐서 놓치고 지나가지 않게 한다.
+  const autoDecidedMeetingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedMeetingId || isContradictionsLoading) return;
+    if (autoDecidedMeetingIdRef.current === selectedMeetingId) return;
+    autoDecidedMeetingIdRef.current = selectedMeetingId;
+
+    if (isViewingLive) {
+      setIsContradictionListOpen(false);
+    } else {
+      const hasUnresolved = contradictions.length > 0 || meetingReminders.some((r) => !r.is_read);
+      setIsContradictionListOpen(hasUnresolved);
+    }
+  }, [selectedMeetingId, isViewingLive, isContradictionsLoading, contradictions.length, meetingReminders]);
 
   useEffect(() => {
     if (isLiveActive && liveMeeting) {
@@ -1509,8 +1858,10 @@ export default function MeetingsPanel({
                 {currentLiveAlert.kind === "agenda" ? (
                   <LiveAgendaCard
                     item={currentLiveAlert.item}
-                    total={liveAlertQueue.length}
-                    onNext={() => handleAgendaItemNext(currentLiveAlert.item.id)}
+                    position={agendaIndex + 1}
+                    total={agendaReminder?.items.length ?? 1}
+                    onPrev={agendaIndex > 0 ? handleAgendaItemPrev : undefined}
+                    onNext={handleAgendaItemNext}
                     t={t}
                   />
                 ) : (
@@ -1528,6 +1879,7 @@ export default function MeetingsPanel({
                             })
                         : undefined
                     }
+                    onViewDecision={onOpenDecision}
                     onEditSegment={onEditLiveSegment}
                     t={t}
                   />
@@ -1575,6 +1927,7 @@ export default function MeetingsPanel({
                       <span className="opacity-60">{livePartial.tentative}</span>
                     </p>
                   )}
+                  <div ref={liveScriptBottomRef} />
                 </div>
               )}
             </div>
@@ -1665,26 +2018,45 @@ export default function MeetingsPanel({
               </div>
             ) : (
               <>
-                <div className="mb-3 flex gap-2 border-b border-recall-border">
-                  {(
-                    [
-                      { key: "summary", label: t.meeting_tab_summary },
-                      { key: "minutes", label: t.meeting_tab_minutes },
-                      { key: "script", label: t.meeting_tab_script },
-                    ] as { key: DetailTab; label: string }[]
-                  ).map((tab) => (
+                <div className="mb-3 flex items-center justify-between gap-2 border-b border-recall-border">
+                  <div className="flex gap-2">
+                    {(
+                      [
+                        { key: "summary", label: t.meeting_tab_summary },
+                        { key: "minutes", label: t.meeting_tab_minutes },
+                        { key: "script", label: t.meeting_tab_script },
+                      ] as { key: DetailTab; label: string }[]
+                    ).map((tab) => (
+                      <button
+                        key={tab.key}
+                        onClick={() => setDetailTab(tab.key)}
+                        className={`px-3 py-1.5 text-xs font-semibold transition ${
+                          detailTab === tab.key
+                            ? "border-b-2 border-recall-accent text-recall-accent"
+                            : "text-recall-textMuted hover:text-recall-text"
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  {(detailTab === "summary" || detailTab === "minutes") && (
                     <button
-                      key={tab.key}
-                      onClick={() => setDetailTab(tab.key)}
-                      className={`px-3 py-1.5 text-xs font-semibold transition ${
-                        detailTab === tab.key
-                          ? "border-b-2 border-recall-accent text-recall-accent"
-                          : "text-recall-textMuted hover:text-recall-text"
+                      onClick={() => setIsMeetingEditMode((v) => !v)}
+                      className={`mb-1.5 flex flex-shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition ${
+                        isMeetingEditMode
+                          ? "border-recall-accent bg-recall-accent text-white hover:opacity-90"
+                          : "border-recall-border text-recall-textMuted hover:text-recall-text"
                       }`}
                     >
-                      {tab.label}
+                      {isMeetingEditMode ? (
+                        <CheckIcon size={12} />
+                      ) : (
+                        <PencilIcon size={12} />
+                      )}
+                      {isMeetingEditMode ? t.meeting_edit_done_btn : t.meeting_edit_btn}
                     </button>
-                  ))}
+                  )}
                 </div>
 
                 <div className="flex-1 overflow-y-auto rounded-2xl border border-recall-border bg-white/5 p-4 custom-scrollbar">
@@ -1693,31 +2065,45 @@ export default function MeetingsPanel({
                   ) : detailTab === "summary" ? (
                     summary?.generation_status === "completed" ? (
                       <div className="space-y-4">
-                        {summary.short_summary && (
+                        {(summary.short_summary || isMeetingEditMode) && (
                           <div className="p-3.5 rounded-xl bg-recall-accent/10 border border-recall-accent/20">
                             <p className="text-xs font-bold text-recall-accent uppercase mb-1">{t.meeting_short_summary_label}</p>
-                            <p className="text-sm font-bold text-recall-text">{summary.short_summary}</p>
+                            {isMeetingEditMode ? (
+                              <EditableShortSummaryField
+                                text={summary.short_summary || ""}
+                                onSave={updateShortSummary}
+                                t={t}
+                              />
+                            ) : (
+                              <p className="text-sm font-bold text-recall-text">{summary.short_summary}</p>
+                            )}
                           </div>
                         )}
-                        <EditableFullSummary text={summary.full_summary || ""} onSave={updateFullSummary} t={t} />
-                        {decisions.length > 0 && (
-                          <div className="border-t border-recall-border pt-3">
-                            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-recall-textMuted">
-                              {t.meeting_summary_key_decisions}
-                            </p>
-                            <ul className="space-y-1.5">
+                        <EditableFullSummary
+                          text={summary.full_summary || ""}
+                          isEditing={isMeetingEditMode}
+                          onSave={updateFullSummary}
+                          t={t}
+                        />
+                        <div className="border-t border-recall-border pt-3">
+                          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-recall-textMuted">
+                            {t.meeting_summary_key_decisions}
+                          </p>
+                          {decisions.length > 0 && (
+                            <ul className="mb-2 space-y-1.5">
                               {decisions.map((d) => (
-                                <li key={d.id} className="flex gap-2 text-xs text-recall-text p-2 rounded-lg bg-white/5">
-                                  <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-recall-accent" />
-                                  <span>
-                                    <span className="font-bold">{d.title}</span>
-                                    <span className="text-recall-textMuted"> — {d.decision_text}</span>
-                                  </span>
-                                </li>
+                                <DecisionItem
+                                  key={d.id}
+                                  decision={d}
+                                  isEditing={isMeetingEditMode}
+                                  onSave={(input) => updateDecision(d.id, input)}
+                                  t={t}
+                                />
                               ))}
                             </ul>
-                          </div>
-                        )}
+                          )}
+                          {isMeetingEditMode && <AddDecisionForm onAdd={addDecision} t={t} />}
+                        </div>
                         {suggestedTasks.length > 0 && (
                           <div className="border-t border-recall-border pt-3">
                             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-recall-textMuted">
@@ -1734,19 +2120,38 @@ export default function MeetingsPanel({
                                     {task.description && (
                                       <p className="mt-0.5 text-recall-textMuted">{task.description}</p>
                                     )}
+                                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-recall-textMuted">
+                                      <span className="flex items-center gap-1">
+                                        <PersonIcon size={11} className="flex-shrink-0" />
+                                        {task.assignee_label || t.meeting_suggested_task_unassigned}
+                                      </span>
+                                      {task.due_at && (
+                                        <span className="flex items-center gap-1">
+                                          <span className="opacity-50">·</span>
+                                          {formatDateOnly(task.due_at)}
+                                        </span>
+                                      )}
+                                    </p>
                                   </div>
-                                  <div className="flex flex-shrink-0 gap-1">
+                                  <div className="flex flex-shrink-0 gap-1.5">
                                     <button
                                       onClick={() => rejectSuggestedTask(task.id)}
-                                      className="rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
+                                      title={t.meeting_suggested_task_reject}
+                                      aria-label={t.meeting_suggested_task_reject}
+                                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:border-recall-danger hover:text-recall-danger"
                                     >
-                                      {t.task_delete}
+                                      <CloseIcon size={12} />
                                     </button>
                                     <button
-                                      onClick={() => approveSuggestedTask(task.id)}
-                                      className="rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                                      onClick={async () => {
+                                        const ok = await approveSuggestedTask(task.id);
+                                        if (ok) onTaskApproved();
+                                      }}
+                                      title={t.meeting_suggested_task_add}
+                                      aria-label={t.meeting_suggested_task_add}
+                                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-recall-accent text-white transition hover:opacity-90"
                                     >
-                                      {t.meeting_suggested_task_add}
+                                      <CheckIcon size={12} />
                                     </button>
                                   </div>
                                 </li>
@@ -1760,140 +2165,104 @@ export default function MeetingsPanel({
                     )
                   ) : detailTab === "minutes" ? (
                     (() => {
-                      const { initial: initialAttendees, added: addedAttendees } = groupAttendees(attendees);
                       return (
                         <div className="space-y-4 text-xs">
                           <div>
-                            <p className="text-sm font-bold text-recall-text">{selectedRealMeeting.title}</p>
+                            {isMeetingEditMode ? (
+                              <EditableTitleField
+                                title={selectedRealMeeting.title}
+                                onSave={(title) => renameMeeting(selectedRealMeeting.id, title)}
+                                t={t}
+                              />
+                            ) : (
+                              <p className="text-sm font-bold text-recall-text">{selectedRealMeeting.title}</p>
+                            )}
                             <p className="mt-0.5 text-recall-textMuted">
                               {formatDateOnly(selectedRealMeeting.started_at ?? selectedRealMeeting.created_at)} ·{" "}
                               {formatTimeOnly(selectedRealMeeting.started_at ?? selectedRealMeeting.created_at)}
                             </p>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3 border-t border-recall-border pt-3">
-                            <div>
-                              <p className="mb-1 font-semibold text-recall-textMuted">
-                                {t.meeting_minutes_mode_label}
-                              </p>
-                              <p className="text-recall-text">
-                                {selectedRealMeeting.is_online === true
-                                  ? t.meeting_minutes_mode_online
-                                  : selectedRealMeeting.is_online === false
-                                    ? t.meeting_minutes_mode_offline
-                                    : t.meeting_minutes_mode_unset}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="mb-1 font-semibold text-recall-textMuted">
-                                {t.meeting_minutes_location_label}
-                              </p>
-                              <p className="text-recall-text">
-                                {selectedRealMeeting.location || t.meeting_minutes_datetime_unset}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="border-t border-recall-border pt-3">
-                            <p className="mb-1 font-semibold text-recall-textMuted">
-                              {t.meeting_minutes_attendees_initial}
-                            </p>
-                            {initialAttendees.length === 0 ? (
-                              <p className="text-recall-textMuted">{t.meeting_minutes_attendees_none}</p>
-                            ) : (
-                              <p className="text-recall-text">
-                                {initialAttendees.map((a) => a.display_name).join(", ")}
-                              </p>
-                            )}
-                            <p className="mb-1 mt-3 font-semibold text-recall-textMuted">
-                              {t.meeting_minutes_attendees_added}
-                            </p>
-                            {addedAttendees.length === 0 ? (
-                              <p className="text-recall-textMuted">{t.meeting_minutes_attendees_none_added}</p>
-                            ) : (
-                              <p className="text-recall-text">
-                                {addedAttendees.map((a) => a.display_name).join(", ")}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="border-t border-recall-border pt-3">
-                            <p className="mb-1 font-semibold text-recall-textMuted">
-                              {t.meeting_minutes_content_label}
-                            </p>
-                            {summary?.full_summary ? (
-                              <p className="whitespace-pre-line text-recall-text leading-relaxed">
-                                {summary.full_summary}
-                              </p>
-                            ) : (
-                              <p className="text-recall-textMuted">{t.meeting_minutes_content_empty}</p>
-                            )}
-                          </div>
-
-                          <div className="border-t border-recall-border pt-3">
-                            <div className="mb-2 flex items-center justify-between">
-                              <p className="font-semibold text-recall-textMuted">
-                                {t.meeting_minutes_related_docs_label}
-                              </p>
-                              <>
-                                <input
-                                  ref={meetingDocInputRef}
-                                  type="file"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0];
-                                    e.target.value = "";
-                                    if (file) handleMeetingDocUpload(file);
-                                  }}
-                                />
-                                <button
-                                  onClick={() => meetingDocInputRef.current?.click()}
-                                  disabled={isUploadingMeetingDoc}
-                                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2 py-1 text-[11px] text-recall-text hover:bg-white/5 disabled:opacity-50"
-                                >
-                                  <UploadIcon size={11} />
-                                  {isUploadingMeetingDoc ? t.doc_uploading : t.meeting_minutes_upload_doc_btn}
-                                </button>
-                              </>
-                            </div>
-
-                            {documents.length === 0 ? (
-                              <p className="text-recall-textMuted">{t.meeting_minutes_related_docs_empty}</p>
-                            ) : (
-                              <div className="space-y-1.5">
-                                {documents.map((f) => (
-                                  <div
-                                    key={f.id}
-                                    className="flex items-center justify-between gap-2 rounded-lg border border-recall-border/60 bg-white/5 px-2.5 py-1.5"
-                                  >
-                                    <span className="flex min-w-0 items-center gap-1.5 text-recall-text">
-                                      <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
-                                      <span className="truncate">{f.original_filename}</span>
-                                    </span>
-                                    <span className="flex flex-shrink-0 items-center gap-2">
-                                      <button
-                                        onClick={() => setPreviewDoc({ id: f.id, name: f.original_filename })}
-                                        className="text-[11px] text-recall-accent underline hover:opacity-80"
-                                      >
-                                        {t.meeting_minutes_view_doc_btn}
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          if (window.confirm(t.meeting_minutes_delete_doc_confirm)) {
-                                            removeDocument(f.id);
-                                          }
-                                        }}
-                                        title={t.meeting_minutes_delete_doc_btn}
-                                        className="text-recall-textMuted hover:text-recall-danger"
-                                      >
-                                        <TrashIcon size={12} />
-                                      </button>
-                                    </span>
-                                  </div>
-                                ))}
+                            {isMeetingEditMode ? (
+                              <div className="mt-1.5">
+                                <EditableLocationField location={selectedRealMeeting.location || ""} onSave={updateMeetingLocation} t={t} />
                               </div>
+                            ) : (
+                              selectedRealMeeting.location && (
+                                <p className="mt-0.5 text-recall-textMuted">
+                                  {t.meeting_minutes_location_label}: {selectedRealMeeting.location}
+                                </p>
+                              )
+                            )}
+                            <p className="mt-0.5 text-recall-textMuted">
+                              {t.meeting_export_section_attendees}:{" "}
+                              {attendees.length === 0
+                                ? t.meeting_minutes_attendees_none
+                                : attendees.map((a) => a.display_name).join(", ")}
+                            </p>
+                          </div>
+
+                          {/* [변경 - 회의록 탭 개편 요청] 진행방식/장소/참석자/전체내용/관련자료 구조를
+                              목적/논의내용/결정사항/추진계획 구조로 전면 교체.
+                              meeting_purpose/next_steps는 백엔드에 아직 없는 필드라(추출 단계엔 있지만
+                              DB/응답 스키마 미반영) 당분간 항상 비어 보인다 - 값이 오기 시작하면
+                              그대로 채워짐. discussion_points는 이미 내려오는 필드라 바로 반영된다. */}
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-1 font-semibold text-recall-textMuted">
+                              {t.meeting_minutes_purpose_label}
+                            </p>
+                            {summary?.meeting_purpose ? (
+                              <p className="whitespace-pre-line text-recall-text leading-relaxed">
+                                {summary.meeting_purpose}
+                              </p>
+                            ) : (
+                              <p className="text-recall-textMuted">{t.meeting_minutes_purpose_empty}</p>
                             )}
                           </div>
+
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-1 font-semibold text-recall-textMuted">
+                              {t.meeting_minutes_discussion_label}
+                            </p>
+                            {summary?.discussion_points && summary.discussion_points.length > 0 ? (
+                              <ul className="list-disc space-y-1 pl-4 text-recall-text leading-relaxed">
+                                {summary.discussion_points.map((point, i) => (
+                                  <li key={i}>{point}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-recall-textMuted">{t.meeting_minutes_discussion_empty}</p>
+                            )}
+                          </div>
+
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-2 font-semibold text-recall-textMuted">
+                              {t.meeting_summary_key_decisions}
+                            </p>
+                            {decisions.length > 0 && (
+                              <ul className="mb-2 space-y-1.5">
+                                {decisions.map((d) => (
+                                  <DecisionItem
+                                    key={d.id}
+                                    decision={d}
+                                    isEditing={isMeetingEditMode}
+                                    onSave={(input) => updateDecision(d.id, input)}
+                                    t={t}
+                                  />
+                                ))}
+                              </ul>
+                            )}
+                            {isMeetingEditMode && <AddDecisionForm onAdd={addDecision} t={t} />}
+                          </div>
+
+                          {summary?.next_steps && (
+                            <div className="border-t border-recall-border pt-3">
+                              <p className="mb-1 font-semibold text-recall-textMuted">
+                                {t.meeting_minutes_next_steps_label}
+                              </p>
+                              <p className="whitespace-pre-line text-recall-text leading-relaxed">
+                                {summary.next_steps}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       );
                     })()
@@ -1940,24 +2309,31 @@ export default function MeetingsPanel({
                         .slice()
                         .sort((a, b) => a.segment_index - b.segment_index)
                         .map((s) => (
-                          <SegmentRow
+                          <div
                             key={s.id}
-                            speakerLabel={s.speaker_label}
-                            avatarImageUrl={s.speaker_label ? avatarUrlByName[s.speaker_label] : null}
-                            timeMs={s.start_ms}
-                            content={s.content}
-                            segmentId={s.id}
-                            speakerNameOptions={registeredSpeakerNames}
-                            onAssignSpeaker={assignSegmentSpeaker}
-                            onEditContent={updateSegmentContent}
-                            onSeekAudio={(ms) => audioPlayerRef.current?.seekTo(ms)}
-                            onSplit={(id) => setSplitTargetSegmentId(id)}
-                            bulkEditValue={bulkEditDrafts ? bulkEditDrafts[s.id] ?? s.content : undefined}
-                            onBulkEditChange={(value) =>
-                              setBulkEditDrafts((prev) => (prev ? { ...prev, [s.id]: value } : prev))
-                            }
-                            t={t}
-                          />
+                            id={`segment-${s.id}`}
+                            className={`rounded-lg transition-colors duration-500 ${
+                              highlightSegmentId === s.id ? "bg-recall-accent/15" : ""
+                            }`}
+                          >
+                            <SegmentRow
+                              speakerLabel={s.speaker_label}
+                              avatarImageUrl={s.speaker_label ? avatarUrlByName[s.speaker_label] : null}
+                              timeMs={s.start_ms}
+                              content={s.content}
+                              segmentId={s.id}
+                              speakerNameOptions={registeredSpeakerNames}
+                              onAssignSpeaker={assignSegmentSpeaker}
+                              onEditContent={updateSegmentContent}
+                              onSeekAudio={(ms) => audioPlayerRef.current?.seekTo(ms)}
+                              onSplit={(id) => setSplitTargetSegmentId(id)}
+                              bulkEditValue={bulkEditDrafts ? bulkEditDrafts[s.id] ?? s.content : undefined}
+                              onBulkEditChange={(value) =>
+                                setBulkEditDrafts((prev) => (prev ? { ...prev, [s.id]: value } : prev))
+                              }
+                              t={t}
+                            />
+                          </div>
                         ))}
                     </div>
                   )}
@@ -1980,6 +2356,11 @@ export default function MeetingsPanel({
               {contradictions.length}
             </span>
           )}
+          {meetingReminders.filter((r) => !r.is_read).length > 0 && (
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-semibold text-white">
+              {meetingReminders.filter((r) => !r.is_read).length}
+            </span>
+          )}
           <ChevronLeftIcon size={11} className="opacity-50 transition-opacity group-hover:opacity-100" />
         </button>
       ) : (
@@ -1996,6 +2377,30 @@ export default function MeetingsPanel({
               {t.contradiction_title}
             </p>
           </div>
+
+          {meetingReminders.length > 0 && (
+            <div className="mb-3 space-y-1.5 border-b border-recall-border pb-3">
+              <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-recall-textMuted">
+                {t.meeting_live_alert_reminder_title}
+                <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal">
+                  {meetingReminders.length}
+                </span>
+              </p>
+              {meetingReminders.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => !r.is_read && markReminderRead(r.id)}
+                  className={`block w-full rounded-lg border px-2.5 py-2 text-left text-xs transition ${
+                    r.is_read
+                      ? "border-recall-border/50 text-recall-textMuted hover:bg-white/5"
+                      : "border-amber-500/30 bg-amber-500/5 text-recall-text hover:bg-amber-500/10"
+                  }`}
+                >
+                  {r.message}
+                </button>
+              ))}
+            </div>
+          )}
 
           {isViewingLive ? (
             <p className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-400">
@@ -2202,6 +2607,7 @@ export default function MeetingsPanel({
       {showStartModal && (
         <MeetingStartModal
           workspaceId={workspaceId}
+          currentUserId={currentUserId}
           defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
           onStart={(title, attendeeIds, location, recordingMode) => {

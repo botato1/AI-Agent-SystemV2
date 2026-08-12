@@ -97,7 +97,7 @@ export default function ContradictionMessage({
           <p className="text-xs font-semibold uppercase tracking-wide text-recall-danger/80">
             {t.contradiction_new_statement}
           </p>
-          <p data-clamp className={`text-base text-recall-text ${expanded ? "" : "line-clamp-2"}`}>
+          <p data-clamp className={`text-sm font-medium text-recall-text ${expanded ? "" : "line-clamp-2"}`}>
             {decisionParsed.newStatement}
           </p>
         </div>
@@ -116,7 +116,7 @@ export default function ContradictionMessage({
   if (c.display_message && !parsed) {
     return (
       <div className="mb-2">
-        <p data-clamp className={`text-base text-recall-text ${expanded ? "" : "line-clamp-3"}`}>{c.display_message}</p>
+        <p data-clamp className={`text-sm text-recall-text ${expanded ? "" : "line-clamp-3"}`}>{c.display_message}</p>
         {renderReferenceBadge(c, onViewReference, onViewDecision)}
       </div>
     );
@@ -139,7 +139,7 @@ export default function ContradictionMessage({
         <p className="text-xs font-semibold uppercase tracking-wide text-recall-danger/80">
           {t.contradiction_new_statement}
         </p>
-        <p data-clamp className={`text-base text-recall-text ${expanded ? "" : "line-clamp-2"}`}>
+        <p data-clamp className={`text-sm font-medium text-recall-text ${expanded ? "" : "line-clamp-2"}`}>
           {newStatement}
         </p>
         {renderReferenceBadge(c, onViewReference, onViewDecision)}

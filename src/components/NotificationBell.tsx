@@ -38,6 +38,9 @@ const TYPE_META: Record<NotificationType, { label: string; icon: typeof BellIcon
 // 확인할 새도 없이 없어져서, 잠깐 흐리게 보여준 뒤에 치운다.
 const HIDE_AFTER_READ_MS = 3000;
 
+// 카톡 알림 팝업처럼 몇 초 보여주고 자동으로 사라진다
+const TOAST_AUTO_DISMISS_MS = 5000;
+
 // 백엔드가 datetime 객체를 문자열로 그대로 박아 넣어서(마이크로초+타임존까지) 문장에
 // "2026-08-05 08:22:20.831488+00:00" 같은 원본 타임스탬프가 섞여 나오는 경우가 있다.
 // 사람이 읽을 땐 날짜 정도만 있으면 충분하므로, 이런 패턴을 찾아 "YYYY.M.D"로 바꿔치기한다.
@@ -102,6 +105,60 @@ export default function NotificationBell({
 }: NotificationBellProps) {
   const { notifications, unreadCount, isLoading, markRead } = useNotifications(workspaceId);
   const [isOpen, setIsOpen] = useState(false);
+  // 카톡 알림처럼, 새로 도착한 알림은 잠깐 화면 구석에 떴다가 몇 초 뒤 사라진다 -
+  // 벨을 직접 안 열어봐도 회의 임박 등 시간에 민감한 알림을 놓치지 않게 하기 위함.
+  const [toastQueue, setToastQueue] = useState<AppNotification[]>([]);
+  const knownIdsRef = useRef<Set<string> | null>(null);
+  const toastTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // workspaceId가 바뀌면(워크스페이스 전환) 기준점을 새로 잡아야 한다 - 안 그러면 이전
+  // 워크스페이스 기준으로 새 워크스페이스 알림 전부가 "새로 도착"으로 오인된다.
+  const hasBaselineRef = useRef(false);
+  useEffect(() => {
+    hasBaselineRef.current = false;
+    knownIdsRef.current = null;
+  }, [workspaceId]);
+
+  useEffect(() => {
+    // 최초 목록 fetch가 끝나기 전(notifications가 아직 빈 배열인 로딩 중 렌더)에 기준점을
+    // 잡으면, 진짜 목록이 도착했을 때 전부 "새로 도착"으로 오인해서 와르르 쏟아진다 -
+    // 로딩이 끝난 뒤에만 기준점을 세운다.
+    if (isLoading) return;
+
+    if (!hasBaselineRef.current) {
+      knownIdsRef.current = new Set(notifications.map((n) => n.id));
+      hasBaselineRef.current = true;
+      return;
+    }
+
+    const known = knownIdsRef.current ?? new Set<string>();
+    const newlyArrived = notifications.filter((n) => !known.has(n.id) && !n.is_read);
+    if (newlyArrived.length > 0) {
+      setToastQueue((prev) => [...prev, ...newlyArrived]);
+      newlyArrived.forEach((n) => {
+        const timer = setTimeout(() => {
+          setToastQueue((prev) => prev.filter((t) => t.id !== n.id));
+          toastTimersRef.current.delete(n.id);
+        }, TOAST_AUTO_DISMISS_MS);
+        toastTimersRef.current.set(n.id, timer);
+      });
+    }
+    knownIdsRef.current = new Set(notifications.map((n) => n.id));
+  }, [notifications, isLoading]);
+
+  useEffect(() => {
+    const timers = toastTimersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
+
+  function dismissToast(id: string) {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) clearTimeout(timer);
+    toastTimersRef.current.delete(id);
+    setToastQueue((prev) => prev.filter((t) => t.id !== id));
+  }
   // 이번 세션에서 클릭해서 읽음 처리된 것들만 잠깐 보여주고 치운다. 예전부터 읽혀있던
   // 알림은(서버가 처음부터 is_read=true로 내려준 것) 애초에 목록에 안 보이게 한다.
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
@@ -158,6 +215,11 @@ export default function NotificationBell({
       onSelectPlaceholder(target.key);
     }
     if (target) setIsOpen(false);
+  }
+
+  function handleToastClick(n: AppNotification) {
+    dismissToast(n.id);
+    handleItemClick(n);
   }
 
   // 예전부터 읽혀있던 알림(이번 세션에서 안 읽음->읽음으로 안 바뀐 것)은 처음부터 숨긴다
@@ -243,6 +305,43 @@ export default function NotificationBell({
               })
             )}
           </div>
+        </div>
+      )}
+
+      {/* 카톡 알림 팝업처럼 화면 우측 상단에 잠깐 떴다가 자동으로 사라짐 */}
+      {toastQueue.length > 0 && (
+        <div className="pointer-events-none fixed right-4 top-4 z-[100] flex w-80 flex-col gap-2">
+          {toastQueue.map((n) => {
+            const meta = TYPE_META[n.type];
+            const Icon = meta?.icon || BellIcon;
+            const title =
+              n.type === "contradiction_detected" || n.type === "contradiction_resolved" ? meta.label : n.title;
+            return (
+              <div
+                key={n.id}
+                className="pointer-events-auto flex items-start gap-2.5 rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-3 shadow-2xl animate-[fadeSlideIn_0.2s_ease-out]"
+              >
+                <button
+                  onClick={() => handleToastClick(n)}
+                  className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                >
+                  <Icon size={15} className={`mt-0.5 flex-shrink-0 ${meta?.className || "text-recall-textMuted"}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-recall-text">{title}</p>
+                    <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-recall-textMuted">
+                      {formatNotificationMessage(n)}
+                    </p>
+                  </div>
+                </button>
+                <button
+                  onClick={() => dismissToast(n.id)}
+                  className="flex-shrink-0 text-recall-textMuted hover:text-recall-text"
+                >
+                  <CloseIcon size={13} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

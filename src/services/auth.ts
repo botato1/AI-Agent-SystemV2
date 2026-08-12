@@ -465,6 +465,44 @@ export async function uploadProfileImageApi(file: File): Promise<ProfileResponse
   }
 }
 
+// 9-2. 프로필 이미지 삭제 API (DELETE /api/auth/profile/image)
+// 삭제 후에는 프론트가 기본 색상 아바타로 표시한다. 이미 사진이 없어도 에러 없이 성공 처리됨.
+export async function deleteProfileImageApi(): Promise<ProfileResponse> {
+  try {
+    const response = await authFetch(`${API_BASE_URL}/api/auth/profile/image`, {
+      method: "DELETE",
+    });
+
+    const data: ProfileResponse = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "프로필 이미지 삭제에 실패했습니다.";
+      if (response.status === 401) {
+        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      } else if (response.status === 404) {
+        defaultMsg = "사용자를 찾을 수 없습니다.";
+      }
+
+      return {
+        status: "error",
+        user: null,
+        message: data.message || data.detail || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return data;
+  } catch (error) {
+    console.error("deleteProfileImageApi error:", error);
+    return {
+      status: "error",
+      user: null,
+      message: "서버와 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
 // 비밀번호 재설정 요청 API 응답 타입
 export interface PasswordResetRequestResponse {
   status: "success" | "error";

@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
-import {
-  getMeetingExportApi,
-  updateMeetingSummaryApi,
-  exportMeetingPdfApi,
-  MeetingExportData,
-} from "../services/meeting";
+import { getMeetingExportApi, exportMeetingPdfApi, MeetingExportData } from "../services/meeting";
 import { CloseIcon } from "./icons";
 
 interface MeetingExportModalProps {
@@ -16,10 +11,13 @@ interface MeetingExportModalProps {
   t: any;
 }
 
+// [변경 - 회의록 포맷 개편] 요약/전체내용/참석자/스크립트 체크박스를 목적/논의내용/
+// 결정사항/추진계획 4-섹션 포맷으로 교체 (회의록 탭과 동일한 구조로 맞춤)
 interface SectionFlags {
-  summary: boolean;
-  attendees: boolean;
-  script: boolean;
+  purpose: boolean;
+  discussion: boolean;
+  decisions: boolean;
+  nextSteps: boolean;
 }
 
 function formatDate(iso: string | null): string {
@@ -52,13 +50,12 @@ const PDF_MARGIN_PT = 36; // ~0.5in, 서버 저장 PDF의 상하좌우 여백
 export default function MeetingExportModal({ workspaceId, meetingId, onClose, t }: MeetingExportModalProps) {
   const [data, setData] = useState<MeetingExportData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [sections, setSections] = useState<SectionFlags>({ summary: true, attendees: true, script: true });
-
-  // 요약 인라인 수정 상태
-  const [isEditingSummary, setIsEditingSummary] = useState(false);
-  const [summaryDraft, setSummaryDraft] = useState("");
-  const [isSavingSummary, setIsSavingSummary] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [sections, setSections] = useState<SectionFlags>({
+    purpose: true,
+    discussion: true,
+    decisions: true,
+    nextSteps: true,
+  });
 
   // 서버에 PDF로 저장
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -70,9 +67,11 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose, t 
 
     async function load() {
       setIsLoading(true);
-      const res = await getMeetingExportApi(workspaceId, meetingId);
-      if (!cancelled && res.status === "success") {
-        setData(res.data);
+      // export 엔드포인트가 4-섹션 포맷에 필요한 필드를 전부 직접 내려주므로, 예전처럼
+      // 요약/결정사항을 별도 API로 따로 불러와 합칠 필요가 없다.
+      const exportRes = await getMeetingExportApi(workspaceId, meetingId);
+      if (!cancelled && exportRes.status === "success") {
+        setData(exportRes.data);
       }
       setIsLoading(false);
     }
@@ -85,31 +84,6 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose, t 
 
   function toggleSection(key: keyof SectionFlags) {
     setSections((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
-
-  function startEditSummary() {
-    if (!data) return;
-    setSummaryError(null);
-    setSummaryDraft(data.short_summary || "");
-    setIsEditingSummary(true);
-  }
-
-  async function saveSummary() {
-    if (!data) return;
-    setIsSavingSummary(true);
-    setSummaryError(null);
-
-    const res = await updateMeetingSummaryApi(workspaceId, meetingId, { shortSummary: summaryDraft.trim() });
-
-    setIsSavingSummary(false);
-
-    if (res.status === "error") {
-      setSummaryError(res.message);
-      return;
-    }
-
-    setData((prev) => (prev ? { ...prev, short_summary: summaryDraft.trim() } : prev));
-    setIsEditingSummary(false);
   }
 
   async function saveToServer() {
@@ -192,8 +166,6 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose, t 
     }
   }
 
-  const sortedSegments = data ? [...data.segments].sort((a, b) => a.segment_index - b.segment_index) : [];
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <style>{PRINT_STYLE}</style>
@@ -218,9 +190,10 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose, t 
             <div className="flex flex-wrap gap-3 border-b border-recall-border px-6 py-3">
               {(
                 [
-                  { key: "summary" as const, label: t.tab_summary },
-                  { key: "attendees" as const, label: t.meeting_export_section_attendees },
-                  { key: "script" as const, label: t.meeting_tab_script },
+                  { key: "purpose" as const, label: t.meeting_minutes_purpose_label },
+                  { key: "discussion" as const, label: t.meeting_minutes_discussion_label },
+                  { key: "decisions" as const, label: t.meeting_summary_key_decisions },
+                  { key: "nextSteps" as const, label: t.meeting_minutes_next_steps_label },
                 ]
               ).map((item) => (
                 <label key={item.key} className="flex items-center gap-1.5 text-sm text-recall-text">
@@ -244,96 +217,68 @@ export default function MeetingExportModal({ workspaceId, meetingId, onClose, t 
                     {formatDate(data.started_at)}
                     {data.location ? ` · ${data.location}` : ""}
                   </p>
+                  <p className="mt-1 text-sm text-recall-textMuted">
+                    {t.meeting_export_section_attendees}:{" "}
+                    {data.attendees.length === 0
+                      ? t.meeting_minutes_attendees_none
+                      : data.attendees.map((a) => a.display_name).join(", ")}
+                  </p>
                 </div>
 
-                {sections.attendees && (
+                {sections.purpose && (
                   <div>
                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                      {t.meeting_export_section_attendees}
+                      {t.meeting_minutes_purpose_label}
                     </p>
-                    {data.attendees.length === 0 ? (
-                      <p className="text-sm text-recall-textMuted">{t.meeting_minutes_attendees_none}</p>
-                    ) : (
-                      <p className="text-sm text-recall-text">
-                        {data.attendees.map((a) => a.display_name).join(", ")}
-                      </p>
-                    )}
+                    <p className="whitespace-pre-line text-sm text-recall-text">
+                      {data.meeting_purpose || t.meeting_minutes_purpose_empty}
+                    </p>
                   </div>
                 )}
 
-                {sections.summary && (
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                        {t.tab_summary}
-                      </p>
-                      {!isEditingSummary && (
-                        <button
-                          type="button"
-                          onClick={startEditSummary}
-                          className="print:hidden pdf-export-hide text-[11px] text-recall-textMuted underline hover:text-recall-text"
-                        >
-                          {t.meeting_export_edit}
-                        </button>
-                      )}
-                    </div>
-
-                    {isEditingSummary ? (
-                      <div className="print:hidden pdf-export-hide flex flex-col gap-2">
-                        <textarea
-                          value={summaryDraft}
-                          onChange={(e) => setSummaryDraft(e.target.value)}
-                          rows={4}
-                          className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-3 py-2 text-sm text-recall-text outline-none focus:border-recall-accent"
-                        />
-                        {summaryError && <p className="text-xs text-recall-danger">{summaryError}</p>}
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setIsEditingSummary(false)}
-                            disabled={isSavingSummary}
-                            className="rounded-lg border border-recall-border px-3 py-1.5 text-xs text-recall-textMuted hover:bg-white/5"
-                          >
-                            {t.task_cancel}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={saveSummary}
-                            disabled={isSavingSummary}
-                            className="rounded-lg bg-recall-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
-                          >
-                            {isSavingSummary ? t.meeting_export_saving : t.task_save}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="whitespace-pre-line text-sm text-recall-text">
-                        {data.short_summary || t.meeting_summary_not_ready}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {sections.script && (
+                {sections.discussion && (
                   <div>
                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
-                      {t.meeting_tab_script}
+                      {t.meeting_minutes_discussion_label}
                     </p>
-                    {sortedSegments.length === 0 ? (
-                      <p className="text-sm text-recall-textMuted">{t.meeting_no_script}</p>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {sortedSegments.map((s) => (
-                          <p key={s.id} className="text-sm text-recall-text">
-                            <span className="font-medium">{s.speaker_label || t.speaker_unknown}</span>
-                            <span className="text-recall-textMuted"> · {s.content}</span>
-                            {s.is_edited && (
-                              <span className="ml-1.5 text-[10px] text-amber-400">{t.meeting_export_edited_badge}</span>
-                            )}
-                          </p>
+                    {data.discussion_points && data.discussion_points.length > 0 ? (
+                      <ul className="list-disc space-y-1 pl-4 text-sm text-recall-text">
+                        {data.discussion_points.map((point, i) => (
+                          <li key={i}>{point}</li>
                         ))}
-                      </div>
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-recall-textMuted">{t.meeting_minutes_discussion_empty}</p>
                     )}
+                  </div>
+                )}
+
+                {sections.decisions && (
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                      {t.meeting_summary_key_decisions}
+                    </p>
+                    {data.decisions.length === 0 ? (
+                      <p className="text-sm text-recall-textMuted">{t.meeting_no_decisions}</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {data.decisions.map((d, i) => (
+                          <li key={i} className="text-sm text-recall-text">
+                            <span className="font-medium">{d.title}</span>
+                            <span className="text-recall-textMuted"> — {d.decision_text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {sections.nextSteps && (
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-recall-textMuted/70">
+                      {t.meeting_minutes_next_steps_label}
+                    </p>
+                    <p className="whitespace-pre-line text-sm text-recall-text">{data.next_steps || "-"}</p>
                   </div>
                 )}
               </div>
