@@ -1,16 +1,34 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
 import { getVoiceProfileListApi } from "../services/voice";
 import { RecordingMode } from "../services/meeting";
+import { Category } from "../services/category";
 import { CloseIcon, ChevronDownIcon, CheckIcon, MicIcon } from "./icons";
+
+const CREATE_CATEGORY_VALUE = "__create__";
 
 interface MeetingStartModalProps {
   workspaceId: string;
   currentUserId: string;
   defaultTitle: string;
   onClose: () => void;
-  onStart: (title: string, attendeeIds: string[], location?: string, recordingMode?: RecordingMode) => void;
+  onStart: (
+    title: string,
+    attendeeIds: string[],
+    location?: string,
+    recordingMode?: RecordingMode,
+    categoryId?: string
+  ) => void;
   t: any;
+  // 카테고리 목록. 아직 백엔드 카테고리 API가 없으면 빈 배열로 넘기면 된다 -
+  // 그 경우 드롭다운은 숨겨지고 지금처럼 카테고리 없이 시작된다.
+  categories?: Category[];
+  // 회의를 카테고리 폴더 안에서 시작한 경우 (경로 1) — 값이 있으면 드롭다운 대신
+  // 고정된 라벨만 보여주고 매번 고를 필요가 없다.
+  lockedCategory?: Category | null;
+  // 전체 화면에서 시작한 경우 (경로 2) 기본으로 선택해둘 카테고리
+  suggestedCategoryId?: string | null;
+  onCreateCategory?: (name: string) => Promise<Category | null>;
 }
 
 function generatePrettyDefaultTitle(t: any): string {
@@ -34,6 +52,10 @@ export default function MeetingStartModal({
   onClose,
   onStart,
   t,
+  categories = [],
+  lockedCategory = null,
+  suggestedCategoryId = null,
+  onCreateCategory,
 }: MeetingStartModalProps) {
   const [title, setTitle] = useState(() => generatePrettyDefaultTitle(t));
   const [location, setLocation] = useState("");
@@ -41,6 +63,13 @@ export default function MeetingStartModal({
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [voiceRegisteredNames, setVoiceRegisteredNames] = useState<Set<string>>(new Set());
+
+  // 카테고리 상태 - 폴더 안(lockedCategory)이면 고정, 아니면 최근 사용/기본값을 프리셋
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>(
+    lockedCategory?.id ?? suggestedCategoryId ?? ""
+  );
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
 
   // 드롭다운 및 검색 상태
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -105,8 +134,51 @@ export default function MeetingStartModal({
 
   function handleSubmit() {
     if (!title.trim()) return;
-    onStart(title.trim(), Array.from(selectedIds), location.trim() || undefined, recordingMode);
+    onStart(
+      title.trim(),
+      Array.from(selectedIds),
+      location.trim() || undefined,
+      recordingMode,
+      selectedCategoryId || undefined
+    );
   }
+
+  async function handleCategorySelectChange(value: string) {
+    if (value === CREATE_CATEGORY_VALUE) {
+      setIsCreatingCategory(true);
+      return;
+    }
+    setSelectedCategoryId(value);
+  }
+
+  function categoryLabel(category: Category): string {
+    return category.is_default ? t.meeting_category_default_label : category.name;
+  }
+
+  async function handleConfirmCreateCategory() {
+    const name = newCategoryName.trim();
+    if (!name || !onCreateCategory) return;
+    const created = await onCreateCategory(name);
+    if (created) {
+      setSelectedCategoryId(created.id);
+    }
+    setIsCreatingCategory(false);
+    setNewCategoryName("");
+  }
+
+  // 새 카테고리 입력창이 열려 있을 때 바깥을 클릭하면 만들지 않고 드롭다운으로 되돌린다
+  const categoryCreateRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isCreatingCategory) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (categoryCreateRef.current && !categoryCreateRef.current.contains(e.target as Node)) {
+        setIsCreatingCategory(false);
+        setNewCategoryName("");
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isCreatingCategory]);
 
   // 검색어 필터링
   const filteredMembers = (members ?? []).filter((m) => {
@@ -119,16 +191,20 @@ export default function MeetingStartModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl border border-recall-border bg-recall-bg p-6 shadow-2xl text-recall-text transition-all duration-200"
+        className="flex w-full max-w-md max-h-[90vh] flex-col rounded-2xl border border-recall-border bg-recall-bg shadow-2xl text-recall-text transition-all duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 모달 헤더 */}
-        <div className="mb-5 flex items-center justify-between border-b border-recall-border pb-3">
+        {/* 모달 헤더 - 스크롤 영역 밖에 고정 */}
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-recall-border px-6 pt-6 pb-3">
           <p className="text-lg font-bold text-recall-text">{t.meeting_start_modal_title}</p>
           <button onClick={onClose} className="text-recall-textMuted hover:text-recall-text transition">
             <CloseIcon size={18} />
           </button>
         </div>
+
+        {/* 본문 - 내용이 길어져도(카테고리, 팀원 드롭다운 등) 이 영역만 스크롤되고
+            시작/취소 버튼은 항상 하단에 보인다 */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
 
         {/* 1. 회의 제목 입력 */}
         <div className="mb-5">
@@ -202,6 +278,61 @@ export default function MeetingStartModal({
             </p>
           )}
         </div>
+
+        {/* 1-3. 카테고리 선택 - 카테고리 API가 아직 없으면(categories가 비어 있으면) 통째로 숨긴다 */}
+        {(lockedCategory || categories.length > 0) && (
+          <div className="mb-5">
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-recall-textMuted">
+              {t.meeting_category_label}
+            </label>
+
+            {lockedCategory ? (
+              <div className="flex items-center gap-2 rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm font-medium text-recall-text">
+                <span>{categoryLabel(lockedCategory)}</span>
+              </div>
+            ) : isCreatingCategory ? (
+              <div ref={categoryCreateRef} className="flex gap-2">
+                <input
+                  autoFocus
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleConfirmCreateCategory();
+                    if (e.key === "Escape") setIsCreatingCategory(false);
+                  }}
+                  placeholder={t.meeting_category_create_placeholder}
+                  className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text font-medium outline-none focus:border-recall-accent transition"
+                />
+                <button
+                  type="button"
+                  onClick={handleConfirmCreateCategory}
+                  disabled={!newCategoryName.trim()}
+                  className="whitespace-nowrap rounded-xl bg-recall-accent px-3.5 py-2.5 text-sm font-semibold text-white disabled:opacity-50 transition"
+                >
+                  {t.meeting_category_create_confirm}
+                </button>
+              </div>
+            ) : (
+              <select
+                value={selectedCategoryId}
+                onChange={(e) => handleCategorySelectChange(e.target.value)}
+                className="w-full rounded-xl border border-recall-border bg-recall-bgSoft px-3.5 py-2.5 text-sm text-recall-text font-medium outline-none focus:border-recall-accent transition"
+              >
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {categoryLabel(c)}
+                    {c.id === suggestedCategoryId ? ` (${t.meeting_category_label})` : ""}
+                  </option>
+                ))}
+                {onCreateCategory && <option value={CREATE_CATEGORY_VALUE}>{t.meeting_category_create_option}</option>}
+              </select>
+            )}
+
+            <p className="mt-1.5 text-[11px] text-recall-textMuted">
+              {lockedCategory ? t.meeting_category_locked_hint : t.meeting_category_default_hint}
+            </p>
+          </div>
+        )}
 
         {/* 2. 팀원 선택 영역 (아코디언 방식 - 버튼들을 아래로 밀어냄) */}
         <div className="mb-5">
@@ -299,8 +430,10 @@ export default function MeetingStartModal({
           )}
         </div>
 
-        {/* 하단 버튼 (드롭다운이 열리면 자동으로 아래로 내려감) */}
-        <div className="mt-6 flex justify-end gap-2 border-t border-recall-border pt-4">
+        </div>
+
+        {/* 하단 버튼 - 스크롤 영역 밖에 고정되어 항상 보임 */}
+        <div className="flex flex-shrink-0 justify-end gap-2 border-t border-recall-border px-6 py-4">
           <button
             type="button"
             onClick={onClose}

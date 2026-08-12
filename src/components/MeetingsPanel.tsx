@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
+import { useCategories } from "../hooks/useCategories";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert, ContradictionAlertAction, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
@@ -15,6 +16,7 @@ import {
   StopIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronDownIcon,
   WarningIcon,
   AssistIcon,
   PencilIcon,
@@ -467,7 +469,8 @@ interface MeetingsPanelProps {
     relatedRoomId?: string,
     attendeeIds?: string[],
     location?: string,
-    recordingMode?: RecordingMode
+    recordingMode?: RecordingMode,
+    categoryId?: string
   ) => void;
   onJoinLive: (meetingId: string) => void;
   onPauseLive: () => void;
@@ -1367,6 +1370,7 @@ export default function MeetingsPanel({
     updateFullSummary,
     updateShortSummary,
     reload,
+    upsertMeeting,
   } = useRealMeetings(workspaceId);
 
   // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어온 경우, 그 회의를 바로 선택해서 보여준다.
@@ -1523,6 +1527,35 @@ export default function MeetingsPanel({
   const [showExportModal, setShowExportModal] = useState(false);
   const [showStartModal, setShowStartModal] = useState(false);
   const [topTab, setTopTab] = useState<"meetings" | "exports">("meetings");
+  const categoriesState = useCategories(workspaceId);
+  const categoryById = new Map(categoriesState.categories.map((c) => [c.id, c]));
+  const [collapsedCategoryIds, setCollapsedCategoryIds] = useState<Set<string>>(new Set());
+  const [startCategoryId, setStartCategoryId] = useState<string | null>(null);
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
+
+  async function handleConfirmAddCategory() {
+    const name = newCategoryDraftName.trim();
+    if (!name) return;
+    await categoriesState.createCategory(name);
+    setIsAddingCategory(false);
+    setNewCategoryDraftName("");
+  }
+
+  // 카테고리 추가 입력창이 열려 있을 때 바깥을 클릭하면 만들지 않고 그냥 접는다
+  const addCategoryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isAddingCategory) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (addCategoryRef.current && !addCategoryRef.current.contains(e.target as Node)) {
+        setIsAddingCategory(false);
+        setNewCategoryDraftName("");
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isAddingCategory]);
+
   const audioPlayerRef = useRef<MeetingAudioPlayerHandle>(null);
 
   // 결정 근거 팝업의 "원본 회의로 이동"에서 세그먼트 id까지 넘어온 경우 - 그 회의가 선택되고
@@ -1615,6 +1648,12 @@ export default function MeetingsPanel({
 
   useEffect(() => {
     if (liveStatus === "ended") {
+      // 서버 목록을 다시 받아오기 전에, 방금 끝난 회의를 "분석 중" 상태로 즉시 반영해서
+      // reload()가 실패/지연되더라도 화면이 통째로 비어 보이지 않게 한다.
+      if (liveMeeting) {
+        upsertMeeting({ ...liveMeeting, status: "processing" });
+        setSelectedMeetingId(liveMeeting.id);
+      }
       reload();
       onResetLive();
     }
@@ -1630,8 +1669,72 @@ export default function MeetingsPanel({
     return t.meeting_default_title(d.getMonth() + 1, d.getDate());
   }
 
-  function handleStartRecording() {
+  function handleStartRecording(categoryId?: string) {
+    setStartCategoryId(categoryId ?? null);
     setShowStartModal(true);
+  }
+
+  function toggleCategoryCollapsed(categoryId: string) {
+    setCollapsedCategoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) next.delete(categoryId);
+      else next.add(categoryId);
+      return next;
+    });
+  }
+
+  function renderMeetingCard(m: Meeting, opts: { showCategoryChip: boolean }) {
+    const isSelected = m.id === selectedMeetingId;
+    const isThisLive = isLiveActive && liveMeeting && m.id === liveMeeting.id;
+    const badge = statusBadge(t, m.status);
+    const category = m.category_id ? categoryById.get(m.category_id) : null;
+    return (
+      <div
+        key={m.id}
+        onClick={() => setSelectedMeetingId(m.id)}
+        className={`group flex cursor-pointer flex-col gap-1 rounded-xl border p-2.5 transition ${
+          isSelected
+            ? "border-recall-accent bg-recall-accent/10 shadow-sm"
+            : "border-recall-border/80 bg-recall-bgSoft/40 hover:bg-white/5"
+        }`}
+      >
+        <div className="flex items-center gap-1.5">
+          {m.input_type === "live_recording" ? (
+            <MicIcon
+              size={12}
+              className={`flex-shrink-0 ${isThisLive ? "text-recall-danger" : "text-recall-textMuted"}`}
+            />
+          ) : (
+            <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
+          )}
+          <span className="min-w-0 flex-1 truncate text-xs font-bold text-recall-text">{m.title}</span>
+          {!isThisLive && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                removeMeeting(m.id);
+              }}
+              className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline transition"
+              aria-label={t.meeting_delete_aria}
+            >
+              <TrashIcon size={12} />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {isThisLive && <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-recall-danger" />}
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
+            {isThisLive ? liveStatusLabel(t, liveStatus) : badge.label}
+          </span>
+          <span className="text-[11px] text-recall-textMuted">{formatDate(m.created_at)}</span>
+          {opts.showCategoryChip && category && !category.is_default && (
+            <span className="ml-auto truncate rounded-full border border-recall-accent/30 bg-recall-accent/10 px-2 py-0.5 text-xs font-semibold text-recall-accent">
+              {category.name}
+            </span>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -1692,7 +1795,7 @@ export default function MeetingsPanel({
           {/* 🌟 단일 메인 CTA 버튼: 새 회의 시작 */}
           <div className="mb-3 space-y-2">
             <button
-              onClick={handleStartRecording}
+              onClick={() => handleStartRecording()}
               disabled={isLiveActive}
               title={isLiveActive ? t.meeting_already_running : undefined}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-recall-accent py-3 px-4 text-sm font-bold text-white shadow-md shadow-recall-accent/25 hover:opacity-95 active:scale-95 transition-all disabled:cursor-not-allowed disabled:opacity-40"
@@ -1711,64 +1814,105 @@ export default function MeetingsPanel({
             </button>
           </div>
 
-          {/* 회의 리스트 영역 */}
+          {/* 카테고리 추가 - 설정 화면까지 안 가고 회의 페이지에서 바로 만들 수 있게 */}
+          <div ref={addCategoryRef}>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-recall-textMuted">
+              {t.meeting_category_label}
+            </p>
+            {!isAddingCategory && (
+              <button
+                onClick={() => setIsAddingCategory(true)}
+                className="flex items-center gap-1 text-[11px] font-semibold text-recall-accent hover:opacity-80"
+              >
+                <PlusIcon size={12} />
+                {t.meeting_category_add_btn}
+              </button>
+            )}
+          </div>
+          {isAddingCategory && (
+            <div className="mb-2 flex gap-1.5">
+              <input
+                autoFocus
+                value={newCategoryDraftName}
+                onChange={(e) => setNewCategoryDraftName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleConfirmAddCategory();
+                  if (e.key === "Escape") setIsAddingCategory(false);
+                }}
+                placeholder={t.meeting_category_create_placeholder}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-2.5 py-1.5 text-xs text-recall-text outline-none focus:border-recall-accent"
+              />
+              <button
+                onClick={handleConfirmAddCategory}
+                disabled={!newCategoryDraftName.trim()}
+                className="flex-shrink-0 rounded-lg bg-recall-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                {t.meeting_category_create_confirm}
+              </button>
+            </div>
+          )}
+          </div>
+
+          {/* 회의 리스트 영역 - 기본 카테고리는 폴더로 안 묶고 그냥 flat하게 보여주고
+              (모든 회의가 다 "기본값" 폴더 하나에 몰려 있는 건 의미가 없으니), 사용자가
+              직접 만든 카테고리만 접고 펼 수 있는 폴더로 묶는다 */}
           <div className="flex-1 space-y-1.5 overflow-y-auto custom-scrollbar pr-0.5">
             {isLoading ? (
               <p className="py-6 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
             ) : meetings.length === 0 ? (
               <p className="py-6 text-center text-xs text-recall-textMuted">{t.meeting_none}</p>
             ) : (
-              meetings.map((m) => {
-                const isSelected = m.id === selectedMeetingId;
-                const isThisLive = isLiveActive && liveMeeting && m.id === liveMeeting.id;
-                const badge = statusBadge(t, m.status);
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => setSelectedMeetingId(m.id)}
-                    className={`group flex cursor-pointer flex-col gap-1 rounded-xl border p-2.5 transition ${
-                      isSelected
-                        ? "border-recall-accent bg-recall-accent/10 shadow-sm"
-                        : "border-recall-border/80 bg-recall-bgSoft/40 hover:bg-white/5"
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      {m.input_type === "live_recording" ? (
-                        <MicIcon
-                          size={12}
-                          className={`flex-shrink-0 ${isThisLive ? "text-recall-danger" : "text-recall-textMuted"}`}
-                        />
-                      ) : (
-                        <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-xs font-bold text-recall-text">
-                        {m.title}
-                      </span>
-                      {!isThisLive && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeMeeting(m.id);
-                          }}
-                          className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline transition"
-                          aria-label={t.meeting_delete_aria}
-                        >
-                          <TrashIcon size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {isThisLive && (
-                        <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-recall-danger" />
-                      )}
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
-                        {isThisLive ? liveStatusLabel(t, liveStatus) : badge.label}
-                      </span>
-                      <span className="text-[11px] text-recall-textMuted">{formatDate(m.created_at)}</span>
-                    </div>
-                  </div>
-                );
-              })
+              <>
+                {meetings
+                  .filter((m) => {
+                    const cat = m.category_id ? categoryById.get(m.category_id) : null;
+                    return !cat || cat.is_default;
+                  })
+                  .map((m) => renderMeetingCard(m, { showCategoryChip: false }))}
+
+                {categoriesState.categories
+                  .filter((cat) => !cat.is_default)
+                  .map((cat) => {
+                    const catMeetings = meetings.filter((m) => m.category_id === cat.id);
+                    const isCollapsed = collapsedCategoryIds.has(cat.id);
+                    return (
+                      <div key={cat.id}>
+                        <div className="group/cat flex items-center gap-1 rounded-lg px-1 py-1.5 hover:bg-white/5">
+                          <button
+                            onClick={() => toggleCategoryCollapsed(cat.id)}
+                            className="flex flex-1 items-center gap-1.5 text-left"
+                          >
+                            {isCollapsed ? (
+                              <ChevronRightIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
+                            ) : (
+                              <ChevronDownIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
+                            )}
+                            <span className="truncate text-sm font-bold text-recall-text">{cat.name}</span>
+                            <span className="flex-shrink-0 text-xs text-recall-textMuted">{catMeetings.length}</span>
+                          </button>
+                          <button
+                            onClick={() => handleStartRecording(cat.id)}
+                            disabled={isLiveActive}
+                            title={t.meeting_start_new}
+                            className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-accent group-hover/cat:inline disabled:opacity-40"
+                          >
+                            <PlusIcon size={14} />
+                          </button>
+                        </div>
+                        {!isCollapsed && (
+                          <div className="mt-1 space-y-1.5 pl-1">
+                            {catMeetings.length === 0 ? (
+                              <p className="px-1.5 py-1 text-[11px] text-recall-textMuted">{t.meeting_none}</p>
+                            ) : (
+                              catMeetings.map((m) => renderMeetingCard(m, { showCategoryChip: false }))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </>
             )}
           </div>
         </div>
@@ -1976,9 +2120,21 @@ export default function MeetingsPanel({
                   t={t}
                   onRename={(title) => renameMeeting(selectedRealMeeting.id, title)}
                 />
-                <p className="text-xs text-recall-textMuted mt-0.5">
-                  {statusBadge(t, selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
-                  {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
+                <p className="flex items-center gap-1.5 text-xs text-recall-textMuted mt-0.5">
+                  <span>
+                    {statusBadge(t, selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
+                    {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
+                  </span>
+                  {(() => {
+                    const category = selectedRealMeeting.category_id
+                      ? categoryById.get(selectedRealMeeting.category_id)
+                      : null;
+                    return category && !category.is_default ? (
+                      <span className="rounded-full border border-recall-accent/30 bg-recall-accent/10 px-2 py-0.5 text-xs font-semibold text-recall-accent">
+                        {category.name}
+                      </span>
+                    ) : null;
+                  })()}
                 </p>
               </div>
               <div className="flex flex-shrink-0 gap-1.5">
@@ -2402,6 +2558,29 @@ export default function MeetingsPanel({
             </div>
           )}
 
+          {/* 미해결 안건 리마인더 - 예전엔 회의 시작 시 카드 팝업으로만 잠깐 떴다가 넘기면
+              완전히 사라져서 회의 중간에 다시 확인할 방법이 없었다. 팝업이 떠 있는 동안엔
+              여기 목록에도 같이 보여서, 회의 중에도 접었다 펼쳐서 다시 볼 수 있게 한다. */}
+          {agendaReminder && agendaReminder.items.length > 0 && (
+            <div className="mb-3 space-y-1.5 border-b border-recall-border pb-3">
+              <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-recall-textMuted">
+                {t.meeting_live_alert_agenda_title}
+                <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal">
+                  {agendaReminder.items.length}
+                </span>
+              </p>
+              {agendaReminder.items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs text-recall-text"
+                >
+                  <p className="font-semibold">{item.title}</p>
+                  <p className="mt-0.5 text-recall-textMuted">{item.decision_text}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
           {isViewingLive ? (
             <p className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-400">
               {t.meeting_live_contradiction_notice}
@@ -2610,9 +2789,14 @@ export default function MeetingsPanel({
           currentUserId={currentUserId}
           defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
-          onStart={(title, attendeeIds, location, recordingMode) => {
+          categories={categoriesState.categories}
+          suggestedCategoryId={categoriesState.suggestedCategoryId}
+          lockedCategory={startCategoryId ? categoryById.get(startCategoryId) ?? null : null}
+          onCreateCategory={categoriesState.createCategory}
+          onStart={(title, attendeeIds, location, recordingMode, categoryId) => {
             setShowStartModal(false);
-            onStartLive(title, undefined, attendeeIds, location, recordingMode);
+            if (categoryId) categoriesState.markCategoryUsed(categoryId);
+            onStartLive(title, undefined, attendeeIds, location, recordingMode, categoryId);
           }}
           t={t}
         />

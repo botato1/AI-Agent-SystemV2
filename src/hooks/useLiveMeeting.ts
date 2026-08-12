@@ -528,22 +528,29 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     relatedRoomId?: string,
     attendeeIds?: string[],
     location?: string,
-    recordingMode?: RecordingMode
+    recordingMode?: RecordingMode,
+    categoryId?: string
   ) {
     if (status === "recording" || status === "connecting") return;
     resetSessionState();
 
-    const res = await startMeetingApi(workspaceId, title, relatedRoomId, recordingMode);
+    const res = await startMeetingApi(workspaceId, title, relatedRoomId, recordingMode, categoryId);
     if (res.status !== "success" || !res.meeting) {
       setStatus("error");
       setErrorMessage(res.message);
       return;
     }
 
-    // 시작 전 미리 고른 참석자가 있으면 회의 생성 직후 바로 지정 - 녹음 자체를
-    // 막을 필요는 없으니 결과를 기다리지 않는다 (실패해도 회의 상세에서 나중에 다시 지정 가능)
+    // 시작 전 미리 고른 참석자가 있으면 회의 생성 직후 바로 지정한다. 반드시 WS 연결
+    // (beginSession) 전에 끝나야 한다 - STT 서버가 접속 시점에 DB에서 참석자 명단을
+    // 읽어 화자 후보를 정하는데, 이걸 기다리지 않고 먼저 연결하면 아직 참석자 지정이
+    // 반영되기 전이라 회의 시작자 한 명만 명단에 남아있는 상태로 접속해버렸다
+    // (화자 인식이 본인 이름으로만 붙거나 '미상'이 되던 원인).
     if (attendeeIds && attendeeIds.length > 0) {
-      setMeetingAttendeesApi(workspaceId, res.meeting.id, attendeeIds);
+      const attendeesRes = await setMeetingAttendeesApi(workspaceId, res.meeting.id, attendeeIds);
+      if (attendeesRes.status !== "success") {
+        console.error("참석자 지정 실패 - 회의는 시작하되 나중에 상세에서 다시 지정 가능:", attendeesRes.message);
+      }
     }
 
     // 장소도 마찬가지 - start API엔 없는 필드라, 생성 직후 기존 "회의 정보 수정" API로 반영한다

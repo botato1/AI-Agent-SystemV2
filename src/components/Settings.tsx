@@ -1,17 +1,211 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Language } from "../data/translations";
-import { ChevronRightIcon, MoonIcon, SunIcon } from "./icons";
+import { ChevronRightIcon, ChevronUpIcon, ChevronDownIcon, MoonIcon, SunIcon, PlusIcon, PencilIcon, TrashIcon, CheckIcon, CloseIcon } from "./icons";
 import { Theme } from "../hooks/useTheme";
 import { Workspace } from "../types";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
 import { resolveAvatarUrl, DeleteAccountResponse } from "../services/auth";
 import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
+import { useCategories } from "../hooks/useCategories";
+import { Category } from "../services/category";
+import { showConfirm } from "../lib/confirm";
 import {
   getNotificationPreferencesApi,
   updateNotificationPreferencesApi,
   NotificationPreferences,
 } from "../services/notification";
+
+function categoryLabel(t: any, category: Category): string {
+  return category.is_default ? t.meeting_category_default_label : category.name;
+}
+
+function CategoryManagementSection({ workspaceId, t }: { workspaceId: string; t: any }) {
+  const { categories, isLoading, createCategory, renameCategory, reorderCategory, deleteCategory } =
+    useCategories(workspaceId);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  const addRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isAdding) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (addRef.current && !addRef.current.contains(e.target as Node)) {
+        setIsAdding(false);
+        setNewName("");
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isAdding]);
+
+  function startEdit(category: Category) {
+    setEditingId(category.id);
+    setDraftName(category.name);
+  }
+
+  async function confirmEdit() {
+    const name = draftName.trim();
+    if (editingId && name) await renameCategory(editingId, name);
+    setEditingId(null);
+    setDraftName("");
+  }
+
+  async function handleAdd() {
+    const name = newName.trim();
+    if (!name) return;
+    await createCategory(name);
+    setIsAdding(false);
+    setNewName("");
+  }
+
+  async function handleDelete(category: Category) {
+    const ok = await showConfirm(
+      t.settings_category_delete_confirm(category.name),
+      t.settings_account_delete_confirm_btn,
+      t.task_cancel
+    );
+    if (ok) await deleteCategory(category.id);
+  }
+
+  async function moveBy(index: number, direction: -1 | 1) {
+    const target = categories[index + direction];
+    const current = categories[index];
+    if (!target || !current) return;
+    await Promise.all([
+      reorderCategory(current.id, target.display_order),
+      reorderCategory(target.id, current.display_order),
+    ]);
+  }
+
+  return (
+    <div>
+      <p className="mb-2 text-sm font-semibold text-recall-textMuted">{t.meeting_category_label}</p>
+      <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
+        {isLoading ? (
+          <p className="px-4 py-3 text-sm text-recall-textMuted">{t.common_loading}</p>
+        ) : (
+          categories.map((cat, idx) => (
+            <div
+              key={cat.id}
+              className="flex items-center gap-2 border-b border-recall-border px-4 py-2.5 last:border-b-0"
+            >
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => moveBy(idx, -1)}
+                  disabled={idx === 0}
+                  className="text-recall-textMuted hover:text-recall-text disabled:opacity-25"
+                >
+                  <ChevronUpIcon size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveBy(idx, 1)}
+                  disabled={idx === categories.length - 1}
+                  className="text-recall-textMuted hover:text-recall-text disabled:opacity-25"
+                >
+                  <ChevronDownIcon size={13} />
+                </button>
+              </div>
+
+              {editingId === cat.id ? (
+                <>
+                  <input
+                    autoFocus
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") confirmEdit();
+                      if (e.key === "Escape") setEditingId(null);
+                    }}
+                    className="flex-1 rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
+                  />
+                  <button type="button" onClick={confirmEdit} className="text-recall-accent hover:opacity-80">
+                    <CheckIcon size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(null)}
+                    className="text-recall-textMuted hover:text-recall-text"
+                  >
+                    <CloseIcon size={14} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 truncate text-sm font-medium text-recall-text">
+                    {categoryLabel(t, cat)}
+                  </span>
+                  {cat.is_default ? (
+                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs font-medium text-recall-textMuted">
+                      {t.meeting_category_default_label}
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(cat)}
+                        className="text-recall-textMuted hover:text-recall-text"
+                      >
+                        <PencilIcon size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(cat)}
+                        className="text-recall-textMuted hover:text-recall-danger"
+                      >
+                        <TrashIcon size={14} />
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          ))
+        )}
+
+        <div ref={addRef} className="px-4 py-2.5">
+          {isAdding ? (
+            <div className="flex gap-1.5">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdd();
+                  if (e.key === "Escape") setIsAdding(false);
+                }}
+                placeholder={t.meeting_category_create_placeholder}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
+              />
+              <button
+                type="button"
+                onClick={handleAdd}
+                disabled={!newName.trim()}
+                className="flex-shrink-0 rounded-lg bg-recall-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {t.meeting_category_create_confirm}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsAdding(true)}
+              className="flex items-center gap-1.5 text-sm font-semibold text-recall-accent hover:opacity-80"
+            >
+              <PlusIcon size={14} />
+              {t.meeting_category_add_btn}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface SettingsProps {
   onClose: () => void;
@@ -210,6 +404,9 @@ export default function Settings({
               )}
             </div>
           </div>
+
+          {/* 1-1. 카테고리 관리 구역 */}
+          {currentWorkspace?.id && <CategoryManagementSection workspaceId={currentWorkspace.id} t={t} />}
 
           {/* 2. 알림 구역 */}
           <div>

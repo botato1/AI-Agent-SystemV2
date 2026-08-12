@@ -24,7 +24,8 @@ interface VoiceMeetingViewProps {
     relatedRoomId?: string,
     attendeeIds?: string[],
     location?: string,
-    recordingMode?: RecordingMode
+    recordingMode?: RecordingMode,
+    categoryId?: string
   ) => void;
   onJoin: (meetingId: string) => void;
   onPause: () => void;

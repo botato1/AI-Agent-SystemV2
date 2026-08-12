@@ -16,6 +16,7 @@ export {
   Trash2 as TrashIcon,
   Star as StarIcon,
   ChevronDown as ChevronDownIcon,
+  ChevronUp as ChevronUpIcon,
   ChevronRight as ChevronRightIcon,
   Clock as ClockIcon,
   RefreshCw as RepeatIcon,
