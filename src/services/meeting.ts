@@ -79,7 +79,12 @@ export interface MeetingSummary {
   short_summary?: string | null;
   filtered_transcript?: string | null;
   full_transcript?: string | null;
-  discussion_points?: unknown;
+  discussion_points?: string[] | null;
+  // [추가 - 회의록 탭 개편] 백엔드 LLM 추출 단계엔 이미 있지만(llm_extractor.py),
+  // DB 컬럼/응답 스키마엔 아직 안 실려서 당분간 항상 undefined로 온다 - 값이
+  // 생기면 그대로 쓸 수 있게 타입만 미리 열어둔다.
+  meeting_purpose?: string | null;
+  next_steps?: string | null;
   generation_status: GenerationStatus;
   generation_error?: string | null;
   model_name?: string | null;
@@ -170,7 +175,7 @@ export interface CreateDecisionRequest {
 export interface UpdateDecisionRequest {
   title?: string;
   decision_text?: string;
-  reason?: string;
+  reason?: string | null;
   status?: DecisionStatus;
 }
 
@@ -218,6 +223,19 @@ export interface GetUpcomingMeetingsResponse {
   error: string | null;
 }
 
+export interface MeetingExportDecision {
+  title: string;
+  decision_text: string;
+  reason?: string | null;
+}
+
+export interface MeetingExportActionItem {
+  title: string;
+  description?: string | null;
+  assignee_label?: string | null;
+  due_at?: string | null;
+}
+
 export interface MeetingExportData {
   meeting_id: string;
   title: string;
@@ -228,6 +246,15 @@ export interface MeetingExportData {
   short_summary: string | null;
   filtered_transcript: string | null;
   segments: MeetingSegment[];
+  // [추가 - 회의록 포맷 개편] export 전용 엔드포인트가 4-섹션 포맷(목적/논의내용/결정사항/
+  // 추진계획)에 필요한 필드를 직접 내려주게 되어, 예전처럼 요약/결정사항을 별도 API로
+  // 따로 불러와 합칠 필요가 없어졌다.
+  meeting_purpose: string | null;
+  full_summary: string | null;
+  discussion_points: string[] | null;
+  next_steps: string | null;
+  decisions: MeetingExportDecision[];
+  action_items?: MeetingExportActionItem[];
 }
 
 export interface GetMeetingExportResponse {

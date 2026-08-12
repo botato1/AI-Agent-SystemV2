@@ -3,7 +3,7 @@ import { useRealMeetings } from "../hooks/useRealMeetings";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert, ContradictionAlertAction, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
-import { Meeting, MeetingStatus, MeetingAttendee, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision } from "../services/meeting";
+import { Meeting, MeetingStatus, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision } from "../services/meeting";
 import { ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
 import {
   UploadIcon,
@@ -40,9 +40,8 @@ import MeetingAudioPlayer, { MeetingAudioPlayerHandle } from "./MeetingAudioPlay
 import Avatar from "./Avatar";
 import { hashAvatarColor } from "../data/avatarColors";
 import { getVoiceProfileListApi } from "../services/voice";
-import { getMeetingExportsApi, MeetingExportRecord, SplitSegmentParams, setMeetingAttendeesApi } from "../services/meeting";
-import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
-import { getDocumentFileApi, uploadDocumentApi } from "../services/document";
+import { getMeetingExportsApi, MeetingExportRecord, SplitSegmentParams } from "../services/meeting";
+import { getDocumentFileApi } from "../services/document";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -96,13 +95,6 @@ function formatTimeOnly(iso?: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function groupAttendees(attendees: MeetingAttendee[]) {
-  return {
-    initial: attendees.filter((a) => a.is_initial !== false),
-    added: attendees.filter((a) => a.is_initial === false),
-  };
 }
 
 function isRawSpeakerLabel(label: string | null | undefined): label is string {
@@ -455,6 +447,7 @@ function UploadModal({
 
 interface MeetingsPanelProps {
   workspaceId: string;
+  currentUserId: string;
   avatarUrlByName: Record<string, string | null>;
   liveStatus: LiveMeetingStatus;
   liveMeeting: Meeting | null;
@@ -489,6 +482,10 @@ interface MeetingsPanelProps {
   // 소비하고 나면 상위(App)에서 null로 리셋해줘야 뒤로 갔다 다시 들어와도 강제로 재선택되지 않는다.
   initialMeetingId?: string | null;
   onInitialMeetingIdConsumed?: () => void;
+  // 결정 근거 팝업의 "원본 회의로 이동"에서 세그먼트 id까지 같이 넘어온 경우, 스크립트 탭에서
+  // 그 발언까지 스크롤 + 하이라이트해준다.
+  initialSegmentId?: string | null;
+  onInitialSegmentIdConsumed?: () => void;
   onOpenDecision: (decisionId: string) => void;
   onTaskApproved: () => void;
   t: any;
@@ -591,7 +588,7 @@ function DecisionItem({
 }: {
   decision: Decision;
   isEditing: boolean;
-  onSave: (input: { title: string; decisionText: string; reason?: string }) => Promise<boolean>;
+  onSave: (input: { title: string; decisionText: string; reason: string | null }) => Promise<boolean>;
   t: any;
 }) {
   const [title, setTitle] = useState(decision.title);
@@ -607,12 +604,15 @@ function DecisionItem({
   function commit() {
     const trimmedTitle = title.trim();
     const trimmedText = decisionText.trim();
-    const trimmedReason = reason.trim() || undefined;
+    // [수정 - 리뷰 반영] 이유를 지워서 빈 문자열로 만들면 여기서 undefined가 되는데,
+    // JSON.stringify는 undefined인 키를 아예 빼버려서 서버(Pydantic exclude_unset)가
+    // "이유는 안 건드림"으로 해석해 기존 값이 그대로 남아있었다 - null로 명시해서 보낸다.
+    const trimmedReason = reason.trim() || null;
     if (!trimmedTitle || !trimmedText) return;
     if (
       trimmedTitle === decision.title &&
       trimmedText === decision.decision_text &&
-      trimmedReason === (decision.reason || undefined)
+      trimmedReason === (decision.reason || null)
     ) {
       return;
     }
@@ -713,74 +713,6 @@ function EditableTitleField({
       }}
       className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-sm font-bold text-recall-text outline-none focus:border-recall-accent"
     />
-  );
-}
-
-function EditableAttendeesField({
-  workspaceId,
-  meetingId,
-  attendees,
-  onSaved,
-  t,
-}: {
-  workspaceId: string;
-  meetingId: string;
-  attendees: MeetingAttendee[];
-  onSaved: () => void;
-  t: any;
-}) {
-  const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    getWorkspaceMembersApi(workspaceId).then((res) => {
-      if (!cancelled && res.status === "success") setMembers(res.members);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
-
-  const selectedIds = new Set(attendees.map((a) => a.user_id));
-
-  async function toggle(userId: string) {
-    const next = new Set(selectedIds);
-    if (next.has(userId)) next.delete(userId);
-    else next.add(userId);
-    setIsSaving(true);
-    const res = await setMeetingAttendeesApi(workspaceId, meetingId, Array.from(next));
-    setIsSaving(false);
-    if (res.status === "success") {
-      onSaved();
-    } else {
-      alert(`참석자 수정 실패: ${res.message}`);
-    }
-  }
-
-  if (!members) return <p className="text-recall-textMuted">{t.common_loading}</p>;
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {members.map((m) => {
-        const isSelected = selectedIds.has(m.user_id);
-        return (
-          <button
-            key={m.user_id}
-            type="button"
-            disabled={isSaving}
-            onClick={() => toggle(m.user_id)}
-            className={`rounded-full border px-2 py-1 text-[11px] transition disabled:opacity-50 ${
-              isSelected
-                ? "border-recall-accent bg-recall-accent/10 text-recall-accent"
-                : "border-recall-border text-recall-textMuted hover:text-recall-text"
-            }`}
-          >
-            {m.display_name || m.username}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -1156,12 +1088,16 @@ function LiveContradictionToast({
 // 감지와 같은 큐에 합쳐서 한 번에 하나씩 non-blocking 배너로 보여준다.
 function LiveAgendaCard({
   item,
+  position,
   total,
+  onPrev,
   onNext,
   t,
 }: {
   item: AgendaReminderItem;
+  position: number;
   total: number;
+  onPrev?: () => void;
   onNext: () => void;
   t: any;
 }) {
@@ -1173,7 +1109,7 @@ function LiveAgendaCard({
           {t.agenda_reminder_title}
           {total > 1 && (
             <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold">
-              {t.meeting_live_alert_count(total)}
+              {position}/{total}
             </span>
           )}
         </span>
@@ -1187,12 +1123,22 @@ function LiveAgendaCard({
         </p>
       )}
 
-      <button
-        onClick={onNext}
-        className="w-full rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
-      >
-        {t.meeting_live_alert_next_btn}
-      </button>
+      <div className="flex gap-1.5">
+        {onPrev && (
+          <button
+            onClick={onPrev}
+            className="rounded border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10"
+          >
+            {t.meeting_live_alert_prev_btn}
+          </button>
+        )}
+        <button
+          onClick={onNext}
+          className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+        >
+          {t.meeting_live_alert_next_btn}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1359,6 +1305,7 @@ function MeetingExportsList({ workspaceId, t }: { workspaceId: string; t: any })
 
 export default function MeetingsPanel({
   workspaceId,
+  currentUserId,
   avatarUrlByName,
   liveStatus,
   liveMeeting,
@@ -1385,6 +1332,8 @@ export default function MeetingsPanel({
   onRenameLive,
   initialMeetingId,
   onInitialMeetingIdConsumed,
+  initialSegmentId,
+  onInitialSegmentIdConsumed,
   onOpenDecision,
   onTaskApproved,
   t,
@@ -1401,13 +1350,10 @@ export default function MeetingsPanel({
     addDecision,
     updateDecision,
     attendees,
-    documents,
     suggestedTasks,
     approveSuggestedTask,
     rejectSuggestedTask,
     reloadAttendees,
-    reloadDocuments,
-    removeDocument,
     isDetailLoading,
     isUploading,
     uploadAudio,
@@ -1431,9 +1377,6 @@ export default function MeetingsPanel({
     onInitialMeetingIdConsumed?.();
   }, [initialMeetingId]);
 
-  // 회의록 탭 관련 자료 - 조회/업로드 모두 회의 ID 기준 전용 API를 사용한다(채팅방 연결 여부와 무관).
-  const meetingDocInputRef = useRef<HTMLInputElement>(null);
-  const [isUploadingMeetingDoc, setIsUploadingMeetingDoc] = useState(false);
   const [splitTargetSegmentId, setSplitTargetSegmentId] = useState<string | null>(null);
 
   // 스크립트 전체 수정 - 줄마다 수정 버튼을 따로 누르지 않고, 한 번에 전부 편집 가능한 상태로 켰다가
@@ -1471,18 +1414,6 @@ export default function MeetingsPanel({
     await Promise.all(changed.map((s) => updateSegmentContent(s.id, bulkEditDrafts[s.id].trim())));
     setIsBulkSaving(false);
     setBulkEditDrafts(null);
-  }
-
-  async function handleMeetingDocUpload(file: File) {
-    if (!selectedRealMeeting) return;
-    setIsUploadingMeetingDoc(true);
-    const res = await uploadDocumentApi(workspaceId, file, undefined, "document", selectedRealMeeting.id);
-    setIsUploadingMeetingDoc(false);
-    if (res.status === "success") {
-      reloadDocuments();
-    } else {
-      alert(`문서 업로드 실패: ${res.message}`);
-    }
   }
 
   const [registeredSpeakerNames, setRegisteredSpeakerNames] = useState<string[]>([]);
@@ -1535,15 +1466,19 @@ export default function MeetingsPanel({
   // 결정 리마인더 + 모순/결정변경 감지를 하나의 큐로 합쳐서 한 번에 하나씩만 보여준다 -
   // 예전엔 리마인더는 회의 시작 시 블로킹 모달로, 모순은 스크립트 위에 각각 배너로 쌓여서
   // 여러 개가 한꺼번에 뜨면 화면이 복잡해 보였다.
-  const [seenAgendaItemIds, setSeenAgendaItemIds] = useState<Set<string>>(new Set());
+  // [수정 - 리뷰 반영] 예전엔 "다음"을 누른 안건을 seen Set에 넣어 큐에서 영영 빼버려서,
+  // "이전" 버튼을 만들 수가 없었다(빠진 항목은 다시 못 불러옴). items 안에서의 위치를
+  // 가리키는 인덱스로 바꿔서, 안건들 사이는 앞뒤로 자유롭게 오갈 수 있게 한다.
+  const [agendaIndex, setAgendaIndex] = useState(0);
   useEffect(() => {
-    if (agendaReminder) setSeenAgendaItemIds(new Set());
+    if (agendaReminder) setAgendaIndex(0);
   }, [agendaReminder]);
 
+  const currentAgendaItem =
+    agendaReminder && agendaIndex < agendaReminder.items.length ? agendaReminder.items[agendaIndex] : null;
+
   const liveAlertQueue: LiveAlertQueueItem[] = [
-    ...(agendaReminder?.items || [])
-      .filter((item) => !seenAgendaItemIds.has(item.id))
-      .map((item) => ({ kind: "agenda" as const, id: `agenda-${item.id}`, item })),
+    ...(currentAgendaItem ? [{ kind: "agenda" as const, id: `agenda-${currentAgendaItem.id}`, item: currentAgendaItem }] : []),
     ...liveContradictionAlerts.map((alert) => ({
       kind: "contradiction" as const,
       id: alert.contradiction_id,
@@ -1552,12 +1487,17 @@ export default function MeetingsPanel({
   ];
   const currentLiveAlert = liveAlertQueue[0] ?? null;
 
-  function handleAgendaItemNext(itemId: string) {
-    const nextSeen = new Set(seenAgendaItemIds).add(itemId);
-    setSeenAgendaItemIds(nextSeen);
-    if (agendaReminder && agendaReminder.items.every((i) => nextSeen.has(i.id))) {
+  function handleAgendaItemNext() {
+    if (!agendaReminder) return;
+    if (agendaIndex + 1 < agendaReminder.items.length) {
+      setAgendaIndex(agendaIndex + 1);
+    } else {
       onClearAgendaReminder();
     }
+  }
+
+  function handleAgendaItemPrev() {
+    setAgendaIndex((i) => Math.max(0, i - 1));
   }
 
   const prevAlertCountRef = useRef(liveContradictionAlerts.length);
@@ -1584,6 +1524,33 @@ export default function MeetingsPanel({
   const [showStartModal, setShowStartModal] = useState(false);
   const [topTab, setTopTab] = useState<"meetings" | "exports">("meetings");
   const audioPlayerRef = useRef<MeetingAudioPlayerHandle>(null);
+
+  // 결정 근거 팝업의 "원본 회의로 이동"에서 세그먼트 id까지 넘어온 경우 - 그 회의가 선택되고
+  // 스크립트(segments)까지 로딩된 다음에야 실제 DOM에 해당 줄이 존재하므로, segments가 그
+  // 세그먼트를 포함하게 될 때까지 기다렸다가 스크립트 탭으로 전환 + 스크롤/하이라이트한다.
+  const [highlightSegmentId, setHighlightSegmentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!initialSegmentId) return;
+    if (!segments.some((s) => s.id === initialSegmentId)) return;
+    setDetailTab("script");
+    setHighlightSegmentId(initialSegmentId);
+    onInitialSegmentIdConsumed?.();
+  }, [initialSegmentId, segments]);
+
+  useEffect(() => {
+    if (!highlightSegmentId) return;
+    document.getElementById(`segment-${highlightSegmentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlightSegmentId(null), 3000);
+    return () => clearTimeout(timer);
+  }, [highlightSegmentId]);
+
+  // 실시간 회의 스크립트 - 새 발화가 쌓여도 자동으로 안 내려가서, 계속 손으로 스크롤해야
+  // 방금 나온 말을 볼 수 있었다. 확정 발화든 진행 중인 부분 인식(partial)이든 바뀔 때마다
+  // 맨 아래로 스크롤한다.
+  const liveScriptBottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    liveScriptBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [liveSegments.length, livePartial.confirmed, livePartial.tentative]);
 
   function toggleContradictionExpanded(id: string) {
     setExpandedContradictionIds((prev) => {
@@ -1891,8 +1858,10 @@ export default function MeetingsPanel({
                 {currentLiveAlert.kind === "agenda" ? (
                   <LiveAgendaCard
                     item={currentLiveAlert.item}
-                    total={liveAlertQueue.length}
-                    onNext={() => handleAgendaItemNext(currentLiveAlert.item.id)}
+                    position={agendaIndex + 1}
+                    total={agendaReminder?.items.length ?? 1}
+                    onPrev={agendaIndex > 0 ? handleAgendaItemPrev : undefined}
+                    onNext={handleAgendaItemNext}
                     t={t}
                   />
                 ) : (
@@ -1958,6 +1927,7 @@ export default function MeetingsPanel({
                       <span className="opacity-60">{livePartial.tentative}</span>
                     </p>
                   )}
+                  <div ref={liveScriptBottomRef} />
                 </div>
               )}
             </div>
@@ -2195,7 +2165,6 @@ export default function MeetingsPanel({
                     )
                   ) : detailTab === "minutes" ? (
                     (() => {
-                      const { initial: initialAttendees, added: addedAttendees } = groupAttendees(attendees);
                       return (
                         <div className="space-y-4 text-xs">
                           <div>
@@ -2212,163 +2181,88 @@ export default function MeetingsPanel({
                               {formatDateOnly(selectedRealMeeting.started_at ?? selectedRealMeeting.created_at)} ·{" "}
                               {formatTimeOnly(selectedRealMeeting.started_at ?? selectedRealMeeting.created_at)}
                             </p>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3 border-t border-recall-border pt-3">
-                            <div>
-                              <p className="mb-1 font-semibold text-recall-textMuted">
-                                {t.meeting_minutes_mode_label}
-                              </p>
-                              <p className="text-recall-text">
-                                {selectedRealMeeting.is_online === true
-                                  ? t.meeting_minutes_mode_online
-                                  : selectedRealMeeting.is_online === false
-                                    ? t.meeting_minutes_mode_offline
-                                    : t.meeting_minutes_mode_unset}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="mb-1 font-semibold text-recall-textMuted">
-                                {t.meeting_minutes_location_label}
-                              </p>
-                              {isMeetingEditMode ? (
-                                <EditableLocationField
-                                  location={selectedRealMeeting.location || ""}
-                                  onSave={updateMeetingLocation}
-                                  t={t}
-                                />
-                              ) : (
-                                <p className="text-recall-text">
-                                  {selectedRealMeeting.location || t.meeting_minutes_datetime_unset}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="border-t border-recall-border pt-3">
                             {isMeetingEditMode ? (
-                              <>
-                                <p className="mb-1.5 font-semibold text-recall-textMuted">
-                                  {t.meeting_attendees_manage_title}
-                                </p>
-                                <EditableAttendeesField
-                                  workspaceId={workspaceId}
-                                  meetingId={selectedRealMeeting.id}
-                                  attendees={attendees}
-                                  onSaved={reloadAttendees}
-                                  t={t}
-                                />
-                              </>
+                              <div className="mt-1.5">
+                                <EditableLocationField location={selectedRealMeeting.location || ""} onSave={updateMeetingLocation} t={t} />
+                              </div>
                             ) : (
-                              <>
-                                <p className="mb-1 font-semibold text-recall-textMuted">
-                                  {t.meeting_minutes_attendees_initial}
+                              selectedRealMeeting.location && (
+                                <p className="mt-0.5 text-recall-textMuted">
+                                  {t.meeting_minutes_location_label}: {selectedRealMeeting.location}
                                 </p>
-                                {initialAttendees.length === 0 ? (
-                                  <p className="text-recall-textMuted">{t.meeting_minutes_attendees_none}</p>
-                                ) : (
-                                  <p className="text-recall-text">
-                                    {initialAttendees.map((a) => a.display_name).join(", ")}
-                                  </p>
-                                )}
-                                <p className="mb-1 mt-3 font-semibold text-recall-textMuted">
-                                  {t.meeting_minutes_attendees_added}
-                                </p>
-                                {addedAttendees.length === 0 ? (
-                                  <p className="text-recall-textMuted">{t.meeting_minutes_attendees_none_added}</p>
-                                ) : (
-                                  <p className="text-recall-text">
-                                    {addedAttendees.map((a) => a.display_name).join(", ")}
-                                  </p>
-                                )}
-                              </>
+                              )
+                            )}
+                            <p className="mt-0.5 text-recall-textMuted">
+                              {t.meeting_export_section_attendees}:{" "}
+                              {attendees.length === 0
+                                ? t.meeting_minutes_attendees_none
+                                : attendees.map((a) => a.display_name).join(", ")}
+                            </p>
+                          </div>
+
+                          {/* [변경 - 회의록 탭 개편 요청] 진행방식/장소/참석자/전체내용/관련자료 구조를
+                              목적/논의내용/결정사항/추진계획 구조로 전면 교체.
+                              meeting_purpose/next_steps는 백엔드에 아직 없는 필드라(추출 단계엔 있지만
+                              DB/응답 스키마 미반영) 당분간 항상 비어 보인다 - 값이 오기 시작하면
+                              그대로 채워짐. discussion_points는 이미 내려오는 필드라 바로 반영된다. */}
+                          <div className="border-t border-recall-border pt-3">
+                            <p className="mb-1 font-semibold text-recall-textMuted">
+                              {t.meeting_minutes_purpose_label}
+                            </p>
+                            {summary?.meeting_purpose ? (
+                              <p className="whitespace-pre-line text-recall-text leading-relaxed">
+                                {summary.meeting_purpose}
+                              </p>
+                            ) : (
+                              <p className="text-recall-textMuted">{t.meeting_minutes_purpose_empty}</p>
                             )}
                           </div>
 
                           <div className="border-t border-recall-border pt-3">
                             <p className="mb-1 font-semibold text-recall-textMuted">
-                              {t.meeting_minutes_content_label}
+                              {t.meeting_minutes_discussion_label}
                             </p>
-                            {isMeetingEditMode ? (
-                              <EditableFullSummary
-                                text={summary?.full_summary || ""}
-                                isEditing
-                                onSave={updateFullSummary}
-                                t={t}
-                              />
-                            ) : summary?.full_summary ? (
-                              <p className="whitespace-pre-line text-recall-text leading-relaxed">
-                                {summary.full_summary}
-                              </p>
+                            {summary?.discussion_points && summary.discussion_points.length > 0 ? (
+                              <ul className="list-disc space-y-1 pl-4 text-recall-text leading-relaxed">
+                                {summary.discussion_points.map((point, i) => (
+                                  <li key={i}>{point}</li>
+                                ))}
+                              </ul>
                             ) : (
-                              <p className="text-recall-textMuted">{t.meeting_minutes_content_empty}</p>
+                              <p className="text-recall-textMuted">{t.meeting_minutes_discussion_empty}</p>
                             )}
                           </div>
 
                           <div className="border-t border-recall-border pt-3">
-                            <div className="mb-2 flex items-center justify-between">
-                              <p className="font-semibold text-recall-textMuted">
-                                {t.meeting_minutes_related_docs_label}
-                              </p>
-                              <>
-                                <input
-                                  ref={meetingDocInputRef}
-                                  type="file"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0];
-                                    e.target.value = "";
-                                    if (file) handleMeetingDocUpload(file);
-                                  }}
-                                />
-                                <button
-                                  onClick={() => meetingDocInputRef.current?.click()}
-                                  disabled={isUploadingMeetingDoc}
-                                  className="flex items-center gap-1 rounded-lg border border-recall-border px-2 py-1 text-[11px] text-recall-text hover:bg-white/5 disabled:opacity-50"
-                                >
-                                  <UploadIcon size={11} />
-                                  {isUploadingMeetingDoc ? t.doc_uploading : t.meeting_minutes_upload_doc_btn}
-                                </button>
-                              </>
-                            </div>
-
-                            {documents.length === 0 ? (
-                              <p className="text-recall-textMuted">{t.meeting_minutes_related_docs_empty}</p>
-                            ) : (
-                              <div className="space-y-1.5">
-                                {documents.map((f) => (
-                                  <div
-                                    key={f.id}
-                                    className="flex items-center justify-between gap-2 rounded-lg border border-recall-border/60 bg-white/5 px-2.5 py-1.5"
-                                  >
-                                    <span className="flex min-w-0 items-center gap-1.5 text-recall-text">
-                                      <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
-                                      <span className="truncate">{f.original_filename}</span>
-                                    </span>
-                                    <span className="flex flex-shrink-0 items-center gap-2">
-                                      <button
-                                        onClick={() => setPreviewDoc({ id: f.id, name: f.original_filename })}
-                                        className="text-[11px] text-recall-accent underline hover:opacity-80"
-                                      >
-                                        {t.meeting_minutes_view_doc_btn}
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          if (window.confirm(t.meeting_minutes_delete_doc_confirm)) {
-                                            removeDocument(f.id);
-                                          }
-                                        }}
-                                        title={t.meeting_minutes_delete_doc_btn}
-                                        className="text-recall-textMuted hover:text-recall-danger"
-                                      >
-                                        <TrashIcon size={12} />
-                                      </button>
-                                    </span>
-                                  </div>
+                            <p className="mb-2 font-semibold text-recall-textMuted">
+                              {t.meeting_summary_key_decisions}
+                            </p>
+                            {decisions.length > 0 && (
+                              <ul className="mb-2 space-y-1.5">
+                                {decisions.map((d) => (
+                                  <DecisionItem
+                                    key={d.id}
+                                    decision={d}
+                                    isEditing={isMeetingEditMode}
+                                    onSave={(input) => updateDecision(d.id, input)}
+                                    t={t}
+                                  />
                                 ))}
-                              </div>
+                              </ul>
                             )}
+                            {isMeetingEditMode && <AddDecisionForm onAdd={addDecision} t={t} />}
                           </div>
+
+                          {summary?.next_steps && (
+                            <div className="border-t border-recall-border pt-3">
+                              <p className="mb-1 font-semibold text-recall-textMuted">
+                                {t.meeting_minutes_next_steps_label}
+                              </p>
+                              <p className="whitespace-pre-line text-recall-text leading-relaxed">
+                                {summary.next_steps}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       );
                     })()
@@ -2415,24 +2309,31 @@ export default function MeetingsPanel({
                         .slice()
                         .sort((a, b) => a.segment_index - b.segment_index)
                         .map((s) => (
-                          <SegmentRow
+                          <div
                             key={s.id}
-                            speakerLabel={s.speaker_label}
-                            avatarImageUrl={s.speaker_label ? avatarUrlByName[s.speaker_label] : null}
-                            timeMs={s.start_ms}
-                            content={s.content}
-                            segmentId={s.id}
-                            speakerNameOptions={registeredSpeakerNames}
-                            onAssignSpeaker={assignSegmentSpeaker}
-                            onEditContent={updateSegmentContent}
-                            onSeekAudio={(ms) => audioPlayerRef.current?.seekTo(ms)}
-                            onSplit={(id) => setSplitTargetSegmentId(id)}
-                            bulkEditValue={bulkEditDrafts ? bulkEditDrafts[s.id] ?? s.content : undefined}
-                            onBulkEditChange={(value) =>
-                              setBulkEditDrafts((prev) => (prev ? { ...prev, [s.id]: value } : prev))
-                            }
-                            t={t}
-                          />
+                            id={`segment-${s.id}`}
+                            className={`rounded-lg transition-colors duration-500 ${
+                              highlightSegmentId === s.id ? "bg-recall-accent/15" : ""
+                            }`}
+                          >
+                            <SegmentRow
+                              speakerLabel={s.speaker_label}
+                              avatarImageUrl={s.speaker_label ? avatarUrlByName[s.speaker_label] : null}
+                              timeMs={s.start_ms}
+                              content={s.content}
+                              segmentId={s.id}
+                              speakerNameOptions={registeredSpeakerNames}
+                              onAssignSpeaker={assignSegmentSpeaker}
+                              onEditContent={updateSegmentContent}
+                              onSeekAudio={(ms) => audioPlayerRef.current?.seekTo(ms)}
+                              onSplit={(id) => setSplitTargetSegmentId(id)}
+                              bulkEditValue={bulkEditDrafts ? bulkEditDrafts[s.id] ?? s.content : undefined}
+                              onBulkEditChange={(value) =>
+                                setBulkEditDrafts((prev) => (prev ? { ...prev, [s.id]: value } : prev))
+                              }
+                              t={t}
+                            />
+                          </div>
                         ))}
                     </div>
                   )}
@@ -2706,6 +2607,7 @@ export default function MeetingsPanel({
       {showStartModal && (
         <MeetingStartModal
           workspaceId={workspaceId}
+          currentUserId={currentUserId}
           defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
           onStart={(title, attendeeIds, location, recordingMode) => {
