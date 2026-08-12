@@ -16,6 +16,7 @@ import {
   updateMeetingSegmentApi,
   getMeetingApi,
   getMeetingListApi,
+  getMeetingSegmentsApi,
 } from "../services/meeting";
 
 export type LiveMeetingStatus =
@@ -390,6 +391,17 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       } else if (data.type === "session_end") {
         sessionEndResolverRef.current?.();
         sessionEndResolverRef.current = null;
+        // 회의를 직접 끝낸 사람(host)은 stop()이 이미 isIntentionalCloseRef를 true로 켜놓고
+        // 이 메시지를 기다리는 중이라, 곧 스스로 소켓을 닫으면서 ws.onclose 경로로 "ended"가
+        // 된다. 문제는 그냥 보고만 있던 다른 참가자(뷰어) - 자기가 끝낸 게 아니라서 그 경로를
+        // 안 타고, 서버가 뷰어 쪽 소켓은 계속 열어두면 상태가 "recording"에 멈춘 채 새로고침
+        // 전까진 회의가 끝난 걸 알 방법이 없었다. 서버가 broadcast하는 session_end 자체를
+        // "회의가 끝났다"는 확정 신호로 받아, 뷰어는 여기서 바로 ended로 전환한다.
+        if (!isIntentionalCloseRef.current) {
+          isSendingRef.current = false;
+          cleanupAudio();
+          setStatus("ended");
+        }
       }
     }
 
@@ -548,9 +560,13 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     if (status === "recording" || status === "connecting") return;
     resetSessionState();
 
-    const [meetingRes, joinRes] = await Promise.all([
+    // 이미 진행 중인 회의에 나중에 들어오는 경우, 그 전까지 오간 발화는 앞으로 올 WS
+    // "final" 이벤트에 안 실려서 새로고침 전까진 화면이 비어 보였다 - 참가 시점에
+    // 지금까지의 스크립트를 REST로 한 번 채워두고, 이후는 그대로 WS로 이어붙인다.
+    const [meetingRes, joinRes, segmentsRes] = await Promise.all([
       getMeetingApi(workspaceId, meetingId),
       joinMeetingApi(workspaceId, meetingId),
+      getMeetingSegmentsApi(workspaceId, meetingId),
     ]);
 
     if (meetingRes.status !== "success" || !meetingRes.meeting || joinRes.status !== "success" || !joinRes.wsTicket) {
@@ -564,6 +580,21 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     setIsViewer(viewOnly);
 
     beginSession({ ...meetingRes.meeting, ws_ticket: joinRes.wsTicket });
+
+    if (segmentsRes.status === "success" && segmentsRes.segments.length > 0) {
+      setSegments(
+        [...segmentsRes.segments]
+          .sort((a, b) => a.segment_index - b.segment_index)
+          .map((s) => ({
+            id: s.id,
+            content: s.content,
+            speaker_label: s.speaker_label ?? null,
+            speaker_user_id: s.speaker_user_id ?? null,
+            start_ms: s.start_ms,
+            end_ms: s.end_ms,
+          }))
+      );
+    }
   }
 
   // 예약해둔 회의를 실제 녹음으로 전환한다 - 참석자는 예약 시점에 이미 지정돼 있으므로 다시 넘길 필요 없음
