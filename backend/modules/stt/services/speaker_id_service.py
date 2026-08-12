@@ -78,6 +78,12 @@ class LiveSpeakerIdentifier:
         self._next_speaker_num = 1
 
     @property
+    def enrolled_names(self) -> list[str]:
+        """이번 회의의 비교 대상 이름들. 경고 문구에 실제 이름을 넣어야
+        사용자가 '아 참석자를 잘못 골랐구나'를 바로 안다."""
+        return sorted(self._profiles) if self._closed_set else []
+
+    @property
     def enrolled_count(self) -> int:
         """사전 등록된 화자 수. 닫힌 집합이 아니면 0 — 열린 집합에서는 '미상'이
         정상 동작이라, 호출부가 경고 여부를 가를 때 이 값으로 구분한다."""
