@@ -398,11 +398,29 @@ def judge(
         # 고정 문구로 명확히 표시한다(프론트 변경 없이 안전하게 반영 가능).
         new_reason = "근거가 명확히 확인되지 않음"
 
-    # 팝업은 세션 내 (decision, judgment_case) 단위로 1회만 - 같은 decision이어도
-    # 근거 명확/불명확 여부가 바뀌면 별개 알림으로 취급해 각각 1회씩 뜬다.
-    already_popped = contradiction_crud.already_popped_in_session_for_decision(
-        db, reference_decision_id=decision.id, judgment_case=judgment_case, **session_kwargs
+    # [수정 - 라이브 테스트 발견] 예전엔 팝업 dedup을 (decision, judgment_case) 단위로
+    # 걸어서, 같은 decision이라도 case가 다르면 각각 1회씩 떴다. 근데 실사용에서
+    # STT가 하나의 연속된 발화를 두 세그먼트로 쪼개는 바람에, 앞부분만 보고 "근거
+    # 불명확"(Case 3) 판단했다가 뒷부분까지 합쳐 다시 "근거 명확"(Case 2) 판단하면서
+    # 같은 변경 하나에 모순되는 팝업 두 개가 동시에 뜨는 문제가 확인됨.
+    #
+    # "근거를 알게 됨"(Case 2)은 Case 3이 먼저 떴어도 항상 사용자에게 새로운
+    # 정보지만, 그 반대(Case 2가 먼저 뜬 뒤 Case 3이 뜨는 것)는 이미 아는 것보다
+    # 못한 정보라 보여줄 이유가 없다 - 그래서 dedup을 대칭이 아니라 "한쪽 방향으로만
+    # 업그레이드 허용"으로 바꾼다. 세션 내 이 decision에 대해 Case 2가 이미 떴으면
+    # 그 이후엔 Case 2/3 어느 쪽이 와도 더 보여줄 새 정보가 없으므로 무시하고,
+    # Case 2가 아직 안 떴으면 Case 3은 (처음이든 반복이든) Case 3 자신의 기존
+    # dedup만, Case 2는 항상 새 정보로 취급해 띄운다.
+    already_shown_reasoned = contradiction_crud.already_popped_in_session_for_decision(
+        db, reference_decision_id=decision.id, judgment_case="reasoned_change", **session_kwargs
     )
+    if judgment_case == "unreasoned_change":
+        already_shown_unreasoned = contradiction_crud.already_popped_in_session_for_decision(
+            db, reference_decision_id=decision.id, judgment_case="unreasoned_change", **session_kwargs
+        )
+        already_popped = already_shown_reasoned or already_shown_unreasoned
+    else:
+        already_popped = already_shown_reasoned
 
     # make_deduplication_key의 3번째 인자명이 reference_file_id지만, decision 참조도
     # 같은 함수로 dedup key를 만들 수 있어 재사용 (해시 조합용이라 의미상 문제 없음)
