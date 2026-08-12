@@ -5,10 +5,15 @@
   우리는 CER(전사 정확도)과 화자 정확도를 따로 재왔다. 그런데 회의 전사 분야는
   **둘을 하나로 합친 지표**를 표준으로 쓴다(CHiME-6/7/8 공식 순위 지표).
 
-    cpWER  화자별로 전사를 이어붙인 뒤, 화자 배정 순열 중 최소 WER.
-           전사가 맞아도 화자를 틀리면 벌점이 간다 — "누가 무엇을 말했나"를 한 숫자로 잰다.
-    ORC-WER 참조 발화를 가설 스트림에 최적 배정해서 채점.
-           **세그먼트 경계를 어떻게 나눴든 점수가 안 흔들린다.**
+    cpWER    화자별로 전사를 이어붙인 뒤, 화자 배정 순열 중 최소 WER.
+             전사가 맞아도 화자를 틀리면 벌점이 간다 — "누가 무엇을 말했나"를 한 숫자로 잰다.
+    DI-cpWER 화자 오류를 제외한 순수 전사 품질(diarization-invariant).
+    ORC-WER  참조 발화를 가설 스트림에 최적 배정해서 채점.
+             **세그먼트 경계를 어떻게 나눴든 점수가 안 흔들린다.**
+
+⚠️ ORC/DI-cp는 **greedy 근사**를 쓴다. 정확한 ORC-WER은 화자 수와 발화 수에 따라
+   탐색 공간이 폭발한다 — 실측으로 화자 5명 × 발화 28개에서 메모리를 다 쓰고
+   프로세스가 죽었다(종료코드 137). 근사와 정확값의 차이는 위 실측에서 2%p 안쪽이었다.
 
   우리 자체 지표의 문제는 두 가지였다:
     ① 다른 시스템·논문과 비교가 불가능하다(우리가 만든 기준이라)
@@ -97,39 +102,44 @@ def main():
         row = {"meeting": meeting}
         for char_level, key in ((False, "word"), (True, "char")):
             ref, hyp = build(meeting, script, args.realtime, char_level)
-            cp = meeteval.wer.combine_error_rates(meeteval.wer.cpwer(ref, hyp))
-            orc = meeteval.wer.combine_error_rates(meeteval.wer.orcwer(ref, hyp))
+            combine = meeteval.wer.combine_error_rates
+            cp = combine(meeteval.wer.cpwer(ref, hyp))
+            # 정확한 orcwer는 화자·발화가 늘면 메모리를 다 쓰고 죽는다 → greedy 근사
+            orc = combine(meeteval.wer.greedy_orcwer(ref, hyp))
+            dicp = combine(meeteval.wer.greedy_dicpwer(ref, hyp))
             row[f"cp_{key}"] = cp.error_rate
             row[f"orc_{key}"] = orc.error_rate
+            row[f"dicp_{key}"] = dicp.error_rate
             if key == "char":
-                # 화자를 틀려서 생긴 벌점 = cpWER − ORC-WER.
-                # ORC는 화자 배정을 최적으로 골라주므로, 그 차이가 곧 화자 오류의 대가다.
-                row["speaker_cost"] = cp.error_rate - orc.error_rate
+                # 화자를 틀려서 생긴 벌점 = cpWER − DI-cpWER.
+                # DI-cp는 정의상 화자 오류를 뺀 값이라, 그 차이가 곧 화자 오류의 대가다.
+                row["speaker_cost"] = cp.error_rate - dicp.error_rate
         rows.append(row)
 
     print("=" * 92)
     print(f"대상: {'실시간 결과' if args.realtime else '재분석본'}")
     print("=" * 92)
-    print(f"{'회의':40s}{'cpCER':>9s}{'ORC-CER':>9s}{'화자대가':>9s}{'cpWER':>9s}{'ORC-WER':>9s}")
+    print(f"{'회의':38s}{'cpCER':>9s}{'DI-cpCER':>10s}{'ORC-CER':>9s}{'화자대가':>9s}{'cpWER':>9s}")
     print("-" * 92)
     for r in rows:
-        print(f"{r['meeting'][:40]:40s}{r['cp_char']*100:8.2f}%{r['orc_char']*100:8.2f}%"
-              f"{r['speaker_cost']*100:8.2f}%{r['cp_word']*100:8.2f}%{r['orc_word']*100:8.2f}%")
+        print(f"{r['meeting'][:38]:38s}{r['cp_char']*100:8.2f}%{r['dicp_char']*100:9.2f}%"
+              f"{r['orc_char']*100:8.2f}%{r['speaker_cost']*100:8.2f}%{r['cp_word']*100:8.2f}%")
     if len(rows) > 1:
         print("-" * 92)
         n = len(rows)
-        print(f"{'평균':40s}"
+        print(f"{'평균':38s}"
               f"{sum(r['cp_char'] for r in rows)/n*100:8.2f}%"
+              f"{sum(r['dicp_char'] for r in rows)/n*100:9.2f}%"
               f"{sum(r['orc_char'] for r in rows)/n*100:8.2f}%"
               f"{sum(r['speaker_cost'] for r in rows)/n*100:8.2f}%"
-              f"{sum(r['cp_word'] for r in rows)/n*100:8.2f}%"
-              f"{sum(r['orc_word'] for r in rows)/n*100:8.2f}%")
+              f"{sum(r['cp_word'] for r in rows)/n*100:8.2f}%")
 
     print()
     print("읽는 법")
-    print("  ORC-CER  전사만의 품질. 세그먼트를 어떻게 나눴든 안 흔들린다")
-    print("  cpCER    전사 + 화자 배정을 합친 점수. **제품이 실제로 내놓는 결과의 품질**")
-    print("  화자대가  cpCER − ORC-CER = 화자를 틀려서 잃은 몫")
+    print("  cpCER     전사 + 화자 배정을 합친 점수. **제품이 실제로 내놓는 결과의 품질**")
+    print("  DI-cpCER  화자 오류를 뺀 순수 전사 품질")
+    print("  ORC-CER   세그먼트를 어떻게 나눴든 안 흔들리는 전사 품질")
+    print("  화자대가   cpCER − DI-cpCER = 화자를 틀려서 잃은 몫")
     print("           이 값이 크면 전사는 되는데 누가 말했는지를 못 맞히고 있다는 뜻이다")
     print()
     print("  ⚠️ 표본이 회의 몇 건뿐이면 이 숫자도 흔들린다. 논문 수치와 나란히 놓을 때는")
