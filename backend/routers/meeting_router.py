@@ -106,6 +106,23 @@ def _resolve_related_room(db: Session, workspace_id: uuid.UUID, related_room_id)
         )
     return room
 
+def _resolve_category(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID | None):
+    if category_id is None:
+        category = room_crud.get_default_category(db, workspace_id)
+    else:
+        category = room_crud.get_category(db, category_id)
+        if not category or category.workspace_id != workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="워크스페이스에 속하지 않는 카테고리입니다.",
+            )
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
+    return category
+
 
 # 실시간 녹음 시작
 @router.post("/start", response_model=MeetingStartResponse, status_code=status.HTTP_201_CREATED)
@@ -118,12 +135,7 @@ def start_meeting_api(
     require_workspace_member(db, workspace_id, current_user_id)
     _resolve_related_room(db, workspace_id, request.related_room_id)
 
-    category = room_crud.get_default_category(db, workspace_id)
-    if not category:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
-        )
+    category = _resolve_category(db, workspace_id, request.category_id)
 
     started_at = datetime.now(timezone.utc)
     title = (request.title or "").strip()
@@ -168,6 +180,7 @@ async def upload_meeting_api(
     related_room_id: uuid.UUID | None = Form(None),
     location: str | None = Form(None),
     topic: str | None = Form(None),
+    category_id: uuid.UUID | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -180,12 +193,7 @@ async def upload_meeting_api(
             detail="지원하지 않는 음성 파일 형식입니다.",
         )
 
-    category = room_crud.get_default_category(db, workspace_id)
-    if not category:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
-        )
+    category = _resolve_category(db, workspace_id, category_id)
 
     file_content = await file.read()
     storage_path, stored_filename = _save_audio_to_local_storage(file_content, file.filename)
@@ -229,7 +237,7 @@ async def upload_meeting_api(
     )
 
     meeting_crud.set_attendees(db, meeting.id, [])
-    
+
     background_tasks.add_task(
         process_uploaded_audio_stt,
         meeting.id, workspace_id, category.id, file_content,
@@ -409,12 +417,7 @@ def schedule_meeting_api(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    category = room_crud.get_default_category(db, workspace_id)
-    if not category:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
-        )
+    category = _resolve_category(db, workspace_id, request.category_id)
 
     for user_id in request.attendee_ids:
         if not workspace_crud.get_membership(db, workspace_id, user_id):
