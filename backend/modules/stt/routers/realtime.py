@@ -236,6 +236,16 @@ async def _run_session(
 
     logger.info(f"🔴 실시간 STT 세션 시작: {session_id} (화자식별 모드: {mode}, 회의ID: {recorder.meeting_id})")
 
+    # 접속 시점에 이미 알 수 있는 문제는 청크를 기다리지 않고 바로 알린다
+    # (등록 1명으로 켠 회의가 네 건 망가졌다 — startup_warning 참고).
+    startup = session.startup_warning()
+    if startup is not None:
+        logger.warning(f"⚠️ [{session_id}] {startup['message']}")
+        try:
+            await websocket.send_json(startup)
+        except Exception:
+            pass    # 알림 실패가 회의를 막으면 안 된다
+
     try:
         if voice_slot is not None:
             await websocket.send_json({

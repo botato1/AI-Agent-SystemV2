@@ -622,6 +622,45 @@ class RealtimeSTTSession:
             logger.exception("⚠️ 오디오 품질 판정 실패 — 경고 생략")
             return None
 
+    def startup_warning(self) -> dict | None:
+        """
+        회의를 시작하는 시점에 이미 알 수 있는 문제를 바로 알린다.
+
+        왜 시작 시점인가 (2026-08-12 실측): 등록된 목소리가 **1명뿐**인 채로 회의를
+        켜면 닫힌 집합 매칭이 구조적으로 무의미하다 — 나올 수 있는 답이 "그 사람"
+        아니면 "미상"뿐이라, 나머지 참석자의 발언은 **그 한 사람 이름으로 잘못
+        붙거나** 미상이 된다.
+
+        이 상태로 녹음된 회의가 네 건이다(7b30851f, f10b4ade, 9a9f1768, ba8f38c4).
+        마지막 건은 전사가 7.35%(DI-cpCER)로 정확했는데 화자를 틀려서 최종 품질이
+        75.36%(cpCER)가 됐다 — **손해의 90%가 화자에서 나왔다.**
+
+        기존 pop_unknown_speaker_warning으로는 이걸 못 잡는다. 그쪽은 "이름을 못 붙임"
+        (미상 비율)만 보는데, 등록이 1명이면 상당수가 **그 사람 이름으로 잘못 붙어서**
+        미상 비율이 문턱 아래로 내려간다. 실제로 이번 회의에선 발동하지 않았다.
+        엉뚱한 이름이 붙는 쪽이 미상보다 나쁘다 — 회의록에 남의 발언으로 남는다.
+
+        등록 수는 접속 시점에 이미 알 수 있으므로 청크를 기다릴 이유가 없다.
+        """
+        if self.fixed_speaker is not None or self.speaker_identifier is None:
+            return None
+        known = self.speaker_identifier.enrolled_count
+        # 0명은 자동감지(열린 집합)라 정상 동작이다. 1명일 때만 구조적으로 무의미하다.
+        if known != 1:
+            return None
+        return {
+            "session_id": self.session_id,
+            "type": "audio_quality",
+            "level": "warning",
+            "code": "single_profile",
+            "message": (
+                "등록된 목소리가 1명뿐입니다. 여러 사람이 말하면 발언이 "
+                "그 한 사람 이름으로 잘못 기록되거나 '미상'으로 남습니다. "
+                "참석자 목소리를 모두 등록한 뒤 시작해주세요."
+            ),
+            "enrolled_count": known,
+        }
+
     def pop_unknown_speaker_warning(self) -> dict | None:
         """
         등록된 목소리가 있는데도 화자를 못 찾은 청크가 대부분이면 한 번만 알린다.
