@@ -12,6 +12,8 @@ import {
   getMeetingSegmentsApi,
   getMeetingSummaryApi,
   getMeetingDecisionsApi,
+  createMeetingDecisionApi,
+  updateMeetingDecisionApi,
   getMeetingAttendeesApi,
   getMeetingDocumentsApi,
   deleteMeetingDocumentApi,
@@ -21,6 +23,7 @@ import {
   splitMeetingSegmentApi,
   updateMeetingSummaryApi,
   renameMeetingApi,
+  updateMeetingInfoApi,
 } from "../services/meeting";
 import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
 
@@ -197,13 +200,62 @@ export function useRealMeetings(workspaceId: string) {
     }
   }
 
-  async function approveSuggestedTask(taskId: string) {
+  async function updateShortSummary(shortSummary: string) {
+    if (!selectedMeetingId) return;
+    const res = await updateMeetingSummaryApi(workspaceId, selectedMeetingId, { shortSummary });
+    if (res.status === "success" && res.summary) {
+      setSummary(res.summary);
+    } else {
+      alert(`요약 수정 실패: ${res.message}`);
+    }
+  }
+
+  async function addDecision(input: {
+    title: string;
+    decisionText: string;
+    reason?: string;
+  }): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await createMeetingDecisionApi(workspaceId, selectedMeetingId, {
+      title: input.title,
+      decision_text: input.decisionText,
+      reason: input.reason,
+    });
+    if (res.status === "success" && res.decision) {
+      setDecisions((prev) => [...prev, res.decision as Decision]);
+      return true;
+    }
+    alert(`결정사항 추가 실패: ${res.message}`);
+    return false;
+  }
+
+  async function updateDecision(
+    decisionId: string,
+    input: { title?: string; decisionText?: string; reason?: string | null }
+  ): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await updateMeetingDecisionApi(workspaceId, selectedMeetingId, decisionId, {
+      title: input.title,
+      decision_text: input.decisionText,
+      reason: input.reason,
+    });
+    if (res.status === "success" && res.decision) {
+      const updated = res.decision;
+      setDecisions((prev) => prev.map((d) => (d.id === decisionId ? updated : d)));
+      return true;
+    }
+    alert(`결정사항 수정 실패: ${res.message}`);
+    return false;
+  }
+
+  async function approveSuggestedTask(taskId: string): Promise<boolean> {
     const res = await updateTaskStatusApi(workspaceId, taskId, "open");
     if (res.status === "success") {
       setSuggestedTasks((prev) => prev.filter((t) => t.id !== taskId));
-    } else {
-      alert(`할 일 추가 실패: ${res.message}`);
+      return true;
     }
+    alert(`할 일 추가 실패: ${res.message}`);
+    return false;
   }
 
   async function rejectSuggestedTask(taskId: string) {
@@ -223,6 +275,22 @@ export function useRealMeetings(workspaceId: string) {
     } else {
       alert(`회의 제목 변경 실패: ${res.message}`);
     }
+  }
+
+  async function updateMeetingLocation(location: string): Promise<boolean> {
+    if (!selectedMeetingId || !selectedMeeting) return false;
+    const res = await updateMeetingInfoApi(workspaceId, selectedMeetingId, {
+      title: selectedMeeting.title,
+      topic: selectedMeeting.topic,
+      location,
+    });
+    if (res.status === "success" && res.meeting) {
+      const updated = res.meeting;
+      setMeetings((prev) => prev.map((m) => (m.id === selectedMeetingId ? updated : m)));
+      return true;
+    }
+    alert(`장소 수정 실패: ${res.message}`);
+    return false;
   }
 
   async function removeMeeting(id: string) {
@@ -245,6 +313,8 @@ export function useRealMeetings(workspaceId: string) {
     segments,
     summary,
     decisions,
+    addDecision,
+    updateDecision,
     attendees,
     documents,
     suggestedTasks,
@@ -258,11 +328,13 @@ export function useRealMeetings(workspaceId: string) {
     uploadAudio,
     removeMeeting,
     renameMeeting,
+    updateMeetingLocation,
     mapSpeakerNames,
     assignSegmentSpeaker,
     updateSegmentContent,
     splitSegment,
     updateFullSummary,
+    updateShortSummary,
     reload: loadMeetings,
   };
 }

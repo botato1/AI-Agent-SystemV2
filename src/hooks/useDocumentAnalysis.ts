@@ -1,16 +1,32 @@
 // src/hooks/useDocumentAnalysis.ts
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import {
   DocumentDetail,
   DocumentFigure,
+  DocumentListItem,
   getDocumentListApi,
   uploadDocumentApi,
   getDocumentApi,
   getDocumentFiguresApi,
   deleteDocumentApi,
   retryDocumentApi,
+  getDocumentStreamTicketApi,
 } from "../services/document";
+
+function toAnalyzedDocument(d: DocumentListItem): AnalyzedDocument {
+  return {
+    id: d.document_id,
+    name: d.filename,
+    size: 0,
+    uploadedAt: new Date(d.created_at).getTime(),
+    status: toDocStatus(d.analysis_status),
+    summary: null,
+    keywords: [],
+    fileType: "",
+    fileUrl: "",
+  };
+}
 
 const PENDING_STATUSES = new Set(["pending", "processing"]);
 
@@ -32,19 +48,7 @@ export function useDocumentAnalysis(workspaceId: string) {
     if (!workspaceId) return;
     const res = await getDocumentListApi(workspaceId);
     if (res.status === "success") {
-      setDocuments(
-        res.documents.map((d) => ({
-          id: d.document_id,
-          name: d.filename,
-          size: 0,
-          uploadedAt: new Date(d.created_at).getTime(),
-          status: toDocStatus(d.analysis_status),
-          summary: null,
-          keywords: [],
-          fileType: "",
-          fileUrl: "",
-        }))
-      );
+      setDocuments(res.documents.map(toAnalyzedDocument));
     }
   }
 
@@ -54,13 +58,70 @@ export function useDocumentAnalysis(workspaceId: string) {
     loadDocuments().finally(() => setIsLoading(false));
   }, [workspaceId]);
 
-  // 아직 분석 중인 문서가 있으면 완료될 때까지 목록을 주기적으로 재조회
+  // 아직 분석 중인 문서가 있으면 완료될 때까지 목록을 주기적으로 재조회 -
+  // WS로 못 받는 경우(연결 실패 등)에 대비한 안전망으로 계속 둔다.
   useEffect(() => {
     const hasPending = documents.some((d) => d.status === "analyzing");
     if (!hasPending) return;
     const timer = setInterval(loadDocuments, 5000);
     return () => clearInterval(timer);
   }, [documents, workspaceId]);
+
+  // 워크스페이스 단위 실시간 문서 이벤트 - 다른 사용자의 업로드/삭제/분석완료가
+  // 새로고침 없이 바로 반영되게 한다 (그래프뷰도 documents가 바뀌면 알아서 다시 그려짐).
+  const docSocketRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    async function connect() {
+      const ticketRes = await getDocumentStreamTicketApi(workspaceId);
+      if (cancelled || ticketRes.status !== "success" || !ticketRes.wsTicket) return;
+
+      const API_BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
+      const wsBase = API_BASE_URL.replace(/^http/, "ws");
+      const socket = new WebSocket(
+        `${wsBase}/api/workspaces/${workspaceId}/documents/stream?ticket=${ticketRes.wsTicket}`
+      );
+      docSocketRef.current = socket;
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "document_added" || payload.type === "document_analysis_updated") {
+            const incoming = toAnalyzedDocument(payload.document as DocumentListItem);
+            setDocuments((prev) =>
+              prev.some((d) => d.id === incoming.id)
+                ? prev.map((d) => (d.id === incoming.id ? incoming : d))
+                : [incoming, ...prev]
+            );
+          } else if (payload.type === "document_removed" && payload.document_id) {
+            setDocuments((prev) => prev.filter((d) => d.id !== payload.document_id));
+          }
+        } catch (error) {
+          console.error("document stream message parse error:", error);
+        }
+      };
+
+      socket.onclose = (event) => {
+        if (cancelled) return;
+        if (event.code === 4401 || event.code === 4403) return;
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+    }
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      docSocketRef.current?.close();
+      docSocketRef.current = null;
+    };
+  }, [workspaceId]);
 
   const activeDocStatus = documents.find((d) => d.id === activeDocId)?.status ?? null;
 

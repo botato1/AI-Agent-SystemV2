@@ -63,3 +63,12 @@ build/
 
 # 레거시 중복 frontend 폴더
 frontend/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local dev config
+.claude/

@@ -1,5 +1,5 @@
 // src/components/AiChatView.tsx
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAiChat } from "../hooks/useAiChat";
 import { SendIcon, WarningIcon, DocumentIcon, PlusIcon, TrashIcon, ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import DocumentPreviewModal from "./DocumentPreviewModal";
@@ -19,7 +19,15 @@ function formatSessionDate(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-export default function AiChatView({ workspaceId, t }: { workspaceId: string; t: any }) {
+export default function AiChatView({
+  workspaceId,
+  chat,
+  t,
+}: {
+  workspaceId: string;
+  chat: ReturnType<typeof useAiChat>;
+  t: any;
+}) {
   const {
     sessions,
     activeSessionId,
@@ -32,15 +40,28 @@ export default function AiChatView({ workspaceId, t }: { workspaceId: string; t:
     isSending,
     sendMessage,
     fetchSources,
-  } = useAiChat(workspaceId);
+  } = chat;
   const [input, setInput] = useState("");
   const [openSourcesForId, setOpenSourcesForId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const shouldScrollToBottomRef = useRef(false);
+
+  // 메시지 전송/응답 반영은 서버 응답을 기다린 뒤에야 목록에 나타나므로, 전송 시점엔
+  // 스크롤 예약만 해두고 실제 스크롤은 messages가 갱신된 뒤 useEffect에서 실행한다.
+  useEffect(() => {
+    if (shouldScrollToBottomRef.current) {
+      shouldScrollToBottomRef.current = false;
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
 
   function handleSend(promptText?: string) {
     const query = promptText || input;
     if (!query.trim() || isSending) return;
+    // 위로 스크롤해서 옛날 대화 보다가 새로 채팅 치면, 방금 보낸 질문을 바로 볼 수 있게 맨 아래로 이동
+    shouldScrollToBottomRef.current = true;
     sendMessage(query);
     setInput("");
   }
@@ -161,16 +182,20 @@ export default function AiChatView({ workspaceId, t }: { workspaceId: string; t:
                 key={m.id}
                 className={`flex items-end gap-2 ${m.role === "assistant" ? "" : "flex-row-reverse"}`}
               >
-                <div className={`flex max-w-[80%] flex-col gap-1 ${m.role === "assistant" ? "items-start" : "items-end"}`}>
-                  <div
-                    className={`whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
-                      m.role === "assistant"
-                        ? "rounded-bl-md bg-recall-bgSoft text-recall-text border border-recall-border"
-                        : "rounded-br-md bg-recall-accent text-white"
-                    }`}
-                  >
-                    {m.isPending ? <ThinkingDots /> : m.content}
-                  </div>
+                <div
+                  className={`flex flex-col gap-1 ${
+                    m.role === "assistant" ? "max-w-[85%] items-start" : "max-w-[80%] items-end"
+                  }`}
+                >
+                  {m.role === "assistant" ? (
+                    <div className="whitespace-pre-wrap px-1 py-1 text-sm leading-relaxed text-recall-text">
+                      {m.isPending ? <ThinkingDots /> : m.content}
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap rounded-2xl rounded-br-md bg-recall-accent px-4 py-3 text-sm leading-relaxed text-white shadow-sm">
+                      {m.content}
+                    </div>
+                  )}
 
                   {/* 근거자료 버튼 및 모델명 */}
                   {m.role === "assistant" && !m.isPending && !m.errorText && (
@@ -244,6 +269,7 @@ export default function AiChatView({ workspaceId, t }: { workspaceId: string; t:
               </div>
             ))
           )}
+          <div ref={bottomRef} />
         </div>
 
         {/* 질문 입력창 */}

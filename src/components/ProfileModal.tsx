@@ -21,6 +21,7 @@ interface ProfileModalProps {
   onClose: () => void;
   onChangeAvatarColor: (color: string) => void;
   onChangeAvatarImage: (file: File) => void;
+  onRemoveAvatarImage: () => void;
   onUpdateSuccess: (updatedUser: User) => void;
   t: any;
 }
@@ -56,6 +57,7 @@ export default function ProfileModal({
   onClose,
   onChangeAvatarColor,
   onChangeAvatarImage,
+  onRemoveAvatarImage,
   onUpdateSuccess,
   t,
 }: ProfileModalProps) {
@@ -247,6 +249,17 @@ export default function ProfileModal({
                 >
                   {t.profile_upload_photo}
                 </button>
+                {user.avatarImageUrl && (
+                  <button
+                    onClick={() => {
+                      onRemoveAvatarImage();
+                      setShowAvatarMenu(false);
+                    }}
+                    className="mb-2 w-full rounded-lg border border-recall-border py-1.5 text-sm text-recall-danger hover:bg-white/5"
+                  >
+                    {t.profile_remove_photo}
+                  </button>
+                )}
                 <p className="mb-1.5 text-xs text-recall-textMuted">{t.profile_or_color}</p>
                 <div className="flex flex-wrap gap-1.5">
                   {AVATAR_COLORS.map((color) => (
