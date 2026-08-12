@@ -97,7 +97,10 @@ export default function MeetingAttendeesModal({
         ) : (
           (() => {
             const allMembers = members ?? [];
-            const initialMembers = allMembers.filter((m) => originalIds.has(m.user_id));
+            // "시작 시 참석자"는 원래 있던 사람 중 지금도 체크돼있는 사람만 - 체크 해제한 사람을
+            // 계속 여기 남겨두면(체크박스는 항상 true로 그려서) 체크를 풀어도 안 빠진 것처럼
+            // 보이고, 동시에 selectedIds 기준인 "추가 가능" 목록에도 중복으로 나타났었다.
+            const initialMembers = allMembers.filter((m) => originalIds.has(m.user_id) && selectedIds.has(m.user_id));
             const addedMembers = allMembers.filter((m) => selectedIds.has(m.user_id) && !originalIds.has(m.user_id));
             const pickableMembers = allMembers.filter((m) => !selectedIds.has(m.user_id));
 
