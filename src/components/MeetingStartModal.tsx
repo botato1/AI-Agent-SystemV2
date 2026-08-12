@@ -6,6 +6,7 @@ import { CloseIcon, ChevronDownIcon, CheckIcon, MicIcon } from "./icons";
 
 interface MeetingStartModalProps {
   workspaceId: string;
+  currentUserId: string;
   defaultTitle: string;
   onClose: () => void;
   onStart: (title: string, attendeeIds: string[], location?: string, recordingMode?: RecordingMode) => void;
@@ -28,6 +29,7 @@ function generatePrettyDefaultTitle(t: any): string {
 
 export default function MeetingStartModal({
   workspaceId,
+  currentUserId,
   defaultTitle,
   onClose,
   onStart,
@@ -50,13 +52,18 @@ export default function MeetingStartModal({
       const res = await getWorkspaceMembersApi(workspaceId);
       if (!cancelled && res.status === "success") {
         setMembers(res.members);
+        // 회의를 시작하는 사람 본인은 참석자로 기본 선택해둔다 - 매번 스스로를 직접
+        // 체크해줘야 하는 게 불편했던 부분.
+        if (res.members.some((m) => m.user_id === currentUserId)) {
+          setSelectedIds((prev) => new Set(prev).add(currentUserId));
+        }
       }
     }
     load();
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, currentUserId]);
 
   // 목소리 등록된 사람 표시용 - STT 서버에 등록된 화자 이름 전체 목록을 받아서,
   // 워크스페이스 멤버 이름과 매칭되는 사람 옆에 마이크 아이콘을 붙여준다.
