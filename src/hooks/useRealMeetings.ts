@@ -50,7 +50,13 @@ export function useRealMeetings(workspaceId: string) {
     const res = await getMeetingListApi(workspaceId);
     if (res.status === "success") {
       setMeetings(res.meetings);
+      return;
     }
+    // 조용히 실패하고 끝나면(네트워크 순단 등) 목록이 그대로 멈춰버리니 한 번은 재시도한다.
+    setTimeout(async () => {
+      const retryRes = await getMeetingListApi(workspaceId);
+      if (retryRes.status === "success") setMeetings(retryRes.meetings);
+    }, 2000);
   }
 
   useEffect(() => {
@@ -293,6 +299,16 @@ export function useRealMeetings(workspaceId: string) {
     return false;
   }
 
+  // 회의 종료 직후 서버 목록을 다시 받아오기 전에도 "분석 중" 상태를 바로 보여주기 위한
+  // 낙관적 갱신 - reload()가 지연되거나 조용히 실패해도 화면이 빈 상태로 안 보이게 한다.
+  function upsertMeeting(meeting: Meeting) {
+    setMeetings((prev) =>
+      prev.some((m) => m.id === meeting.id)
+        ? prev.map((m) => (m.id === meeting.id ? { ...m, ...meeting } : m))
+        : [meeting, ...prev]
+    );
+  }
+
   async function removeMeeting(id: string) {
     const res = await deleteMeetingApi(workspaceId, id);
 
@@ -327,6 +343,7 @@ export function useRealMeetings(workspaceId: string) {
     isUploading,
     uploadAudio,
     removeMeeting,
+    upsertMeeting,
     renameMeeting,
     updateMeetingLocation,
     mapSpeakerNames,
