@@ -158,7 +158,6 @@ def start_meeting_api(
         status="recording",
         started_at=started_at,
     )
-    meeting_crud.set_attendees(db, meeting.id, [])
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
     reminder_result = agenda_reminder.check_on_session_start(db, category.id)
@@ -235,8 +234,6 @@ async def upload_meeting_api(
         source_file_id=workspace_file.id,
         status="created",
     )
-
-    meeting_crud.set_attendees(db, meeting.id, [])
 
     background_tasks.add_task(
         process_uploaded_audio_stt,
