@@ -876,6 +876,12 @@ export default function MainArea({
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
 
+  // 채널을 바꿔도 이전 채널에서 보고 있던 탭(예: 문서보관함)이 그대로 남아있던 버그 -
+  // 채널이 바뀌면 항상 기본 탭(대화)으로 되돌린다.
+  useEffect(() => {
+    setActiveTab("message");
+  }, [channel.id]);
+
   const { chatMessages, sendChatMessage, deleteMessage, decisionReminders, dismissDecisionReminder } =
     useChannelRuntime(workspaceId, channel.id, currentUser, memberNameById);
 
