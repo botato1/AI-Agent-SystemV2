@@ -264,6 +264,7 @@ class MeetingStartRequest(BaseModel):
     location: Optional[str] = Field(default=None, max_length=200)
     topic: Optional[str] = Field(default=None, max_length=200)
     recording_mode: Literal["single_device", "individual"] = "single_device"
+    category_id: Optional[UUID] = None   # ← 추가
 
 
 class MeetingResponse(TimestampSchema):
@@ -458,6 +459,7 @@ class MeetingScheduleRequest(BaseModel):
     location: Optional[str] = Field(default=None, max_length=200)
     scheduled_at: datetime
     attendee_ids: list[UUID] = Field(default_factory=list)
+    category_id: Optional[UUID] = None   # ← 추가
 
 
 class UpcomingMeetingItem(BaseModel):
