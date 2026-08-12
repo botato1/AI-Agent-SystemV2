@@ -20,6 +20,9 @@ interface DashboardViewProps {
   // 바로 펼쳐 보여주기 위한 값 - 소비하고 나면 상위(App)에서 null로 리셋해줘야 한다.
   initialDecisionId?: string | null;
   onInitialDecisionIdConsumed?: () => void;
+  // 결정사항 카드에서 "관련 회의록 보기"를 눌렀을 때 App 레벨의 결정 미리보기 모달을 연다
+  // (모순 카드의 "결정 참조"와 동일한 모달을 재사용 - 사유 + 원본 회의로 이동 버튼 포함).
+  onOpenDecision: (decisionId: string) => void;
   t: any;
 }
 
@@ -37,7 +40,17 @@ function isWithinLastWeek(iso: string): boolean {
 
 // 결정사항 하나 - 접었을 땐 현재 값만, 누르면 이 주제가 어떻게 바뀌어왔는지(history) 펼쳐서 보여준다.
 // autoExpand는 모순 카드의 "결정 참조" 배지를 눌러서 들어왔을 때만 true - 펼친 채로 스크롤해서 보여준다.
-function DecisionCard({ d, t, autoExpand }: { d: WorkspaceDecision; t: any; autoExpand?: boolean }) {
+function DecisionCard({
+  d,
+  t,
+  autoExpand,
+  onOpenDecision,
+}: {
+  d: WorkspaceDecision;
+  t: any;
+  autoExpand?: boolean;
+  onOpenDecision: (decisionId: string) => void;
+}) {
   const [isExpanded, setIsExpanded] = useState(!!autoExpand);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -56,36 +69,55 @@ function DecisionCard({ d, t, autoExpand }: { d: WorkspaceDecision; t: any; auto
         onClick={() => setIsExpanded((v) => !v)}
         className="flex w-full items-start justify-between gap-3 text-left"
       >
-        <div className="min-w-0">
-          <p className="font-medium text-recall-text">{d.title}</p>
-          <p className="mt-1 text-sm text-recall-textMuted">{d.decision_text}</p>
-        </div>
+        {/* 결정 내용(decision_text)은 시간이 지나면서 바뀐 문구라 여기 그대로 반복해서
+            보여주면 제목이랑 겹쳐 보인다 - 기본 화면엔 제목만 남기고, 실제 문구는 펼쳤을 때
+            나오는 변경 이력(history) 목록에서 각 시점별로 보여준다. */}
+        <p className="min-w-0 truncate font-medium text-recall-text">{d.title}</p>
         <span className="flex flex-shrink-0 items-center gap-1 text-sm text-recall-textMuted">
           {formatShortDate(d.decided_at)}
           <ChevronDownIcon size={13} className={`transition-transform ${isExpanded ? "rotate-180" : ""}`} />
         </span>
       </button>
 
+      {/* 사유는 기본 화면엔 안 보이고, 펼친 이력 목록의 각 항목 안에서만 보여준다
+          (카드에도 있고 팝업에도 있어서 같은 걸 두 번 보여주던 문제 정리). */}
       {isExpanded && d.history.length > 0 && (
-        <div className="mt-4 space-y-2.5 border-t border-recall-border pt-4">
+        <div className="mt-4 space-y-1 border-t border-recall-border pt-4">
           {d.history
             .slice()
             .reverse()
             .map((h, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm">
-                <span
-                  className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
-                    h.status === "active" ? "bg-emerald-400" : "bg-recall-textMuted/40"
-                  }`}
-                />
-                <span className="flex-shrink-0 text-recall-textMuted">{formatShortDate(h.decided_at)}</span>
-                <span className="min-w-0 flex-1 truncate text-recall-text">{h.value}</span>
-                {h.status === "active" && (
-                  <span className="flex-shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-xs text-emerald-400">
-                    {t.decisions_current_badge}
-                  </span>
+              <button
+                key={i}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenDecision(d.id);
+                }}
+                className="group block w-full rounded-lg px-1.5 py-1 text-left hover:bg-white/5"
+              >
+                <div className="flex items-center gap-2 text-sm">
+                  <span
+                    className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                      h.status === "active" ? "bg-emerald-400" : "bg-recall-textMuted/40"
+                    }`}
+                  />
+                  <span className="flex-shrink-0 text-recall-textMuted">{formatShortDate(h.decided_at)}</span>
+                  <span className="min-w-0 flex-1 truncate text-recall-text">{h.value}</span>
+                  {h.status === "active" && (
+                    <span className="flex-shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-xs text-emerald-400">
+                      {t.decisions_current_badge}
+                    </span>
+                  )}
+                </div>
+                {/* 클릭하면 근거 팝업이 뜬다는 게 한눈에 안 보인다는 피드백 - 사유 부분만
+                    호버 시 강조색으로 바뀌게 해서 "여기 누르면 뭔가 있다"는 걸 드러낸다. */}
+                {h.reason && (
+                  <p className="mt-0.5 truncate pl-3.5 text-xs text-recall-textMuted/60 group-hover:text-recall-accent group-hover:underline">
+                    {t.decision_reason_label} {h.reason}
+                  </p>
                 )}
-              </div>
+              </button>
             ))}
         </div>
       )}
@@ -98,11 +130,13 @@ function DecisionsTab({
   tasks,
   t,
   focusDecisionId,
+  onOpenDecision,
 }: {
   workspaceId: string;
   tasks: Task[];
   t: any;
   focusDecisionId?: string | null;
+  onOpenDecision: (decisionId: string) => void;
 }) {
   const { decisions, isLoading } = useWorkspaceDecisions(workspaceId);
 
@@ -144,7 +178,13 @@ function DecisionsTab({
         ) : (
           <div className="space-y-3">
             {decisions.map((d) => (
-              <DecisionCard key={d.id} d={d} t={t} autoExpand={d.id === focusDecisionId} />
+              <DecisionCard
+                key={d.id}
+                d={d}
+                t={t}
+                autoExpand={d.id === focusDecisionId}
+                onOpenDecision={onOpenDecision}
+              />
             ))}
           </div>
         )}
@@ -164,6 +204,7 @@ export default function DashboardView({
   onDeleteTask,
   initialDecisionId,
   onInitialDecisionIdConsumed,
+  onOpenDecision,
   t,
 }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("decisions");
@@ -213,7 +254,13 @@ export default function DashboardView({
             t={t}
           />
         ) : (
-          <DecisionsTab workspaceId={workspaceId} tasks={tasks} t={t} focusDecisionId={focusDecisionId} />
+          <DecisionsTab
+            workspaceId={workspaceId}
+            tasks={tasks}
+            t={t}
+            focusDecisionId={focusDecisionId}
+            onOpenDecision={onOpenDecision}
+          />
         )}
       </div>
 

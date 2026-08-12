@@ -106,6 +106,9 @@ export default function App() {
   });
   // 홈 화면 "최근 회의록"에서 클릭한 회의를 음성 회의 화면에서 바로 선택된 상태로 열기 위한 값
   const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
+  // 결정 근거 팝업에서 "그 발언이 나온 지점"으로 바로 가고 싶을 때 - 회의만 선택하는 게 아니라
+  // 스크립트 탭에서 그 세그먼트까지 스크롤/하이라이트하는 데 쓴다.
+  const [pendingSegmentId, setPendingSegmentId] = useState<string | null>(null);
   // 모순/회의 도움 카드의 "결정 참조"(근거 보기)를 눌렀을 때 여는 결정 미리보기 모달 -
   // 예전엔 대시보드 화면으로 통째로 이동시켰는데, 문서 참조(미리보기 모달)랑 경험이 안 맞고
   // 보던 화면(회의/채팅) 맥락이 날아가는 문제가 있어서 모달로 통일했다.
@@ -115,8 +118,9 @@ export default function App() {
     setPreviewDecisionId(decisionId);
   }
 
-  function openMeeting(meetingId: string) {
+  function openMeeting(meetingId: string, segmentId?: string) {
     setPendingMeetingId(meetingId);
+    setPendingSegmentId(segmentId ?? null);
     setSelection({ type: "placeholder", key: "voiceMeeting" });
   }
 
@@ -607,6 +611,7 @@ export default function App() {
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView
           workspaceId={currentWorkspaceId}
+          currentUserId={currentUser.id}
           avatarUrlByName={avatarUrlByName}
           status={liveMeeting.status}
           meeting={liveMeeting.meeting}
@@ -633,6 +638,8 @@ export default function App() {
           onRenameLive={liveMeeting.renameMeeting}
           initialMeetingId={pendingMeetingId}
           onInitialMeetingIdConsumed={() => setPendingMeetingId(null)}
+          initialSegmentId={pendingSegmentId}
+          onInitialSegmentIdConsumed={() => setPendingSegmentId(null)}
           onOpenDecision={openDecision}
           onTaskApproved={realTasks.refetchTasks}
           t={t}
@@ -647,6 +654,7 @@ export default function App() {
           onStatusChange={realTasks.changeStatus}
           onPriorityChange={realTasks.changePriority}
           onDeleteTask={realTasks.removeTask}
+          onOpenDecision={openDecision}
           t={t}
         />
       ) : selection.key === "docAnalysis" ? (
@@ -670,9 +678,9 @@ export default function App() {
           workspaceId={currentWorkspaceId}
           decisionId={previewDecisionId}
           onClose={() => setPreviewDecisionId(null)}
-          onOpenMeeting={(meetingId) => {
+          onOpenMeeting={(meetingId, segmentId) => {
             setPreviewDecisionId(null);
-            openMeeting(meetingId);
+            openMeeting(meetingId, segmentId);
           }}
           t={t}
         />

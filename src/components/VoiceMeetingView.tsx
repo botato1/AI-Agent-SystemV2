@@ -4,6 +4,7 @@ import MeetingsPanel from "./MeetingsPanel";
 
 interface VoiceMeetingViewProps {
   workspaceId: string;
+  currentUserId: string;
   avatarUrlByName: Record<string, string | null>;
   status: LiveMeetingStatus;
   meeting: Meeting | null;
@@ -36,6 +37,8 @@ interface VoiceMeetingViewProps {
   onRenameLive: (title: string) => void;
   initialMeetingId?: string | null;
   onInitialMeetingIdConsumed?: () => void;
+  initialSegmentId?: string | null;
+  onInitialSegmentIdConsumed?: () => void;
   onOpenDecision: (decisionId: string) => void;
   onTaskApproved: () => void;
   t: any;
@@ -43,6 +46,7 @@ interface VoiceMeetingViewProps {
 
 export default function VoiceMeetingView({
   workspaceId,
+  currentUserId,
   avatarUrlByName,
   status,
   meeting,
@@ -69,6 +73,8 @@ export default function VoiceMeetingView({
   onRenameLive,
   initialMeetingId,
   onInitialMeetingIdConsumed,
+  initialSegmentId,
+  onInitialSegmentIdConsumed,
   onOpenDecision,
   onTaskApproved,
   t,
@@ -81,6 +87,7 @@ export default function VoiceMeetingView({
 
       <MeetingsPanel
         workspaceId={workspaceId}
+        currentUserId={currentUserId}
         avatarUrlByName={avatarUrlByName}
         liveStatus={status}
         liveMeeting={meeting}
@@ -107,6 +114,8 @@ export default function VoiceMeetingView({
         onRenameLive={onRenameLive}
         initialMeetingId={initialMeetingId}
         onInitialMeetingIdConsumed={onInitialMeetingIdConsumed}
+        initialSegmentId={initialSegmentId}
+        onInitialSegmentIdConsumed={onInitialSegmentIdConsumed}
         onOpenDecision={onOpenDecision}
         onTaskApproved={onTaskApproved}
         t={t}

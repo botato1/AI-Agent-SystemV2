@@ -231,7 +231,7 @@ export function useRealMeetings(workspaceId: string) {
 
   async function updateDecision(
     decisionId: string,
-    input: { title?: string; decisionText?: string; reason?: string }
+    input: { title?: string; decisionText?: string; reason?: string | null }
   ): Promise<boolean> {
     if (!selectedMeetingId) return false;
     const res = await updateMeetingDecisionApi(workspaceId, selectedMeetingId, decisionId, {
