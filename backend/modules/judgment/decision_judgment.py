@@ -164,14 +164,22 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
     prompt = f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}"
     # temperature=0 명시 이유는 _ask_judgment_step() 주석 참조 - 같은 입력에는
     # 항상 같은 판단이 나와야 dedup이 제대로 동작한다.
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
+    #
+    # [수정 - 리뷰 반영] _call_ollama() 호출이 try 밖에 있어서 네트워크/타임아웃 등
+    # httpx 예외가 그대로 던져지던 버그. _extract_change_reason()이 겪었던 것과 동일한
+    # 패턴 - decision_transition.py가 이 함수를 topic 1개당 최대 5회까지 호출하게
+    # 되면서 (해당 파일의 process_topics() 루프엔 try/except가 없음) 예외가
+    # meeting_postprocess_node의 최상위 except까지 전파되어 회의 후처리 전체(요약·
+    # 모든 결정사항·모든 할 일)가 실패 처리되는 문제로 이어질 수 있어 수정.
     try:
+        raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             return False
         parsed = json.loads(raw[start : end + 1])
         return bool(parsed.get("same_topic", False))
-    except (json.JSONDecodeError, ValueError):
+    except Exception as e:
+        print(f"[decision_judgment] topic_match 실패, 매칭 안 된 것으로 보수적 처리: {repr(e)}")
         return False
 
 
