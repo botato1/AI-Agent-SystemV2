@@ -33,6 +33,8 @@ margin이 하는 일:
 주의: 음량 정규화는 효과가 없다(실측에서 소수점 셋째 자리까지 동일). 임베딩 모델이
 내부에서 이득을 정규화하므로 녹음이 작게 됐다는 사실 자체는 판정에 영향을 주지 않는다.
 """
+import os
+
 import numpy as np
 from faster_whisper.vad import VadOptions, get_speech_timestamps
 
@@ -176,7 +178,18 @@ def build_speaker_timeline(
 
 # 턴을 쪼갤 때, 이보다 짧게 말한 사람은 경계로 치지 않는다.
 # 짧은 맞장구까지 경계로 삼으면 회의록이 조각으로 부서지고 전사 호출만 늘어난다.
-_MIN_SUBTURN_SEC = 1.0
+#
+# ⚠️ 이 값은 "맞장구가 긴 발언을 쪼개는 걸 막자"는 목적으로 정해졌다. 그런데 제품이
+# 모순 감지라면 우선순위가 정반대다 — "네 그렇게 하죠"와 "아니요 그건 아닌데요"가
+# 둘 다 1~2초짜리이고, 의사결정이 일어나는 자리가 바로 거기다. 실측(2026-08-13,
+# 회의 ba8f38c4)에서 짧은 발언 7건이 자기 세그먼트를 잃고 옆 사람 발언에 흡수돼
+# **다른 사람 이름으로 기록**됐다. 사라지는 것보다 나쁘다 — 같은 사람이 자기 말을
+# 뒤집은 것처럼 보인다.
+#
+# 값을 바꿔가며 재보려고 환경변수로 뺐다(기본값은 종전과 동일).
+# 함께 볼 것: SPEAKER_WINDOW_SEC(1.5), SPEAKER_SMOOTH_WIDTH(3) —
+# 3창 다수결은 약 2.5초보다 짧은 발언을 지운다.
+_MIN_SUBTURN_SEC = float(os.getenv("SPEAKER_MIN_SUBTURN_SEC", "1.0"))
 
 
 def split_turns_by_timeline(
