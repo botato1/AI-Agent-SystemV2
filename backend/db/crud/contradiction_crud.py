@@ -36,13 +36,16 @@ def already_popped_in_session_for_decision(
     judgment_case: Optional[str] = None,
 ) -> bool:
     """
-    1-1 Case 2/3: 세션 내 같은 (decision, judgment_case) 조합에 대해서는 발화가
-    여러 개(다른 화자, 다른 값)여도 팝업은 최대 1회만 뜬다. judgment_case를 주지
-    않으면 case 구분 없이 decision 단위로만 체크한다.
+    1-1 Case 2/3: 세션 내 같은 (decision, judgment_case) 조합이 이미 있었는지 체크하는
+    저수준 함수. judgment_case를 주지 않으면 case 구분 없이 decision 단위로만 체크한다.
 
-    [수정] dedup을 decision 단위가 아니라 (decision, case) 단위로 거는 이유: 근거
-    명확(reasoned_change)/불명확(unreasoned_change) 여부는 발화마다 바뀔 수 있는
-    별개의 알림이라, 한쪽이 이미 떴다고 다른 쪽까지 막으면 안 된다.
+    [수정 - 라이브 테스트 발견] 이 함수 자체는 항상 정확히 지정된 (decision, case)
+    조합만 체크하지만, 실제 팝업 노출 정책(호출부인 decision_judgment.py)은 더 이상
+    "case가 다르면 무조건 각각 1회씩" 대칭 dedup이 아니다 - Case 2(근거 명확)가 세션 내
+    한 번이라도 떴으면 그 이후 Case 3(근거 불명확)은 정보 퇴보라 무시하고, 반대로
+    Case 3이 먼저 떴어도 Case 2는 새 정보라 띄우는 비대칭 규칙으로 바뀌었다 (같은 발화가
+    STT 분절로 쪼개져 "근거 없이 바뀜"→"근거 대며 바뀜"이 모순되게 동시에 뜨던 버그 수정).
+    자세한 정책은 decision_judgment.py의 호출부 주석 참조.
 
     이 함수는 팝업 노출 여부만 결정하고, contradictions row 자체는 dedup 여부와
     무관하게 항상 생성된다 (감사기록 + post-meeting이 세션 내 최신 행을 그대로

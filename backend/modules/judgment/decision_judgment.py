@@ -164,14 +164,22 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
     prompt = f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}"
     # temperature=0 명시 이유는 _ask_judgment_step() 주석 참조 - 같은 입력에는
     # 항상 같은 판단이 나와야 dedup이 제대로 동작한다.
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
+    #
+    # [수정 - 리뷰 반영] _call_ollama() 호출이 try 밖에 있어서 네트워크/타임아웃 등
+    # httpx 예외가 그대로 던져지던 버그. _extract_change_reason()이 겪었던 것과 동일한
+    # 패턴 - decision_transition.py가 이 함수를 topic 1개당 최대 5회까지 호출하게
+    # 되면서 (해당 파일의 process_topics() 루프엔 try/except가 없음) 예외가
+    # meeting_postprocess_node의 최상위 except까지 전파되어 회의 후처리 전체(요약·
+    # 모든 결정사항·모든 할 일)가 실패 처리되는 문제로 이어질 수 있어 수정.
     try:
+        raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             return False
         parsed = json.loads(raw[start : end + 1])
         return bool(parsed.get("same_topic", False))
-    except (json.JSONDecodeError, ValueError):
+    except Exception as e:
+        print(f"[decision_judgment] topic_match 실패, 매칭 안 된 것으로 보수적 처리: {repr(e)}")
         return False
 
 
@@ -398,11 +406,29 @@ def judge(
         # 고정 문구로 명확히 표시한다(프론트 변경 없이 안전하게 반영 가능).
         new_reason = "근거가 명확히 확인되지 않음"
 
-    # 팝업은 세션 내 (decision, judgment_case) 단위로 1회만 - 같은 decision이어도
-    # 근거 명확/불명확 여부가 바뀌면 별개 알림으로 취급해 각각 1회씩 뜬다.
-    already_popped = contradiction_crud.already_popped_in_session_for_decision(
-        db, reference_decision_id=decision.id, judgment_case=judgment_case, **session_kwargs
+    # [수정 - 라이브 테스트 발견] 예전엔 팝업 dedup을 (decision, judgment_case) 단위로
+    # 걸어서, 같은 decision이라도 case가 다르면 각각 1회씩 떴다. 근데 실사용에서
+    # STT가 하나의 연속된 발화를 두 세그먼트로 쪼개는 바람에, 앞부분만 보고 "근거
+    # 불명확"(Case 3) 판단했다가 뒷부분까지 합쳐 다시 "근거 명확"(Case 2) 판단하면서
+    # 같은 변경 하나에 모순되는 팝업 두 개가 동시에 뜨는 문제가 확인됨.
+    #
+    # "근거를 알게 됨"(Case 2)은 Case 3이 먼저 떴어도 항상 사용자에게 새로운
+    # 정보지만, 그 반대(Case 2가 먼저 뜬 뒤 Case 3이 뜨는 것)는 이미 아는 것보다
+    # 못한 정보라 보여줄 이유가 없다 - 그래서 dedup을 대칭이 아니라 "한쪽 방향으로만
+    # 업그레이드 허용"으로 바꾼다. 세션 내 이 decision에 대해 Case 2가 이미 떴으면
+    # 그 이후엔 Case 2/3 어느 쪽이 와도 더 보여줄 새 정보가 없으므로 무시하고,
+    # Case 2가 아직 안 떴으면 Case 3은 (처음이든 반복이든) Case 3 자신의 기존
+    # dedup만, Case 2는 항상 새 정보로 취급해 띄운다.
+    already_shown_reasoned = contradiction_crud.already_popped_in_session_for_decision(
+        db, reference_decision_id=decision.id, judgment_case="reasoned_change", **session_kwargs
     )
+    if judgment_case == "unreasoned_change":
+        already_shown_unreasoned = contradiction_crud.already_popped_in_session_for_decision(
+            db, reference_decision_id=decision.id, judgment_case="unreasoned_change", **session_kwargs
+        )
+        already_popped = already_shown_reasoned or already_shown_unreasoned
+    else:
+        already_popped = already_shown_reasoned
 
     # make_deduplication_key의 3번째 인자명이 reference_file_id지만, decision 참조도
     # 같은 함수로 dedup key를 만들 수 있어 재사용 (해시 조합용이라 의미상 문제 없음)

@@ -16,7 +16,6 @@ Case B: 재논의했지만 결론 없음    → 관련 기존 decision(active/pe
 그 외(완전히 새로운 decision, 기존 decision과의 재확인/변경)는 아래 process_topics() 참조.
 """
 
-import os
 import uuid
 from datetime import datetime, timezone
 
@@ -24,9 +23,8 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import history_crud
 from backend.db.modules import Decision
+from backend.modules.judgment import decision_judgment
 from backend.modules.rag import chroma_client
-
-DECISION_MATCH_THRESHOLD = float(os.getenv("DECISION_MATCH_THRESHOLD", "0.75"))  # TBD - 실험 후 조정 (설계 문서 5장 열린 질문과 동일 축)
 
 # LLM이 topic.status를 스펙대로 못 채우는 경우(누락/오타/대소문자 다름 등) 방어용
 # 화이트리스트. 여기 없는 값이면 이 topic 전체를 보수적으로 건너뛴다 - 안 그러면
@@ -35,28 +33,52 @@ _VALID_TOPIC_STATUSES = {"confirmed", "reopened_no_conclusion", "reconfirmed"}
 
 
 def _find_existing_decision(
-    db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, topic_text: str
+    db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, topic_title: str, topic_text: str
 ) -> Decision | None:
-    """DECISION_COLLECTION에서 이 주제와 유사한 기존 decision을 찾는다.
+    """DECISION_COLLECTION에서 이 주제와 같은 기존 decision을 찾는다.
     active/pending 둘 다 대상 - pending 상태에 대해서도 찾아야 같은 미해결 안건이
-    회의마다 중복 생성되는 걸 막을 수 있다."""
+    회의마다 중복 생성되는 걸 막을 수 있다.
+
+    [수정 - 리뷰 반영] 예전엔 벡터 유사도(임계값 0.75) 하나로만 판단했는데,
+    pending 안건의 decision_text가 "재논의 중"처럼 뭉뚱그린 문구일 때(핵심
+    키워드가 title에만 있고 decision_text엔 없음) 벡터 매칭이 실패해서 같은
+    주제인데 별개 decision으로 중복 생성되는 문제가 실사용 테스트에서 확인됨
+    (예: "검색 결과 리랭킹 도입 여부"(pending) vs "리랭킹 도입 실행"(새 발화)가
+    벡터로는 안 엮이고 둘 다 남음).
+
+    실시간 판단 파이프라인(decision_judgment.py)이 이미 "벡터로 후보 좁히기(느슨한
+    임계값) + LLM topic_match로 최종 검증" 2단계 구조로 이 문제를 해결해뒀으므로,
+    같은 함수(_ask_topic_match)를 재사용해 여기도 검증 단계를 추가한다. post-meeting은
+    비동기 처리라 후보당 LLM 호출이 늘어도 레이턴시 부담이 없다.
+    """
+    statement = f"{topic_title}: {topic_text}" if topic_title else topic_text
+
     results = chroma_client.search_hybrid(
-        query_text=topic_text,
+        query_text=statement,
         workspace_id=str(workspace_id),
         category_id=str(category_id),
-        top_k=1,
+        top_k=decision_judgment.DECISION_CANDIDATE_TOP_K,
         collection_name=chroma_client.DECISION_COLLECTION,
     )
-    if not results or results[0]["score"] < DECISION_MATCH_THRESHOLD:
+    candidate_ids = [
+        r["document_id"] for r in results
+        if r.get("document_id") and r["score"] >= decision_judgment.DECISION_CANDIDATE_THRESHOLD
+    ]
+    if not candidate_ids:
         return None
 
-    decision_id = results[0].get("document_id")
-    if not decision_id:
-        return None
+    for candidate_id in candidate_ids[:decision_judgment.TOPIC_MATCH_MAX_ATTEMPTS]:
+        try:
+            candidate = db.get(Decision, uuid.UUID(candidate_id))
+        except (TypeError, ValueError):
+            continue
+        if not candidate or candidate.deleted_at is not None or candidate.status not in ("active", "pending"):
+            continue
+        if decision_judgment._ask_topic_match(
+            candidate.decision_text, candidate.reason or "명시되지 않음", statement
+        ):
+            return candidate
 
-    decision = db.get(Decision, uuid.UUID(decision_id))
-    if decision and decision.status in ("active", "pending"):
-        return decision
     return None
 
 
@@ -99,7 +121,7 @@ def process_topics(
             print(f"[decision_transition] 알 수 없는 topic status, 보수적으로 스킵: {status!r} (topic={topic_text!r})")
             continue
 
-        existing = _find_existing_decision(db, workspace_id, category_id, topic_text)
+        existing = _find_existing_decision(db, workspace_id, category_id, topic.get("title", ""), topic_text)
 
         if status == "reopened_no_conclusion":
             if existing:
