@@ -233,7 +233,11 @@ export async function resolveContradictionApi(
   workspaceId: string,
   contradictionId: string,
   resolutionType: ContradictionResolutionType,
-  note?: string
+  note?: string,
+  // 결정 변경(reference_type === "decision") 반영 시 감지된 내용이 틀렸을 때 직접 고친 값.
+  // 둘 다 생략하면 백엔드가 STT/LLM이 감지한 원본 값을 그대로 반영한다.
+  newDecisionText?: string,
+  newDecisionReason?: string
 ): Promise<GetContradictionResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -253,7 +257,12 @@ export async function resolveContradictionApi(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resolution_type: resolutionType, note: note || null }),
+        body: JSON.stringify({
+          resolution_type: resolutionType,
+          note: note || null,
+          new_decision_text: newDecisionText || null,
+          new_decision_reason: newDecisionReason || null,
+        }),
       }
     );
 

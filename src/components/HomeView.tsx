@@ -1118,8 +1118,8 @@ export default function HomeView({
         <ContradictionCompareModal
           contradiction={compareContradiction}
           onClose={() => setCompareContradictionId(null)}
-          onResolve={(id, resolutionType) => {
-            resolveContradiction(id, resolutionType);
+          onResolve={(id, resolutionType, newDecisionText, newDecisionReason) => {
+            resolveContradiction(id, resolutionType, undefined, newDecisionText, newDecisionReason);
             setCompareContradictionId(null);
           }}
           onUpdate={updateContradiction}

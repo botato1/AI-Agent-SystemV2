@@ -31,6 +31,7 @@ import {
 } from "./icons";
 import ContradictionMessage from "./ContradictionMessage";
 import ContradictionEditForm from "./ContradictionEditForm";
+import ContradictionApplyForm from "./ContradictionApplyForm";
 import { showConfirm } from "../lib/confirm";
 import ChangeSummaryModal from "./ChangeSummaryModal";
 import DocumentPreviewModal from "./DocumentPreviewModal";
@@ -1522,6 +1523,7 @@ export default function MeetingsPanel({
   const [isContradictionListOpen, setIsContradictionListOpen] = useState(true);
   const [expandedContradictionIds, setExpandedContradictionIds] = useState<Set<string>>(new Set());
   const [editingContradictionId, setEditingContradictionId] = useState<string | null>(null);
+  const [applyingContradictionId, setApplyingContradictionId] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
   const [showAttendeesModal, setShowAttendeesModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -2658,6 +2660,29 @@ export default function MeetingsPanel({
                         }}
                         t={t}
                       />
+                    ) : applyingContradictionId === c.id ? (
+                      <ContradictionApplyForm
+                        contradiction={c}
+                        onCancel={() => setApplyingContradictionId(null)}
+                        onApply={async ({ newDecisionText, newDecisionReason }) => {
+                          const confirmed = await showConfirm(
+                            t.contradiction_apply_confirm,
+                            t.contradiction_apply,
+                            t.task_cancel
+                          );
+                          if (!confirmed) return false;
+                          const ok = await resolve(
+                            c.id,
+                            "change_acknowledged",
+                            undefined,
+                            newDecisionText,
+                            newDecisionReason
+                          );
+                          if (ok) setApplyingContradictionId(null);
+                          return ok;
+                        }}
+                        t={t}
+                      />
                     ) : (
                       <ContradictionMessage
                         contradiction={c}
@@ -2667,7 +2692,7 @@ export default function MeetingsPanel({
                         t={t}
                       />
                     )}
-                    {!isViewingLive && editingContradictionId !== c.id && (
+                    {!isViewingLive && editingContradictionId !== c.id && applyingContradictionId !== c.id && (
                       <div className="flex gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
                         {c.status === "unresolved" ? (
                           <>
@@ -2689,6 +2714,13 @@ export default function MeetingsPanel({
                             {!(c.source_type === "room_message" && isDecisionCard) && (
                               <button
                                 onClick={async () => {
+                                  // 결정 변경 감지(decision)는 반영 전에 내용을 직접 고칠 수 있게 폼을
+                                  // 먼저 보여준다. 그 외(문서 모순)는 고칠 "결정 내용" 개념이 없으므로
+                                  // 기존처럼 바로 확인만 받는다.
+                                  if (isDecisionCard) {
+                                    setApplyingContradictionId(c.id);
+                                    return;
+                                  }
                                   const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
                                   if (ok) resolve(c.id, "change_acknowledged");
                                 }}
