@@ -295,11 +295,11 @@ export const translations = {
     doc_list_title: "문서 목록",
     doc_btn_upload: "문서 업로드",
     graph_title: "그래프 시각화",
-    graph_sub: "문서 유형 · 키워드 공유 기반 연관성 시각화",
+    graph_sub: "문서 유형 · 의미 유사도 기반 연관성 시각화",
     graph_no_docs: "분석이 끝난 문서가 있어야 그래프에 표시돼요. (문서 분석에서 먼저 업로드해보세요)",
     graph_btn_view_analysis: "문서 분석에서 보기",
     graph_connected_count: "연결된 문서",
-    graph_connected_suffix: "개 (키워드 공유 기준)",
+    graph_connected_suffix: "개 (의미 유사도 기준)",
     graph_group_etc: "기타",
 
     // === 채팅 시스템 메시지 & AI Chat ===
@@ -1005,11 +1005,11 @@ export const translations = {
     doc_list_title: "Documents",
     doc_btn_upload: "Upload",
     graph_title: "Graph Visualization",
-    graph_sub: "Visualization of associations based on document types and shared keywords",
+    graph_sub: "Visualization of associations based on document types and semantic similarity",
     graph_no_docs: "There must be analyzed documents to display them on the graph. (Please upload in Doc Analysis first)",
     graph_btn_view_analysis: "View in Doc Analysis",
     graph_connected_count: "Connected Documents",
-    graph_connected_suffix: " (Based on shared keywords)",
+    graph_connected_suffix: " (Based on semantic similarity)",
     graph_group_etc: "Others",
 
     // === System Messages & AI Chat ===
