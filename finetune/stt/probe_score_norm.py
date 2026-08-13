@@ -90,13 +90,14 @@ def scores_for(emb, profiles: dict, names: list[str]):
     return top_name, top, margin, z
 
 
-def collect(meeting: str, script: str, profiles: dict, inference):
+def collect(meeting: str, script: str, profiles: dict, inference,
+            window_sec: float = WINDOW_SEC, hop_sec: float = HOP_SEC):
     """창마다 등록자 시행과 명단 밖 시행을 함께 만든다."""
     audio, sr = sf.read(os.path.join(MEETINGS_DIR, meeting, "audio.wav"), dtype="float32")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     identifier = LiveSpeakerIdentifier(inference)
-    win, hop = int(WINDOW_SEC * sr), int(HOP_SEC * sr)
+    win, hop = int(window_sec * sr), int(hop_sec * sr)
     names_all = sorted(profiles)
 
     known, unknown = [], []
@@ -150,6 +151,9 @@ def main():
     parser.add_argument("--meetings", nargs="+", required=True, help="'회의ID:대본경로'")
     parser.add_argument("--far", type=float, default=0.01,
                         help="허용할 명단 밖 오수락률 (기본 1%%)")
+    parser.add_argument("--windows", nargs="+", type=float, default=[WINDOW_SEC],
+                        help="잴 창 길이(초). 여러 개 주면 나란히 비교한다")
+    parser.add_argument("--hop", type=float, default=HOP_SEC)
     args = parser.parse_args()
 
     store = GlobalProfileStore()
@@ -157,34 +161,63 @@ def main():
     inference = load_speaker_embedding_inference()
     print(f"등록 프로필 {len(profiles)}명: {', '.join(sorted(profiles))}\n")
 
-    known, unknown = [], []
-    for spec in args.meetings:
-        meeting, script = spec.split(":", 1)
-        k, u = collect(meeting, os.path.join(_HERE, script), profiles, inference)
-        print(f"  {meeting[:38]:38s} 창 {len(k):4d}개 (1등 정확도 {sum(o for o,*_ in k)/max(len(k),1):.0%})")
-        known += k
-        unknown += u
-
-    print(f"\n전체 — 등록자 시행 {len(known)}창 / 명단 밖 시행 {len(unknown)}창")
-    print(f"기준: 명단 밖 오수락 {args.far:.0%} 이하에서 등록자를 얼마나 건지는가\n")
-
     methods = [
-        ("절대 유사도", 1, np.arange(0.10, 0.55, 0.025)),
-        ("margin", 2, np.arange(0.0, 0.30, 0.01)),
+        ("절대 유사도", 1, np.arange(0.10, 0.75, 0.025)),
+        ("margin", 2, np.arange(0.0, 0.40, 0.01)),
         ("z (점수 정규화)", 3, np.arange(0.0, 4.0, 0.1)),
     ]
-    print(f"{'기준':16s}{'문턱':>7s}{'통과율':>8s}{'통과분 정확도':>14s}{'오수락':>8s}{'실제로 건진 비율':>17s}")
-    print("-" * 74)
-    results = {}
-    for label, idx, gates in methods:
-        rows = sweep(known, unknown, idx, gates)
-        best = best_at(rows, args.far)
-        results[label] = (rows, best)
-        if best is None:
-            print(f"{label:16s}{'—':>7s}  (오수락 {args.far:.0%} 이하를 만족하는 문턱이 없음)")
-            continue
-        g, cov, acc, far = best
-        print(f"{label:16s}{g:7.3f}{cov:7.0%}{acc:13.0%}{far:8.1%}{cov*acc:16.0%}")
+
+    # 창 길이별로 같은 비교를 돌린다.
+    #
+    # 왜 창 길이인가 (2026-08-13): 세 기준을 다 재봤지만 오수락 1%에서 등록자의
+    # 24%밖에 못 건졌다. **어떤 수식을 씌워도 1.5초 창에 없는 정보는 못 만든다.**
+    # 화자 임베딩은 길이에 민감하므로, 판정 단위를 늘리면 정보량 자체가 늘어난다.
+    # 그게 사실인지부터 확인해야 기준 조정이 의미가 있다.
+    results_by_window = {}
+    for window_sec in args.windows:
+        known, unknown = [], []
+        print(f"\n{'=' * 74}\n창 {window_sec}초 / 이동 {args.hop}초\n{'=' * 74}")
+        for spec in args.meetings:
+            meeting, script = spec.split(":", 1)
+            k, u = collect(meeting, os.path.join(_HERE, script), profiles, inference,
+                           window_sec=window_sec, hop_sec=args.hop)
+            acc = sum(o for o, *_ in k) / max(len(k), 1)
+            print(f"  {meeting[:38]:38s} 창 {len(k):4d}개 (1등 정확도 {acc:.0%})")
+            known += k
+            unknown += u
+
+        print(f"\n  등록자 시행 {len(known)}창 / 명단 밖 시행 {len(unknown)}창")
+        print(f"  {'기준':16s}{'문턱':>7s}{'통과율':>8s}{'정확도':>8s}{'오수락':>8s}{'건진 비율':>11s}")
+        print("  " + "-" * 60)
+        per_method = {}
+        for label, idx, gates in methods:
+            rows = sweep(known, unknown, idx, gates)
+            best = best_at(rows, args.far)
+            per_method[label] = (rows, best)
+            if best is None:
+                print(f"  {label:16s}{'—':>7s}  (오수락 {args.far:.0%} 이하 문턱 없음)")
+                continue
+            g, cov, a, far = best
+            print(f"  {label:16s}{g:7.3f}{cov:7.0%}{a:8.0%}{far:8.1%}{cov*a:10.0%}")
+        results_by_window[window_sec] = (per_method, known, unknown)
+
+    if len(args.windows) > 1:
+        print(f"\n{'=' * 74}\n창 길이별 요약 — 오수락 {args.far:.0%} 이하에서 건진 비율\n{'=' * 74}")
+        print(f"{'창(초)':>8s}{'1등 정확도':>12s}" + "".join(f"{m[0]:>16s}" for m in methods))
+        for w in args.windows:
+            per_method, known, _u = results_by_window[w]
+            base = sum(o for o, *_ in known) / max(len(known), 1)
+            cells = []
+            for label, _i, _g in methods:
+                best = per_method[label][1]
+                cells.append(f"{best[1]*best[2]:15.0%}" if best else f"{'—':>15s}")
+            print(f"{w:8.1f}{base:11.0%}" + "".join(cells))
+        print("\n  창을 늘려 건진 비율이 뚜렷이 오르면 **정보량이 실제로 늘어난 것**이다.")
+        print("  안 오르면 창 길이가 아니라 임베딩/프로필 품질의 한계다.")
+        print("  ⚠️ 창을 늘리면 화자 전환 경계가 뭉개진다 — 이 표만으로 채택하지 말 것.")
+
+    # 아래 상세 곡선은 마지막(가장 긴) 창 기준
+    results = results_by_window[args.windows[-1]][0]
 
     print("\n읽는 법")
     print("  '실제로 건진 비율' = 통과율 × 통과분 정확도. 이게 높을수록 좋은 기준이다")
