@@ -221,6 +221,8 @@ def resolve_contradiction_api(
         contradiction_id=contradiction_id,
         resolved_by=uuid.UUID(current_user_id),
         resolution_type=request.resolution_type,
+        new_decision_text=request.new_decision_text,
+        new_decision_reason=request.new_decision_reason,
         note=request.note,
     )
 
@@ -235,7 +237,7 @@ def resolve_contradiction_api(
             resolution_id=resolution.id,
             context_type=context_type,
             original_reference_text=contradiction.reference_text_snapshot,
-            accepted_change_text=contradiction.statement_text_snapshot,
+            accepted_change_text=request.new_decision_text or contradiction.statement_text_snapshot,
         )
         # 요약 생성은 백그라운드로 — 응답은 draft가 pending인 채로 바로 나가고,
         # 프론트는 GET .../change-summary로 완료 여부를 폴링한다.
