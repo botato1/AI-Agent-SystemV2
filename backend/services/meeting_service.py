@@ -71,7 +71,7 @@ def regenerate_summary_from_refined_transcript(meeting_id: str, refined_data: di
         return
 
     indexed_transcript = "\n".join(
-        f"[{i}][{seg.get('speaker', 'unknown')}] {seg.get('text', '')}"
+        f"[{i}][{seg.get('speaker') or 'unknown'}] {seg.get('text', '')}"
         for i, seg in enumerate(segments)
     )
 
