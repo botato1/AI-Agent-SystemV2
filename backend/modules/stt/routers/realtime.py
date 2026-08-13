@@ -284,6 +284,22 @@ async def _run_session(
 
                     is_meeting_over = _leave(websocket.app.state, session_id, participant_key)
 
+                    # **저장을 먼저, 통보를 나중에.**
+                    #
+                    # transcript.json은 비용 때문에 5청크마다 한 번만 쓴다
+                    # (_JSON_SAVE_EVERY_N_CHUNKS). 그래서 session_end를 먼저 보내면
+                    # 소비자가 그걸 받고 곧바로 GET /api/meetings/{id}를 부를 때
+                    # **최대 4청크 분량이 아직 파일에 없다.** 전사는 끝났는데 파일이
+                    # 안 써진 상태라, 요약이 뒷부분이 잘린 회의록으로 만들어졌다
+                    # (2026-08-13 유저 제보 — 증상이 "뒷 문장들이 끊긴다"였다).
+                    #
+                    # finalize가 마지막 저장을 하므로, 그 뒤에 알리면 클라이언트가
+                    # "끝났다"를 받은 시점에 파일이 완전하다.
+                    if is_meeting_over:
+                        _finalize_recorder(websocket.app.state, session_id, recorder, "completed")
+                        # 회의가 정상 종료됐으므로 이 세션의 사전 등록 정보도 정리
+                        websocket.app.state.enrolled_profiles.pop(session_id, None)
+
                     await websocket.send_json({
                         "session_id": session_id,
                         "type": "session_end",
@@ -291,9 +307,6 @@ async def _run_session(
                     })
 
                     if is_meeting_over:
-                        _finalize_recorder(websocket.app.state, session_id, recorder, "completed")
-                        # 회의가 정상 종료됐으므로 이 세션의 사전 등록 정보도 정리
-                        websocket.app.state.enrolled_profiles.pop(session_id, None)
                         logger.info(f"⚪ 실시간 STT 세션 정상 종료(end): {session_id}")
                     else:
                         logger.info(f"⚪ 참가자 퇴장(정상): {session_id}/{participant_key} (다른 참가자가 있어 회의 계속)")
