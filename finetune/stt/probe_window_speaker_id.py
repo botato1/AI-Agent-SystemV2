@@ -119,7 +119,7 @@ def main():
             preds.append(top_name)
             scores.append(top_score)
             margins.append(margin)
-            rows.append((top_name == name, margin))
+            rows.append((top_name == name, margin, top_score))
             if top_name != name:
                 wrong[top_name] = wrong.get(top_name, 0) + 1
                 bad_margins.append(margin)
@@ -146,8 +146,26 @@ def main():
     print("\nmargin 문턱별 (문턱 미만은 '미상'으로 버림)")
     print(f"{'문턱':>6s}{'적용률':>8s}{'적용분 정확도':>14s}{'버린 것 중 오답':>17s}")
     for gate in (0.0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12):
-        kept = [ok for ok, m in rows if m >= gate]
-        dropped = [ok for ok, m in rows if m < gate]
+        kept = [ok for ok, m, _s in rows if m >= gate]
+        dropped = [ok for ok, m, _s in rows if m < gate]
+        if not kept:
+            continue
+        drop_wrong = f"{sum(not ok for ok in dropped)}/{len(dropped)}" if dropped else "-"
+        print(f"{gate:6.2f}{len(kept)/len(rows)*100:7.0f}%"
+              f"{sum(kept)/len(kept)*100:13.0f}%{drop_wrong:>17s}")
+
+    # 절대 하한도 같은 방식으로 본다. margin과 역할이 다르다 — margin은 "1등과 2등이
+    # 비슷해 헷갈린다"를, 하한은 "등록된 누구와도 안 닮았다(명단 밖 사람이다)"를 잡는다.
+    #
+    # ⚠️ 하한은 프로필 품질에 직접 걸린다. 같은 사람이 말해도 등록 음성이 좋으면 0.5,
+    #    나쁘면 0.3이 나온다. 즉 공통 하한은 "누가 말했나"가 아니라 "누구 프로필이
+    #    좋은가"로 사람을 거르게 된다 — 아래 표에서 버린 것 중 오답 비율이 낮게
+    #    나오면 그 현상이 실제로 일어나고 있다는 뜻이다.
+    print("\n절대 하한별 (1등 유사도가 문턱 미만이면 '미상'으로 버림)")
+    print(f"{'문턱':>6s}{'적용률':>8s}{'적용분 정확도':>14s}{'버린 것 중 오답':>17s}")
+    for gate in (0.0, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40):
+        kept = [ok for ok, _m, s in rows if s >= gate]
+        dropped = [ok for ok, _m, s in rows if s < gate]
         if not kept:
             continue
         drop_wrong = f"{sum(not ok for ok in dropped)}/{len(dropped)}" if dropped else "-"
@@ -157,6 +175,9 @@ def main():
     print("\n읽는 법:")
     print("  '버린 것 중 오답' 비율이 높을수록 문턱이 오답만 골라 버린다는 뜻 = 좋은 문턱")
     print("  적용률이 급격히 떨어지면 맞는 것까지 버리는 것이므로 그 앞에서 끊는다")
+    print("  ⚠️ 여기 오답은 '등록된 다른 사람으로 잘못 판정'이다. **등록 안 된 사람이")
+    print("     말하는 경우는 이 회의에 없으므로 하한을 낮췄을 때의 진짜 위험은")
+    print("     여기서 안 드러난다** — 그건 명단 밖 화자가 있는 녹음으로 따로 재야 한다.")
 
 
 if __name__ == "__main__":
