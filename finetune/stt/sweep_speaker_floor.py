@@ -130,7 +130,10 @@ def main():
     parser.add_argument("--script", required=True, help="finetune/stt 기준 상대경로")
     parser.add_argument("--names", nargs="+", required=True, help="실제 참석자 전원")
     parser.add_argument("--holdout", required=True, help="B조건에서 후보에서 뺄 사람")
+    parser.add_argument("--floors", nargs="+", default=FLOORS,
+                        help="잴 하한 값들. 확인 단계에서는 후보값과 기준선만 주면 빠르다")
     args = parser.parse_args()
+    floors = args.floors
 
     if args.holdout not in args.names:
         raise SystemExit(f"❌ --holdout({args.holdout})이 --names에 없다")
@@ -140,7 +143,7 @@ def main():
     print(f"명단 밖 시험 대상: {args.holdout} — 발화 구간 {len(spans)}개")
 
     rows = []
-    for floor in FLOORS:
+    for floor in floors:
         print(f"\n{'=' * 70}\n하한 {floor}\n{'=' * 70}")
         if not restart(floor):
             print("  ❌ 서버가 안 뜬다 — 중단"); break
