@@ -155,12 +155,21 @@ class MeetingRecord:
                     f"클라이언트가 무음 프레임만 보내는 중"
                 )
         else:
-            if self._zero_run_samples / REALTIME_SAMPLE_RATE >= AUDIO_GAP_MIN_RECORD_SEC:
-                start = now_sec - (self._zero_run_samples + len(audio)) / REALTIME_SAMPLE_RATE
-                self._gaps.append([round(max(start, 0.0), 1),
-                                   round(start + self._zero_run_samples / REALTIME_SAMPLE_RATE, 1)])
-            self._zero_run_samples = 0
-            self._gap_warned = False
+            self._close_silence_run(end_sec=now_sec - len(audio) / REALTIME_SAMPLE_RATE)
+
+    def _close_silence_run(self, end_sec: float) -> None:
+        """
+        이어지던 무음 구간을 닫고 기록한다.
+
+        **회의가 끝나는 시점에도 반드시 불러야 한다.** 처음엔 "무음이 끝날 때"만
+        기록했는데, 마이크가 죽은 채로 회의가 끝나면 그 순간이 오지 않아 **가장 중요한
+        공백이 기록되지 않았다**(실측: 무음 10.5초인데 audio_gaps가 비어 있었다).
+        """
+        run_sec = self._zero_run_samples / REALTIME_SAMPLE_RATE
+        if run_sec >= AUDIO_GAP_MIN_RECORD_SEC:
+            self._gaps.append([round(max(end_sec - run_sec, 0.0), 1), round(end_sec, 1)])
+        self._zero_run_samples = 0
+        self._gap_warned = False
 
     def pop_gap_warning(self) -> dict | None:
         """공백 경고가 대기 중이면 한 번만 준다. 호출부가 클라이언트로 보낸다."""
@@ -294,6 +303,8 @@ class MeetingRecord:
         """회의 종료 처리. 여러 번 불려도 첫 호출만 유효 (정상 종료 후 finally 중복 호출 대비)."""
         if self._finalized:
             return
+        # 마이크가 죽은 채로 회의가 끝나는 경우가 있다 — 그 공백을 여기서 닫아야 기록된다
+        self._close_silence_run(end_sec=self._received_audio_sec)
         self._finalized = True
         if self._wav is not None:
             self._wav.close()
