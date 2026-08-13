@@ -241,6 +241,8 @@ class ContradictionListResponse(BaseModel):
 class ContradictionResolveRequest(BaseModel):
     resolution_type: ContradictionResolutionType
     note: Optional[str] = None
+    new_decision_text: Optional[str] = Field(default=None, min_length=1)
+    new_decision_reason: Optional[str] = None
 
 
 class ContradictionUpdateRequest(BaseModel):
