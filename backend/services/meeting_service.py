@@ -5,6 +5,7 @@ import hashlib
 import os
 import uuid
 from pathlib import Path
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.modules.rag.document_loader import load_document
+from backend.modules.post_meeting import llm_extractor
 from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
@@ -53,6 +55,49 @@ async def _request_stt(file_content: bytes, filename: str) -> dict:
         )
     response.raise_for_status()
     return response.json()
+
+def regenerate_summary_from_refined_transcript(meeting_id: str, refined_data: dict) -> None:
+    """정밀 재분석 완료 웹훅 수신 시 요약만 다시 생성해 갱신한다.
+
+    meeting_postprocess_node는 재실행하지 않는다 - 그 노드가 결정사항/할 일
+    추출까지 한 번에 묶여있어서, 여기서 다시 부르면 decision/task가 중복
+    생성될 위험이 있다(가동현 - 웹훅 반영 보류 사유). 대신 llm_extractor.extract()만
+    직접 호출해서 요약 관련 필드(full_summary/short_summary/discussion_points/
+    meeting_purpose/next_steps)만 갱신하고, topics/action_items는 버린다.
+    """
+    segments = refined_data.get("segments", [])
+    if not segments:
+        print(f"[meeting_service] 재분석 세그먼트 없음, 요약 갱신 스킵: meeting_id={meeting_id}")
+        return
+
+    indexed_transcript = "\n".join(
+        f"[{i}][{seg.get('speaker', 'unknown')}] {seg.get('text', '')}"
+        for i, seg in enumerate(segments)
+    )
+
+    extraction = llm_extractor.extract(indexed_transcript)
+    if not extraction.get("full_summary"):
+        print(f"[meeting_service] 재분석 요약 생성 실패, 갱신 스킵: meeting_id={meeting_id}")
+        return
+
+    db = SessionLocal()
+    try:
+        meeting_crud.upsert_summary(
+            db,
+            uuid.UUID(meeting_id),
+            meeting_purpose=extraction["meeting_purpose"],
+            full_summary=extraction["full_summary"],
+            short_summary=extraction["short_summary"],
+            discussion_points=extraction["discussion_points"],
+            next_steps=extraction["next_steps"],
+            generation_status="completed",
+            generated_at=datetime.now(timezone.utc),
+        )
+        print(f"[meeting_service] 재분석본 기준 요약 갱신 완료: meeting_id={meeting_id}")
+    except Exception as e:
+        print(f"[meeting_service] 재분석본 요약 갱신 실패: meeting_id={meeting_id}, error={repr(e)}")
+    finally:
+        db.close()
 
 
 def _save_segments_bulk(
