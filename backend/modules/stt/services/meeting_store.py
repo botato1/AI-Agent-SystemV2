@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from ..core.config import logger, MEETINGS_DIR, REALTIME_SAMPLE_RATE
+from ..core.config import (
+    logger, MEETINGS_DIR, REALTIME_SAMPLE_RATE,
+    AUDIO_GAP_WARN_SEC, AUDIO_GAP_MIN_RECORD_SEC,
+)
 
 # transcript.json은 매 청크가 아니라 N청크마다 갱신 — 세그먼트가 쌓일수록 파일 전체를
 # 다시 쓰는 비용이 커지고(누적 O(n²)), 저장소가 NAS(네트워크 마운트)라 더 느리기 때문.
@@ -97,8 +100,72 @@ class MeetingRecord:
         # 받은 오디오 총량(믹싱/스트리밍 모드 공통). 전사가 하나도 없어도
         # 오디오가 있으면 재분석이 복구할 수 있으므로 그 판단에 쓴다.
         self._received_audio_sec = 0.0
+
+        # 클라이언트가 보낸 "완전 무음"(값이 정확히 0) 추적.
+        #
+        # 왜 필요한가 (2026-08-13 실측): 회의 도중 11초가 통째로 비어 있었는데 아무도
+        # 몰랐다. 연결은 살아 있었고 프레임도 계속 도착했는데 내용물만 0이었다
+        # (마이크 트랙 비활성/AudioContext 정지 등 클라이언트 쪽 원인).
+        # 최근 회의 6건 중 5건에서 같은 현상이 있었고, 한 건은 51초 중 45초가 비었다.
+        #
+        # 조용한 것과 다르다 — 실제 방 소리는 아무리 조용해도 잡음 바닥(0.02~0.06)이
+        # 있다. 정확히 0이면 소리가 아니라 **데이터가 없는 것**이다.
+        #
+        # 이게 섞이면 성능 측정이 오염된다. 실제로 이 회의의 CER 23%를 "전사가
+        # 나빠졌다"로 해석할 뻔했는데 원인은 12초 공백이었다.
+        self._zero_run_samples = 0      # 지금 이어지고 있는 무음 길이
+        self._silent_samples = 0        # 무음 총량
+        self._gaps: list[list[float]] = []   # [[시작초, 끝초], ...]
+        self._gap_warned = False        # 지금 이어지는 무음에 대해 이미 알렸는지
+        self._pending_gap_warning: dict | None = None
         self._save_json()
         logger.info(f"💾 회의 기록 시작: {self.meeting_id} (믹싱 모드={mixed_audio})")
+
+    def _observe_silence(self, audio: np.ndarray) -> None:
+        """
+        완전 무음(값이 정확히 0)이 이어지는 구간을 센다.
+
+        프레임 단위로 본다 — 한 프레임(보통 수십 ms)이 통째로 0이면 무음이 이어지는
+        것으로 친다. 프레임 일부만 0인 경우는 실제 발화의 앞뒤 여백이라 무시한다.
+        """
+        if len(audio) == 0:
+            return
+        zeros = int(np.count_nonzero(np.abs(audio) < 1e-6))
+        self._silent_samples += zeros
+
+        now_sec = self._received_audio_sec + len(audio) / REALTIME_SAMPLE_RATE
+        if zeros == len(audio):
+            self._zero_run_samples += len(audio)
+            run_sec = self._zero_run_samples / REALTIME_SAMPLE_RATE
+            if run_sec >= AUDIO_GAP_WARN_SEC and not self._gap_warned:
+                self._gap_warned = True
+                self._pending_gap_warning = {
+                    "type": "audio_quality",
+                    "level": "warning",
+                    "code": "audio_gap",
+                    "message": (
+                        f"오디오가 {run_sec:.0f}초째 들어오지 않고 있습니다. "
+                        "마이크가 꺼졌거나 브라우저가 소리 전송을 멈춘 상태일 수 있어요. "
+                        "이대로 두면 그동안의 발언이 회의록에 남지 않습니다."
+                    ),
+                    "gap_sec": round(run_sec, 1),
+                }
+                logger.warning(
+                    f"⚠️ [{self.meeting_id}] 오디오 공백 {run_sec:.1f}초 — "
+                    f"클라이언트가 무음 프레임만 보내는 중"
+                )
+        else:
+            if self._zero_run_samples / REALTIME_SAMPLE_RATE >= AUDIO_GAP_MIN_RECORD_SEC:
+                start = now_sec - (self._zero_run_samples + len(audio)) / REALTIME_SAMPLE_RATE
+                self._gaps.append([round(max(start, 0.0), 1),
+                                   round(start + self._zero_run_samples / REALTIME_SAMPLE_RATE, 1)])
+            self._zero_run_samples = 0
+            self._gap_warned = False
+
+    def pop_gap_warning(self) -> dict | None:
+        """공백 경고가 대기 중이면 한 번만 준다. 호출부가 클라이언트로 보낸다."""
+        warning, self._pending_gap_warning = self._pending_gap_warning, None
+        return warning
 
     @property
     def has_content(self) -> bool:
@@ -156,6 +223,7 @@ class MeetingRecord:
         """
         if self._finalized:
             return
+        self._observe_silence(audio)
         self._received_audio_sec += len(audio) / REALTIME_SAMPLE_RATE
         if self._mix_buffer is not None:
             start_sample = int((absolute_offset_sec or 0.0) * REALTIME_SAMPLE_RATE)
@@ -277,6 +345,15 @@ class MeetingRecord:
             wf.writeframes(np.clip(buffer * 32768.0, -32768, 32767).astype(np.int16).tobytes())
 
     def _save_json(self) -> None:
+        # 무음 통계를 함께 남긴다. **채점할 때 이걸 모르면 안 된다** — 소리가 안 들어온
+        # 구간은 전사가 없는 게 당연한데, 그걸 "전사 성능이 나쁘다"로 읽으면 엉뚱한 데를
+        # 고치게 된다(실측: CER 23%의 원인이 12초 공백이었다).
+        received = self._received_audio_sec
+        self._meta["silent_audio_sec"] = round(self._silent_samples / REALTIME_SAMPLE_RATE, 1)
+        self._meta["silent_ratio"] = (
+            round(self._silent_samples / REALTIME_SAMPLE_RATE / received, 3) if received else 0.0
+        )
+        self._meta["audio_gaps"] = self._gaps[:20]   # 진단용 — 너무 많으면 앞부분만
         path = os.path.join(self.dir, "transcript.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self._meta, f, ensure_ascii=False, indent=2)

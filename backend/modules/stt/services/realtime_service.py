@@ -668,6 +668,16 @@ class RealtimeSTTSession:
             "enrolled_names": names,
         }
 
+    def pop_audio_gap_warning(self) -> dict | None:
+        """
+        클라이언트가 무음만 보내고 있으면 알린다. 판단은 recorder가 한다 —
+        모든 프레임을 보는 곳이 거기뿐이다(전사 큐를 거치지 않는 오디오도 있다).
+        """
+        if self.recorder is None:
+            return None
+        warning = self.recorder.pop_gap_warning()
+        return {**warning, "session_id": self.session_id} if warning else None
+
     def pop_unknown_speaker_warning(self) -> dict | None:
         """
         등록된 목소리가 있는데도 화자를 못 찾은 청크가 대부분이면 한 번만 알린다.

@@ -183,6 +183,13 @@ async def _stt_worker(
         # (전사는 나중에 다시 할 수 있지만 사라진 소리는 되돌릴 수 없다)
         await session.record_incoming(samples)
 
+        # **청크 처리 밖에서** 확인한다. 무음만 들어오면 VAD가 발화를 못 찾아
+        # should_flush()가 안 걸리고, 그러면 아래 경고 지점까지 아예 도달하지 못한다
+        # — 정작 알려야 할 상황에서 조용한 게 이 버그의 본질이었다.
+        gap = session.pop_audio_gap_warning()
+        if gap:
+            await send(gap)
+
         # 청크가 끝나기 전에도 1초 주기로 잠정 텍스트를 흘려보냄 (Local Agreement)
         partial = await session.maybe_stream_partial()
         if partial:
