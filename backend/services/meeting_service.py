@@ -82,6 +82,11 @@ def regenerate_summary_from_refined_transcript(meeting_id: str, refined_data: di
 
     db = SessionLocal()
     try:
+        meeting = meeting_crud.get_meeting(db, uuid.UUID(meeting_id))
+        if not meeting:
+            print(f"[meeting_service] 재분석 요약 갱신 대상 회의를 찾을 수 없음: meeting_id={meeting_id}")
+            return
+
         meeting_crud.upsert_summary(
             db,
             uuid.UUID(meeting_id),
@@ -93,6 +98,22 @@ def regenerate_summary_from_refined_transcript(meeting_id: str, refined_data: di
             generation_status="completed",
             generated_at=datetime.now(timezone.utc),
         )
+
+        # 프론트가 폴링 중인 알림으로 갱신 완료를 알림 - 기존 실시간본 완료 알림과
+        # 동일한 패턴(ref_type="meeting") 재사용, 프론트가 이 알림을 구독해
+        # 현재 보고 있는 회의와 ref_id가 일치하면 요약을 조용히 재조회한다.
+        for member, _user in workspace_crud.list_members(db, meeting.workspace_id):
+            if not notification_crud.is_notification_enabled(
+                db, meeting.workspace_id, member.user_id, "meeting_summary_ready",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=meeting.workspace_id,
+                type="meeting_summary_ready", title="회의 요약 개선 완료",
+                message=f"'{meeting.title}' 회의 요약이 더 정확한 내용으로 갱신됐습니다.",
+                ref_type="meeting", ref_id=meeting.id,
+            )
+
         print(f"[meeting_service] 재분석본 기준 요약 갱신 완료: meeting_id={meeting_id}")
     except Exception as e:
         print(f"[meeting_service] 재분석본 요약 갱신 실패: meeting_id={meeting_id}, error={repr(e)}")
