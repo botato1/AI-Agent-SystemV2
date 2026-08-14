@@ -2,9 +2,10 @@
 import asyncio
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.core.security import create_room_ws_ticket
@@ -137,10 +138,12 @@ async def _process_room_message_analysis(
 
 class RoomCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+    category_id: Optional[UUID] = None
 
 
 class RoomUpdateRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    category_id: Optional[UUID] = None
 
 
 class RoomMessageListResponse(BaseModel):
@@ -171,12 +174,7 @@ def create_room(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    category = room_crud.get_default_category(db, workspace_id)
-    if not category:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
-        )
+    category = resolve_category(db, workspace_id, request.category_id)
 
     room = room_crud.create_room(
         db,
@@ -192,12 +190,13 @@ def create_room(
 @router.get("", response_model=RoomListResponse)
 def list_rooms(
     workspace_id: UUID,
+    category_id: UUID | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    rooms = room_crud.list_rooms(db, workspace_id)
+    rooms = room_crud.list_rooms(db, workspace_id, category_id=category_id)
     return RoomListResponse(rooms=[RoomResponse.model_validate(r) for r in rooms])
 
 
@@ -226,7 +225,17 @@ def update_room(
     require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
 
-    room = room_crud.update_room_name(db, room_id, request.name)
+    update_fields = request.model_dump(exclude_unset=True)
+    if "category_id" in update_fields and update_fields["category_id"] is not None:
+        category = resolve_category(db, workspace_id, update_fields["category_id"])
+        update_fields["category_id"] = category.id
+    if not update_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+
+    room = room_crud.update_room(db, room_id, **update_fields)
     return RoomResponse.model_validate(room)
 
 
