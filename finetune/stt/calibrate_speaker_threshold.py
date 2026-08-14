@@ -218,6 +218,28 @@ def show(title, rows):
             print(f"  {span:>12s}{nk:7d}{nu:7d}{g:8.3f}{cov:8.0%}{acc:8.0%}{far:8.1%}")
 
 
+def show_tradeoff(title, inn, out, far_limits):
+    """허용 오수락률을 바꿔가며 통과율이 어떻게 변하는지.
+
+    왜 필요한가 (2026-08-13): 오수락 1%만 보면 통과율이 9~22%로 무너진다. 그런데
+    **명단 밖 화자는 참석자 등록이 제대로 되면 드문 예외**인 반면, 통과율은 매 회의
+    매 발화에 걸린다. 1%를 지키려고 진짜 발화의 80%를 버리는 건 비용이 반대일 수 있다.
+    어디까지 허용할지는 데이터가 아니라 제품이 정하는 것이고, 그러려면 선택지를 봐야 한다.
+    """
+    print(f"\n{title}")
+    header = "".join(f"{f'{f:.0%} 허용':>16s}" for f in far_limits)
+    print(f"  {'길이(초)':>12s}{header}")
+    for lo, hi in BUCKETS:
+        span = f"{lo:.1f}~{'∞' if hi > 1e8 else f'{hi:.1f}'}"
+        cells = []
+        for far_limit in far_limits:
+            row = [r for r in calibrate(inn, out, far_limit) if r[0] == lo][0]
+            cells.append(f"{'—':>15s}" if row[4] is None
+                         else f"{row[4]:6.3f}/{row[5]:6.0%}")
+        print(f"  {span:>12s}" + "".join(f"{c:>16s}" for c in cells))
+    print("  (칸 = 문턱 / 그 문턱에서의 통과율)")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--meetings", nargs="*", default=[], help="'회의ID:대본경로'")
@@ -226,6 +248,8 @@ def main():
     parser.add_argument("--enroll", type=int, default=3, help="등록에 쓸 발화 수")
     parser.add_argument("--speakers", type=int, default=60, help="AI-Hub에서 쓸 화자 수")
     parser.add_argument("--far", type=float, default=0.01)
+    parser.add_argument("--far-grid", nargs="+", type=float, default=[0.01, 0.05, 0.10, 0.20],
+                        help="허용 오수락률을 바꿔가며 통과율을 비교한다")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -238,6 +262,7 @@ def main():
         print(f"  등록자 시행 {len(inn)} / 명단 밖 시행 {len(out)}")
         show("AI-Hub — 길이별 문턱 (곡선의 모양을 여기서 본다)",
              calibrate(inn, out, args.far))
+        show_tradeoff("AI-Hub — 허용 오수락률별 (문턱 / 통과율)", inn, out, args.far_grid)
 
     if args.meetings:
         store = GlobalProfileStore()
@@ -247,6 +272,7 @@ def main():
         print(f"  등록자 시행 {len(inn)} / 명단 밖 시행 {len(out)}")
         show("우리 회의 — 같은 방향인지 확인만 (값을 그대로 쓰지 말 것)",
              calibrate(inn, out, args.far))
+        show_tradeoff("우리 회의 — 허용 오수락률별 (문턱 / 통과율)", inn, out, args.far_grid)
 
     print("\n읽는 법")
     print("  길이가 길어질수록 문턱이 **올라가면** 가설대로다 — 긴 발화는 점수가 높게")
