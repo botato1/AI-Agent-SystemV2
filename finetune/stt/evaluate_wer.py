@@ -186,7 +186,10 @@ def main():
     terms = []
     if args.terms:
         with open(args.terms, encoding="utf-8") as f:
-            terms = [line.strip() for line in f if line.strip()]
+            # 주석(#)과 빈 줄은 뺀다 — 용어 목록 파일은 선정 근거를 주석으로 달아둔다.
+            # (안 거르면 주석 문장 전체가 '용어' 하나로 잡혀 재현율이 0에 수렴한다)
+            terms = [s for s in (line.strip() for line in f)
+                     if s and not s.startswith("#")]
     context = None
     if args.context:
         with open(args.context, encoding="utf-8") as f:

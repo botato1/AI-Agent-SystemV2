@@ -303,49 +303,26 @@ AUDIO_WARN_CLIP_RATIO = float(os.getenv("AUDIO_WARN_CLIP_RATIO", "0.001"))
 AUDIO_WARN_NO_SPEECH_SEC = float(os.getenv("AUDIO_WARN_NO_SPEECH_SEC", "30"))
 
 # ──────────────────────────────────────────
-# 인식 힌트(initial_prompt) 설정
+# 인식 힌트 — Whisper initial_prompt는 폐기됨 (2026-08-14 코드 제거)
 # ──────────────────────────────────────────
-# 2026-07-15에 hotwords를 제거하고 파인튜닝으로 방향을 틀었으나("임의로 고른 단어 목록이라
-# 근거가 약하다"는 이유), 2026-07-27 실측에서 파인튜닝의 실음성 개선폭이 CER 11.66%→11.18%
-# (0.48%p)에 그쳐 숫자·고유명사 오인식을 잡지 못하는 것이 확인됨
-# (실제 오인식: "8001번 포트"→"810000", "승주"→"승준", "WAV"→"WEV", "임베딩"→"인벨딩").
+# ⛔ 남기지 않은 이유: 엔진이 Qwen3-ASR로 확정돼 이 경로가 실행되지 않았고,
+#    기본값이 꺼짐이라 build_initial_prompt()는 항상 None만 돌려주고 있었다.
+#    켤 수 있게 남겨두면 "설정하면 켜질 것"이라는 오해를 부르는데, 실제로 켜면
+#    아래 적힌 사고가 그대로 재현된다. 되살릴 거라면 조건 세 가지를 먼저 갖출 것.
 #
-# 재도입하는 근거: 이제 "회의 참석자 명단"이라는 확실한 출처가 생겼음 — WebSocket이
-# attendees/participant_name으로 이미 받고 있어서, 임의로 고른 목록이 아니라 그 회의에
-# 실제로 참여 중인 사람 이름을 힌트로 줄 수 있다.
+# 다만 이때 얻은 교훈은 Qwen에도 유효하므로 남긴다:
 #
-# ⛔ 2026-07-29: 실시간 회의에서 인식이 무너져 기본값을 끔으로 되돌림.
+#   ⚠️ 짧은 청크에서 모델이 오디오 대신 **프롬프트를 받아적는다.** 2026-07-29 실제
+#      회의록에 '참석자&영어팀 회의. 참섭자&영어필.' / '참석자&용어&'가 남았다.
+#      목록형("용어: A, B, C…")이 특히 이어붙이기 쉬워 취약하다.
 #
-# 무슨 일이 있었나: 짧은 청크(2~3초)에서 모델이 오디오 대신 **프롬프트 문장 자체를
-# 받아적었다.** 실제 회의록에 남은 결과:
-#     '참석자&영어팀 회의. 참섭자&영어필.'
-#     '참석자&용어&'
-# Whisper의 initial_prompt는 "앞서 나온 문맥"으로 주입되는데, 실제 음성 정보가 적은
-# 짧은 청크에서는 모델이 그 문맥의 패턴을 이어서 생성해버린다. 목록형 프롬프트
-# ("용어: A, B, C, ...")는 특히 이어붙이기 쉬운 형태라 더 취약했다.
+#   ⚠️ 왜 사전에 못 잡았나: 검증을 파일 단위 긴 오디오로만 했다. held-out CER이
+#      멀쩡해서 통과시켰는데 **실시간 짧은 청크 경로에서는 한 번도 안 돌려봤다.**
+#      조건이 다른 데서 검증하고 통과시킨 실수 — 힌트를 건드릴 때마다 반복 확인할 것.
 #
-# 왜 사전에 못 잡았나: 검증을 파일 단위 긴 오디오(AI Hub 클립, 125초 회의 녹음)로만 했다.
-# held-out CER이 안 나빠졌고 confident도 정상이라 통과시켰는데, **실시간 짧은 청크
-# 경로에서는 한 번도 돌려보지 않았다.** 조건이 다른 데서 검증하고 통과시킨 실수.
-#
-# 버릴 아이디어는 아니다 — 같은 회의 오디오에서 "승주→승준", "WAV→외로", "STT→에스티티"
-# 오인식을 실제로 고쳤다(제보 4건 중 3건 해결). 적용 방식이 틀렸을 뿐이다.
-# 다시 켤 때 지켜야 할 것:
-#   1) 프롬프트를 훨씬 짧게 — 참석자 이름만 쓰고 용어 목록은 빼는 방향부터 시도
-#   2) 짧은 청크에는 적용하지 않기(예: 일정 길이 이상에서만)
-#   3) 반드시 **실시간 경로**에서 검증 — 파일 단위 평가만으로는 이 문제를 못 잡는다
-#
-# INITIAL_PROMPT_ENABLED=1로 실험은 가능하되, 기본값은 끔.
-#
-# ⚠️ 위 내용은 Whisper 계열에 해당한다. Qwen3-ASR은 컨텍스트 바이어싱을 학습에
-# 포함한 모델이라 훨씬 견고하고(용어 재현율 80.7%→92.8%, 속도 비용 0) 실사용에서
-# 문제 없이 쓰고 있지만, **면역은 아니다** — 2026-07-31 실제 회의에서 짧고 불분명한
-# 구간 하나가 용어 목록을 그대로 받아적은 사례가 관측됐다. qwen_engine의
-# _is_context_echo가 그런 출력을 걸러낸다.
-INITIAL_PROMPT_ENABLED = os.getenv("INITIAL_PROMPT_ENABLED", "0").strip().lower() not in ("0", "false", "no")
-TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms.txt")
-# Qwen 컨텍스트용 목록은 따로 둔다 — Whisper 프롬프트의 제약(목록형 취약성,
-# 224토큰 한계)이 Qwen에는 없어서 넓게 담는 게 이득이기 때문. terms_context.txt 헤더 참고.
+# Qwen3-ASR은 컨텍스트 주입을 학습에 포함한 모델이라 훨씬 견고하지만 **면역은 아니다**
+# — 2026-07-31 실제 회의에서 짧고 불분명한 구간 하나가 용어 목록을 그대로 받아적은
+# 사례가 관측됐다. qwen_engine의 _is_context_echo가 그런 출력을 걸러낸다.
 QWEN_TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "terms_context.txt")
 
 # ──────────────────────────────────────────
@@ -354,7 +331,11 @@ QWEN_TERMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "term
 # Whisper의 initial_prompt와 통로는 같아 보이지만 성질이 다르다. Whisper는 프롬프트를
 # "앞서 나온 문맥"으로 해석해 짧은 청크에서 그대로 받아적는 사고를 냈지만, Qwen은
 # 컨텍스트 주입을 학습으로 배운 기능이라 용어 목록을 그대로 넣어도 안전하다.
-# 실측(우리 팀 녹음 40건): 용어 재현율 85.5% → 92.8%, CER 7.46% → 5.62%, 속도 변화 없음.
+#
+# ⚠️ 예전에 여기 적혀 있던 실측치(용어 재현율 85.5%→92.8%, CER 7.46%→5.62%)는
+#    **개발 용어 68개가 들어간 목록으로 잰 것이라 지금 설정의 숫자가 아니다.**
+#    2026-08-14 개발자 타깃 철회로 목록이 회의 어휘 9개로 줄었다. 새 조건의 숫자는
+#    재측정 중 — 나오기 전까지 이 경로의 이득을 수치로 인용하지 말 것.
 #
 # 단, 어휘에만 작동한다. "숫자는 아라비아 숫자로 표기" 같은 출력 형식 지시문은
 # 효과가 없음이 실측으로 확인됐다(CER 9.12% → 9.25%, 노이즈 범위).
@@ -594,9 +575,8 @@ logger.info(
 )
 
 
-def _load_prompt_terms(path: str = None) -> list[str]:
+def _load_prompt_terms(path: str) -> list[str]:
     """용어 목록 파일을 읽어 목록을 반환. '#' 시작 줄은 주석(선정 근거 기록용)."""
-    path = path or TERMS_PATH
     if not os.path.isfile(path):
         logger.warning(f"⚠️ 용어 목록 파일 없음: {path} — 인식 힌트에 용어를 넣지 않음")
         return []
@@ -604,9 +584,6 @@ def _load_prompt_terms(path: str = None) -> list[str]:
         return [s for s in (line.strip() for line in f) if s and not s.startswith("#")]
 
 
-PROMPT_TERMS = _load_prompt_terms() if INITIAL_PROMPT_ENABLED else []
-
-# Qwen 컨텍스트는 용어 목록을 그대로 쓴다 — INITIAL_PROMPT_ENABLED와 별개로 켜진다.
 QWEN_CONTEXT_TERMS = _load_prompt_terms(QWEN_TERMS_PATH) if (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED) else []
 
 
@@ -614,9 +591,9 @@ def build_qwen_context(speaker_names=None, extra_terms=None) -> str | None:
     """
     Qwen3-ASR 시스템 메시지에 넣을 컨텍스트 조립.
 
-    build_initial_prompt()와 목적은 같지만 형태가 다르다. Whisper 쪽은 프롬프트가
-    "앞 문맥"으로 해석돼 이어쓰기 사고가 나므로 문장형을 피할 수 없었지만, Qwen은
-    컨텍스트를 별도 채널로 받으므로 목록을 그대로 나열하는 게 가장 잘 먹힌다.
+    폐기된 Whisper initial_prompt와 목적은 같지만 형태가 다르다. Whisper 쪽은
+    프롬프트가 "앞 문맥"으로 해석돼 이어쓰기 사고가 났지만, Qwen은 컨텍스트를 별도
+    채널로 받으므로 목록을 그대로 나열하는 게 가장 잘 먹힌다.
 
     extra_terms: 이 회의에만 해당하는 용어(지난 회의록에서 수집한 것 등).
                  정적 목록 뒤에 붙는다. ⚠️ 목록 길이가 곧 지연이므로
@@ -638,47 +615,26 @@ def build_qwen_context(speaker_names=None, extra_terms=None) -> str | None:
     return " / ".join(parts)
 
 
-def build_initial_prompt(speaker_names=None) -> str | None:
-    """
-    회의 참석자 이름과 팀 용어를 Whisper 디코딩 힌트 문장으로 조립.
-
-    speaker_names: 이 회의에 실제로 참여 중인 사람 이름들(공용 마이크 모드는 등록 참석자,
-    각자 PC 모드는 본인 이름). 이름이 힌트에 들어가야 "승주"→"승준" 같은 오인식이 잡힌다.
-
-    넣을 내용이 하나도 없으면(비활성화됐거나 이름·용어가 모두 비었으면) None을 반환해서
-    호출부가 힌트 없이 그냥 전사하게 한다 — 알맹이 없는 문장만 주면 이득 없이 위험만 있음.
-    """
-    if not INITIAL_PROMPT_ENABLED:
-        return None
-
-    names = sorted({n.strip() for n in (speaker_names or []) if n and n.strip()})
-    if not names and not PROMPT_TERMS:
-        return None
-
-    parts = ["비고 프로젝트 팀 회의."]
-    if names:
-        parts.append("참석자: " + ", ".join(names) + ".")
-    if PROMPT_TERMS:
-        parts.append("용어: " + ", ".join(PROMPT_TERMS) + ".")
-    return " ".join(parts)
-
-
 # 지난 회의록에서 가져올 용어 수 상한. 목록 길이가 곧 지연이라 예산을 정해둔다
-# (정적 204개 + 동적 50개 ≈ 250개, 실측상 1초 이내 유지되는 범위).
+# (실측: 204개 0.85초 / 3000개 2.15초). 정적 목록이 9개로 줄어 예산 여유가 커졌지만,
+# 상한은 그대로 둔다 — 동적 수집은 오류 되먹임 위험이 있어 양보다 질이 중요하다.
 SESSION_TERMS_LIMIT = int(os.getenv("SESSION_TERMS_LIMIT", "50"))
 
 
 def build_context_hint(speaker_names=None, session_id: str | None = None) -> str | None:
     """
     엔진에 맞는 용어/이름 힌트를 만든다. 호출부(realtime, refine)는 어느 엔진이
-    돌고 있는지 몰라도 된다 — Whisper 계열은 프롬프트가 위험해서 기본 비활성이고
-    Qwen은 컨텍스트가 안전해서 기본 활성인데, 그 판단을 여기 한 곳에 모아둔다.
+    돌고 있는지 몰라도 된다 — 그 판단을 여기 한 곳에 모아둔다.
+
+    Whisper 계열은 **힌트를 주지 않는다**(None). 짧은 청크에서 프롬프트를 그대로
+    받아적는 사고가 실측으로 확인돼 폐기했다 — 위 'Whisper initial_prompt는 폐기됨'
+    주석 참고. Qwen은 컨텍스트 주입이 학습된 기능이라 안전해서 기본 활성이다.
 
     session_id를 주면 같은 회의 시리즈의 지난 회의록에서 용어를 추가로 수집한다
     (services/meeting_terms.py). 그 팀이 실제로 쓰는 말이 정적 목록보다 정확하다.
     """
     if STT_ENGINE != "qwen":
-        return build_initial_prompt(speaker_names)
+        return None
 
     extra = []
     if session_id and QWEN_CONTEXT_ENABLED:
