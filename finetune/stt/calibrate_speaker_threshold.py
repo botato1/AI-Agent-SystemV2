@@ -142,8 +142,15 @@ def trials_from_manifest(path, identifier, roster: int, enroll: int, speakers: i
             tests += [(spk, it) for it in items[enroll:enroll + 3]]
         if len(profiles) < 3:
             continue
-        # 명단 밖 화자 — 이 그룹에 없는 사람들에서 뽑는다
-        outsiders = [s for s in chosen if s not in profiles][:roster]
+        # 명단 밖 화자 — 그룹마다 **다른 사람들을** 무작위로 뽑는다.
+        #
+        # 처음엔 `[s for s in chosen if s not in profiles][:roster]`로 짰는데, 그러면
+        # chosen 앞쪽 몇 명이 거의 매번 뽑혀 **같은 사람의 같은 발화가 반복**됐다.
+        # 명단 밖 시행 1190건이 사실상 5명짜리 표본이었고, 그 몇 명이 우연히 여러
+        # 명단과 닮았으면 오수락이 부풀려져 문턱이 과하게 높아진다(실측: 통과율 16~39%).
+        # 길이 분포도 그 몇 명 것만 반영돼 1.5~2.5초 구간이 통째로 비었다.
+        pool = [s for s in chosen if s not in profiles]
+        outsiders = rng.sample(pool, min(roster, len(pool)))
         for spk in outsiders:
             tests += [(None, it) for it in usable[spk][enroll:enroll + 2]]
 
