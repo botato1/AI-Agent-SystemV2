@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
 from backend.db.session import get_db
 from backend.db.crud import ai_chat_crud, room_crud
 from backend.graphs.ai_chat_graph import run_ai_chat_answer
