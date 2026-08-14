@@ -19,7 +19,7 @@ from backend.services.document_service import (
 from backend.db.crud import document_crud, file_crud, similarity_crud
 from backend.schemas.document_schema import DocumentFigureListResponse, DocumentGraphResponse
 from backend.db.session import get_db
-from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
 
 
 router = APIRouter(
@@ -67,17 +67,19 @@ def get_document_graph_api(
 @router.get("")
 def get_document_list(
     workspace_id: UUID,
+    category_id: UUID | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
     try:
-        files = file_crud.list_files_by_kind(db, workspace_id, "document")
+        files = file_crud.list_files_by_kind(db, workspace_id, "document", category_id=category_id)
 
         documents = [
             {
                 "document_id": str(f.id),
+                "category_id": str(f.category_id),
                 "filename": f.original_filename,
                 "analysis_status": f.analysis_status,
                 "created_at": f.created_at,
@@ -112,6 +114,7 @@ async def upload_document(
     meeting_id: str | None = Form(None),
     document_type: Literal["document", "meeting"] = Form("document", alias="type"),
     previous_file_id: UUID | None = Form(None),
+    category_id: UUID | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -145,6 +148,7 @@ async def upload_document(
             db=db,
             file=file,
             workspace_id=workspace_id,
+            category_id=category_id,
             background_tasks=background_tasks,
             room_id=room_id,
             meeting_id=meeting_id,
@@ -260,6 +264,33 @@ def delete_document_api(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="문서 삭제 중 오류가 발생했습니다.",
         )
+    
+class DocumentCategoryUpdateRequest(BaseModel):
+    category_id: UUID
+
+
+# 문서 카테고리 변경
+@router.patch("/{document_id}")
+def update_document_category_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    request: DocumentCategoryUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    category = resolve_category(db, workspace_id, request.category_id)
+    workspace_file = file_crud.update_file_category(db, document_id, category.id)
+
+    return {
+        "status": "success",
+        "document_id": str(document_id),
+        "category_id": str(workspace_file.category_id),
+        "message": "문서 카테고리가 변경되었습니다.",
+        "error": None,
+    }
     
     
 @router.get("/{document_id}/figures", response_model=DocumentFigureListResponse)

@@ -178,20 +178,27 @@ def get_file(db: Session, file_id: uuid.UUID) -> Optional[WorkspaceFile]:
     )
 
 
-def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str) -> list[WorkspaceFile]:
+def list_files_by_kind(db: Session, workspace_id: uuid.UUID, file_kind: str, category_id: uuid.UUID | None = None) -> list[WorkspaceFile]:
     """일반 문서 목록 조회용. 워크트리(코드 폴더) 업로드 파일, 회의 요약 문서, 회의록 내보내기 PDF는
     각각 워크트리/회의 화면에서만 보여야 하므로 제외한다."""
-    return (
-        db.query(WorkspaceFile)
-        .filter(
-            WorkspaceFile.workspace_id == workspace_id,
-            WorkspaceFile.file_kind == file_kind,
-            WorkspaceFile.origin_type.notin_(["worktree", "meeting_summary", "meeting_export"]),
-            WorkspaceFile.is_latest.is_(True),
-            WorkspaceFile.deleted_at.is_(None),
-        )
-        .all()
+    query = db.query(WorkspaceFile).filter(
+        WorkspaceFile.workspace_id == workspace_id,
+        WorkspaceFile.file_kind == file_kind,
+        WorkspaceFile.origin_type.notin_(["worktree", "meeting_summary", "meeting_export"]),
+        WorkspaceFile.is_latest.is_(True),
+        WorkspaceFile.deleted_at.is_(None),
     )
+    if category_id is not None:
+        query = query.filter(WorkspaceFile.category_id == category_id)
+    return query.all()
+
+def update_file_category(db: Session, file_id: uuid.UUID, category_id: uuid.UUID) -> Optional[WorkspaceFile]:
+    row = get_file(db, file_id)
+    if row:
+        row.category_id = category_id
+        db.commit()
+        db.refresh(row)
+    return row
 
 def list_graph_eligible_files(
     db: Session, workspace_id: uuid.UUID, exclude_file_id: Optional[uuid.UUID] = None
