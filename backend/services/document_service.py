@@ -10,6 +10,7 @@ import httpx
 from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
 from backend.db.modules import RoomFileLink
+from backend.core.dependencies import resolve_category
 
 from backend.db.crud import ai_chat_crud, content_chunk_crud, contradiction_crud, document_crud, file_crud, meeting_crud, room_crud, similarity_crud
 from backend.modules.rag.document_loader import load_document
@@ -312,7 +313,7 @@ def _make_fallback_summary(original_text: str, max_length: int = 500) -> str:
 
 async def upload_and_process_document(
     db, workspace_id, file, room_id=None, meeting_id=None, document_type="document",
-    previous_file_id=None, current_user_id=None, background_tasks=None,
+    previous_file_id=None, current_user_id=None, background_tasks=None, category_id=None,
 ):
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
@@ -389,7 +390,7 @@ async def upload_and_process_document(
         analysis_metadata = _extract_analysis_metadata(processed_result)
         summary = processed_result.get("summary") or _make_fallback_summary(content_markdown)
 
-        category = room_crud.get_default_category(db, workspace_id)
+        category = resolve_category(db, workspace_id, category_id)
         if not category:
             raise RuntimeError("워크스페이스의 기본 카테고리를 찾을 수 없습니다.")
 
@@ -690,6 +691,7 @@ def get_document_detail(db: Session, file_id: UUID) -> dict:
             "document": {
                 "document_id": str(workspace_file.id),
                 "workspace_id": str(workspace_file.workspace_id),
+                "category_id": str(workspace_file.category_id),
                 "filename": workspace_file.original_filename,
                 "file_kind": workspace_file.file_kind,
                 "analysis_status": workspace_file.analysis_status,
