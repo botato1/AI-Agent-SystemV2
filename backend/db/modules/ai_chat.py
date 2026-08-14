@@ -15,6 +15,7 @@ class AiChatSession(Base):
     id = uuid_pk()
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
     room_id = Column(UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True) 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title = Column(String(200), nullable=True)
     created_at = created_at_col()
