@@ -95,6 +95,10 @@ def regenerate_summary_from_refined_transcript(
             time.sleep(poll_interval_seconds)
             waited += poll_interval_seconds
 
+        if summary_row.refined_at is not None:
+            print(f"[meeting_service] 이미 재분석 반영됨, 중복 웹훅 스킵: meeting_id={meeting_id}")
+            return
+
         segments = refined_data.get("segments", [])
         if not segments:
             print(f"[meeting_service] 재분석 세그먼트 없음, 요약 갱신 스킵: meeting_id={meeting_id}")
@@ -125,6 +129,7 @@ def regenerate_summary_from_refined_transcript(
             next_steps=extraction["next_steps"],
             generation_status="completed",
             generated_at=datetime.now(timezone.utc),
+            refined_at=datetime.now(timezone.utc),
         )
 
         # [수정 - 리뷰 반영] create_notification 기본값(commit=True)을 그대로 쓰면
