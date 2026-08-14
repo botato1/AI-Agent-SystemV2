@@ -35,13 +35,14 @@ def _get_task_or_404(db: Session, task_id: UUID, workspace_id: UUID):
 def get_task_list(
     workspace_id: UUID,
     status: str | None = Query(None),
+    category_id: UUID | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
     include_done = status == "all"
-    items = meeting_crud.list_tasks(db, workspace_id, include_done=include_done)
+    items = meeting_crud.list_tasks(db, workspace_id, include_done=include_done, category_id=category_id)
     return TaskListResponse(
         tasks=[TaskResponse.model_validate(i) for i in items]
     )
@@ -57,12 +58,7 @@ def create_task(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    category = room_crud.get_default_category(db, workspace_id)
-    if not category:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
-        )
+    category = resolve_category(db, workspace_id, request.category_id)
 
     item = meeting_crud.create_task(
         db,
