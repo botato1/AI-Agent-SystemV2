@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from backend.core.security import create_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
-from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud
+from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud, auth_crud
 from backend.modules.rag.document_loader import load_document
 from backend.services import document_service, meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
@@ -59,6 +59,8 @@ from backend.schemas.meeting_schema import (
     MeetingSummaryResponse,
     MeetingExportDecisionResponse,
     MeetingExportTaskResponse,
+    MeetingActiveParticipantItem,
+    MeetingActiveParticipantListResponse,
 )
 
 
@@ -1113,6 +1115,31 @@ def get_meeting_attendees_api(
             for attendee, user in rows
         ]
     )
+
+# 지금 이 회의에 실시간으로 접속해 있는 사람 목록 (녹음 연결 + 뷰어 연결)
+@router.get("/{meeting_id}/active-participants", response_model=MeetingActiveParticipantListResponse)
+def get_meeting_active_participants_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    user_ids = meeting_ws_router.get_active_participant_ids(meeting_id)
+    participants = []
+    for user_id in user_ids:
+        user = auth_crud.get_user_by_id(db, user_id)
+        if user:
+            participants.append(
+                MeetingActiveParticipantItem(
+                    user_id=user.id,
+                    display_name=user.display_name,
+                    profile_image_url=user.profile_image_url,
+                )
+            )
+    return MeetingActiveParticipantListResponse(participants=participants)
 
 
 # 참석 인원 지정/수정 — 워크스페이스 멤버 중에서만 선택 가능
