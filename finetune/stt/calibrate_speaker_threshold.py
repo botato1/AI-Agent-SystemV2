@@ -64,6 +64,12 @@ def bucket_of(sec: float):
     return None
 
 
+# 열어둔 zip 핸들. **발화마다 zip을 새로 열면 안 된다** — zip은 열 때마다 중앙
+# 디렉터리를 통째로 읽는데, 수천 개를 NAS 위에서 반복하면 GPU 연산보다 몇 배 오래 걸린다
+# (실측: 600명 보정이 몇십 분대로 늘어짐).
+_ZIP_CACHE: dict = {}
+
+
 def read_audio(item: dict) -> tuple[np.ndarray, int] | None:
     """AI-Hub 매니페스트는 wav 경로일 수도, zip 내부 위치일 수도 있다."""
     path = item.get("audio")
@@ -71,8 +77,10 @@ def read_audio(item: dict) -> tuple[np.ndarray, int] | None:
         a, sr = sf.read(path, dtype="float32")
     elif item.get("audio_zip") and item.get("audio_member"):
         try:
-            with zipfile.ZipFile(item["audio_zip"]) as z:
-                a, sr = sf.read(io.BytesIO(z.read(item["audio_member"])), dtype="float32")
+            z = _ZIP_CACHE.get(item["audio_zip"])
+            if z is None:
+                z = _ZIP_CACHE[item["audio_zip"]] = zipfile.ZipFile(item["audio_zip"])
+            a, sr = sf.read(io.BytesIO(z.read(item["audio_member"])), dtype="float32")
         except Exception:
             return None
     else:
@@ -123,7 +131,10 @@ def trials_from_manifest(path, identifier, roster: int, enroll: int, speakers: i
     print(f"  화자 {len(usable)}명 중 {len(chosen)}명 사용 (명단 {roster}명씩)")
 
     inn, out = [], []
-    for i in range(0, len(chosen) - roster, roster):
+    groups = list(range(0, len(chosen) - roster, roster))
+    for gi, i in enumerate(groups, 1):
+        if gi % 10 == 0 or gi == 1:
+            print(f"    그룹 {gi}/{len(groups)} — 시행 {len(inn)}+{len(out)}", flush=True)
         group = chosen[i:i + roster]
         profiles, tests = {}, []
         for spk in group:
