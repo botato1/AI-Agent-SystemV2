@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
 from backend.core.security import create_room_ws_ticket
 from backend.db.session import get_db, SessionLocal
 from backend.db.crud import file_crud, room_crud, workspace_crud, notification_crud, contradiction_crud
@@ -226,7 +226,12 @@ def update_room(
     _get_room_or_404(db, room_id, workspace_id)
 
     update_fields = request.model_dump(exclude_unset=True)
-    if "category_id" in update_fields and update_fields["category_id"] is not None:
+    if "category_id" in update_fields:
+        if update_fields["category_id"] is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="category_id는 null로 지울 수 없습니다.",
+            )
         category = resolve_category(db, workspace_id, update_fields["category_id"])
         update_fields["category_id"] = category.id
     if not update_fields:
