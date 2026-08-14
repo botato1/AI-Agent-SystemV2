@@ -394,6 +394,15 @@ class MeetingAttendeeResponse(BaseModel):
 class MeetingAttendeeListResponse(BaseModel):
     attendees: list[MeetingAttendeeResponse] = Field(default_factory=list)
 
+class MeetingActiveParticipantItem(BaseModel):
+    user_id: UUID
+    display_name: Optional[str] = None
+    profile_image_url: Optional[str] = None
+
+
+class MeetingActiveParticipantListResponse(BaseModel):
+    participants: list[MeetingActiveParticipantItem] = Field(default_factory=list)
+
 
 class AttendeeMappingRequest(BaseModel):
     user_ids: list[UUID] = Field(default_factory=list)
