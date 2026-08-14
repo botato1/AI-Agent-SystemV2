@@ -98,13 +98,11 @@ def create_room(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, na
     return row
 
 
-def list_rooms(db: Session, workspace_id: uuid.UUID) -> list[Room]:
-    return (
-        db.query(Room)
-        .filter(Room.workspace_id == workspace_id, Room.deleted_at.is_(None))
-        .all()
-    )
-
+def list_rooms(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID | None = None) -> list[Room]:
+    query = db.query(Room).filter(Room.workspace_id == workspace_id, Room.deleted_at.is_(None))
+    if category_id is not None:
+        query = query.filter(Room.category_id == category_id)
+    return query.all()
 
 def get_room_by_id(db: Session, room_id: uuid.UUID, workspace_id: uuid.UUID) -> Optional[Room]:
     return (
@@ -118,10 +116,11 @@ def get_room_by_id(db: Session, room_id: uuid.UUID, workspace_id: uuid.UUID) -> 
     )
 
 
-def update_room_name(db: Session, room_id: uuid.UUID, name: str) -> Optional[Room]:
+def update_room(db: Session, room_id: uuid.UUID, **fields) -> Optional[Room]:
     row = db.query(Room).filter(Room.id == room_id, Room.deleted_at.is_(None)).first()
     if row:
-        row.name = name
+        for k, v in fields.items():
+            setattr(row, k, v)
         db.commit()
         db.refresh(row)
     return row

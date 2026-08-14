@@ -59,3 +59,22 @@ def require_workspace_owner(db: Session, workspace_id: UUID, user_id: str):
         )
 
     return workspace
+
+def resolve_category(db: Session, workspace_id: UUID, category_id: UUID | None):
+    from backend.db.crud import room_crud
+
+    if category_id is None:
+        category = room_crud.get_default_category(db, workspace_id)
+    else:
+        category = room_crud.get_category(db, category_id)
+        if not category or category.workspace_id != workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="워크스페이스에 속하지 않는 카테고리입니다.",
+            )
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
+    return category

@@ -201,6 +201,7 @@ class RoomSchema(TimestampSchema, SoftDeleteSchema):
 class RoomResponse(ORMBaseSchema):
     id: UUID
     workspace_id: UUID
+    category_id: UUID
     name: str
     created_by: UUID
     created_at: datetime
