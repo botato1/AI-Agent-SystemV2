@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import os
 import uuid
+import time
 from pathlib import Path
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy.orm import Session
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.modules.rag.document_loader import load_document
+from backend.modules.post_meeting import llm_extractor
 from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
@@ -53,6 +56,101 @@ async def _request_stt(file_content: bytes, filename: str) -> dict:
         )
     response.raise_for_status()
     return response.json()
+
+def regenerate_summary_from_refined_transcript(
+    meeting_id: str, refined_data: dict,
+    max_wait_seconds: float = 300.0, poll_interval_seconds: float = 5.0,
+) -> None:
+    """정밀 재분석 완료 웹훅 수신 시 요약만 다시 생성해 갱신한다.
+
+    meeting_postprocess_node는 재실행하지 않는다 - 그 노드가 결정사항/할 일
+    추출까지 한 번에 묶여있어서, 여기서 다시 부르면 decision/task가 중복
+    생성될 위험이 있다(가동현 - 웹훅 반영 보류 사유). 대신 llm_extractor.extract()만
+    직접 호출해서 요약 관련 필드(full_summary/short_summary/discussion_points/
+    meeting_purpose/next_steps)만 갱신하고, topics/action_items는 버린다.
+
+    [수정 - 리뷰 반영] meeting_postprocess_node(백그라운드, 무거움)와 이 함수가
+    회의 종료 시점에 동시에 시작되는데, 둘 사이에 순서 보장이 없었다. postprocess가
+    이 함수보다 늦게 끝나면, 이 함수가 먼저 써놓은 재분석 기반 요약(+발송된 완료
+    알림)을 postprocess가 뒤늦게 실시간본 기준으로 조용히 덮어써버리는 문제가 있었음.
+    그래서 이 함수 진입 시 postprocess가 실제로 끝났는지(generation_status가
+    completed/failed) 확인하고, 아직 진행 중이면 짧게 재시도하며 기다린다. postprocess가
+    끝난 뒤에만 이 함수가 쓰기 때문에, 이후로는 아무도 이 값을 덮어쓰지 않는다.
+    """
+    db = SessionLocal()
+    try:
+        meeting_uuid = uuid.UUID(meeting_id)
+        waited = 0.0
+        while True:
+            db.expire_all()
+            summary_row = meeting_crud.get_meeting_summary(db, meeting_uuid)
+            if summary_row and summary_row.generation_status in ("completed", "failed"):
+                break
+            if waited >= max_wait_seconds:
+                print(
+                    f"[meeting_service] meeting_postprocess_node 완료 대기 타임아웃"
+                    f"({max_wait_seconds}s), 재분석 요약 갱신 스킵: meeting_id={meeting_id}"
+                )
+                return
+            time.sleep(poll_interval_seconds)
+            waited += poll_interval_seconds
+
+        segments = refined_data.get("segments", [])
+        if not segments:
+            print(f"[meeting_service] 재분석 세그먼트 없음, 요약 갱신 스킵: meeting_id={meeting_id}")
+            return
+
+        indexed_transcript = "\n".join(
+            f"[{i}][{seg.get('speaker') or 'unknown'}] {seg.get('text', '')}"
+            for i, seg in enumerate(segments)
+        )
+
+        extraction = llm_extractor.extract(indexed_transcript)
+        if not extraction.get("full_summary"):
+            print(f"[meeting_service] 재분석 요약 생성 실패, 갱신 스킵: meeting_id={meeting_id}")
+            return
+
+        meeting = meeting_crud.get_meeting(db, meeting_uuid)
+        if not meeting:
+            print(f"[meeting_service] 재분석 요약 갱신 대상 회의를 찾을 수 없음: meeting_id={meeting_id}")
+            return
+
+        meeting_crud.upsert_summary(
+            db,
+            meeting_uuid,
+            meeting_purpose=extraction["meeting_purpose"],
+            full_summary=extraction["full_summary"],
+            short_summary=extraction["short_summary"],
+            discussion_points=extraction["discussion_points"],
+            next_steps=extraction["next_steps"],
+            generation_status="completed",
+            generated_at=datetime.now(timezone.utc),
+        )
+
+        # [수정 - 리뷰 반영] create_notification 기본값(commit=True)을 그대로 쓰면
+        # 멤버 수만큼 개별 커밋이 일어나서, 중간에 실패하면 일부 멤버만 알림을 받은
+        # 채로 남는다. post_meeting/pipeline.py와 동일하게 commit=False로 쌓고
+        # 마지막에 한 번만 커밋한다.
+        for member, _user in workspace_crud.list_members(db, meeting.workspace_id):
+            if not notification_crud.is_notification_enabled(
+                db, meeting.workspace_id, member.user_id, "meeting_summary_ready",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=meeting.workspace_id,
+                type="meeting_summary_ready", title="회의 요약 개선 완료",
+                message=f"'{meeting.title}' 회의 요약이 더 정확한 내용으로 갱신됐습니다.",
+                ref_type="meeting", ref_id=meeting.id,
+                commit=False,
+            )
+        db.commit()
+
+        print(f"[meeting_service] 재분석본 기준 요약 갱신 완료: meeting_id={meeting_id}")
+    except Exception as e:
+        db.rollback()
+        print(f"[meeting_service] 재분석본 요약 갱신 실패: meeting_id={meeting_id}, error={repr(e)}")
+    finally:
+        db.close()
 
 
 def _save_segments_bulk(
