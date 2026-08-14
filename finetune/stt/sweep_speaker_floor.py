@@ -53,12 +53,13 @@ def sh(cmd: str) -> str:
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
 
 
-def restart(floor: str) -> bool:
+def restart(floor: str, extra_env: str = "") -> bool:
+    """서버를 지정한 설정으로 다시 띄운다. extra_env는 'K=V K2=V2' 형태."""
     sh("kill $(pgrep -f 'uvicorn stt.main:app') 2>/dev/null")
     time.sleep(5)
     subprocess.Popen(
         f"cd {os.path.join(_REPO_ROOT, 'backend', 'modules')} && "
-        f"SPEAKER_ABSOLUTE_FLOOR={floor} nohup python -u -m uvicorn stt.main:app "
+        f"SPEAKER_ABSOLUTE_FLOOR={floor} {extra_env} nohup python -u -m uvicorn stt.main:app "
         f"--host 0.0.0.0 --port 8002 >> /tmp/stt.log 2>&1 &", shell=True,
     )
     for _ in range(40):
@@ -132,6 +133,9 @@ def main():
     parser.add_argument("--holdout", required=True, help="B조건에서 후보에서 뺄 사람")
     parser.add_argument("--floors", nargs="+", default=FLOORS,
                         help="잴 하한 값들. 확인 단계에서는 후보값과 기준선만 주면 빠르다")
+    parser.add_argument("--extra-env", nargs="*", default=[],
+                        help="서버에 함께 넘길 환경변수. 'K=V' 형태로 여러 개. "
+                             "하한 외의 설정을 A/B 할 때 쓴다")
     args = parser.parse_args()
     floors = args.floors
 
@@ -144,8 +148,9 @@ def main():
 
     rows = []
     for floor in floors:
-        print(f"\n{'=' * 70}\n하한 {floor}\n{'=' * 70}")
-        if not restart(floor):
+        label = f"하한 {floor}" + (f"  [{' '.join(args.extra_env)}]" if args.extra_env else "")
+        print(f"\n{'=' * 70}\n{label}\n{'=' * 70}")
+        if not restart(floor, " ".join(args.extra_env)):
             print("  ❌ 서버가 안 뜬다 — 중단"); break
 
         print("  A) 참석자 전원 후보...")

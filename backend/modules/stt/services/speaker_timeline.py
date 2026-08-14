@@ -191,6 +191,11 @@ def build_speaker_timeline(
 # 3창 다수결은 약 2.5초보다 짧은 발언을 지운다.
 _MIN_SUBTURN_SEC = float(os.getenv("SPEAKER_MIN_SUBTURN_SEC", "1.0"))
 
+# 미상 구간을 화자 경계로 인정할지. 기본값은 종전 동작(끔) — 4개 회의 cpCER로
+# 검증한 뒤에 바꾼다. split_turns_by_timeline의 주석에 근거가 있다.
+SPEAKER_UNKNOWN_AS_BOUNDARY = os.getenv(
+    "SPEAKER_UNKNOWN_AS_BOUNDARY", "0").strip().lower() not in ("0", "false", "no")
+
 
 def split_turns_by_timeline(
     turns: list[dict], timeline: EnrolledSpeakerTimeline,
@@ -220,13 +225,28 @@ def split_turns_by_timeline(
 
     for turn in turns:
         # 짧게 스친 사람은 경계로 치지 않는다(맞장구 하나로 회의록이 부서지면 안 된다)
+        #
+        # 미상(None) 구간을 경계로 칠지는 SPEAKER_UNKNOWN_AS_BOUNDARY가 정한다.
+        #
+        # 왜 선택지로 두는가 (2026-08-13~14 실측):
+        #   미상을 버리면 그 구간이 옆 사람 세그먼트로 흡수돼 **남의 이름을 달게 된다.**
+        #   회의 ba8f38c4에서 이승주의 1.7초 발언이 문지수 발언으로 기록됐고, 모순 감지
+        #   입장에서는 같은 사람이 자기 말을 뒤집은 것처럼 보인다 — 이름이 없는 것보다 나쁘다.
+        #
+        #   유사도가 낮은 발화에 억지로 이름을 붙이려는 시도는 전부 실패했다(문턱 0.30/0.25/
+        #   0.15, 점수 정규화, 회의 내 프로필 적응 — 넷 다 회의를 넓히니 기각). 남은 길은
+        #   **미상으로 두되 흡수되지 않게 하는 것**이다.
+        #
+        #   다만 미상 구간이 실제로는 한 사람의 발화 중 판정만 실패한 지점일 수도 있어,
+        #   그 경우 멀쩡한 턴이 셋으로 쪼개진다. 그래서 켜고 끄며 재보게 두었다.
         runs = [
             run for run in timeline.runs_in(turn["start"], turn["end"])
-            if run[2] is not None and run[1] - run[0] >= min_subturn_sec
+            if (run[2] is not None or SPEAKER_UNKNOWN_AS_BOUNDARY)
+            and run[1] - run[0] >= min_subturn_sec
         ]
         # 걸러낸 뒤 같은 사람이 이어지면 하나로 되돌린다 — 안 그러면 "A···(짧은 맞장구)···A"를
         # A 두 조각으로 쪼개게 된다. 같은 사람을 둘로 나누는 건 아무 의미가 없다.
-        merged_runs: list[tuple[float, float, str]] = []
+        merged_runs: list[tuple[float, float, str | None]] = []
         for run in runs:
             if merged_runs and merged_runs[-1][2] == run[2]:
                 merged_runs[-1] = (merged_runs[-1][0], run[1], run[2])
