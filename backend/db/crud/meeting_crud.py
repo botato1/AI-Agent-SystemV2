@@ -247,15 +247,15 @@ def list_open_tasks(db: Session, workspace_id: uuid.UUID) -> list[Task]:
         .all()
     )
 
-def list_tasks(db: Session, workspace_id: uuid.UUID, include_done: bool = False) -> list[Task]:
-    """워크스페이스의 할 일 목록을 조회한다.
-    include_done=False(기본)면 open/in_progress만, True면 done/cancelled/suggested까지 전부 포함."""
+def list_tasks(db: Session, workspace_id: uuid.UUID, include_done: bool = False, category_id: uuid.UUID | None = None) -> list[Task]:
     query = db.query(Task).filter(
         Task.workspace_id == workspace_id,
         Task.deleted_at.is_(None),
     )
     if not include_done:
         query = query.filter(Task.status.in_(["open", "in_progress"]))
+    if category_id is not None:
+        query = query.filter(Task.category_id == category_id)
     return query.all()
 
 
