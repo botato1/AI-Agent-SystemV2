@@ -172,8 +172,15 @@ async def _process_segment_analysis(
         )
         if judgment_result:
             try:
-                async with send_lock:
-                    await websocket.send_json({
+                if judgment_result.get("judgment_case") == "decision_reminder":
+                    payload = {
+                        "type": "decision_reminder",
+                        "statement_text": statement_text,
+                        "display_message": judgment_result["message"],
+                        "decision_id": judgment_result.get("decision_id"),
+                    }
+                else:
+                    payload = {
                         "type": "contradiction_alert",
                         "contradiction_id": judgment_result["contradiction_id"],
                         "statement_text": statement_text,
@@ -181,7 +188,9 @@ async def _process_segment_analysis(
                         "source": "decision",
                         "judgment_case": judgment_result.get("judgment_case"),
                         "actions": judgment_result.get("actions", []),
-                    })
+                    }
+                async with send_lock:
+                    await websocket.send_json(payload)
             except Exception as e:
                 print(f"[meeting_ws_router] decision 모순 알림 전송 실패: {repr(e)}")
 
@@ -305,6 +314,29 @@ async def _relay_frontend_to_stt(websocket: WebSocket, stt_client: SttStreamClie
 
 _MEETING_SPEAKER_MAPS: dict[uuid.UUID, dict[str, uuid.UUID]] = {}
 _VIEWER_CONNECTIONS: dict[uuid.UUID, list[WebSocket]] = {}
+_ACTIVE_PARTICIPANTS: dict[uuid.UUID, dict[uuid.UUID, int]] = {}
+
+def _add_active_participant(meeting_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    participants = _ACTIVE_PARTICIPANTS.setdefault(meeting_id, {})
+    participants[user_id] = participants.get(user_id, 0) + 1
+
+def _remove_active_participant(meeting_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    participants = _ACTIVE_PARTICIPANTS.get(meeting_id)
+    if not participants:
+        return
+    remaining = participants.get(user_id, 1) - 1
+    if remaining <= 0:
+        participants.pop(user_id, None)
+    else:
+        participants[user_id] = remaining
+    if not participants:
+        _ACTIVE_PARTICIPANTS.pop(meeting_id, None)
+
+def get_active_participant_ids(meeting_id: uuid.UUID) -> list[uuid.UUID]:
+    """지금 이 회의 WS(녹음 연결 또는 뷰어 연결)에 붙어있는 사용자 id 목록.
+    같은 사용자가 여러 탭으로 접속해도 한 번만 반환된다."""
+    return list(_ACTIVE_PARTICIPANTS.get(meeting_id, {}).keys())
+
 
 async def _broadcast_to_viewers(meeting_id: uuid.UUID, data: dict) -> None:
     viewers = _VIEWER_CONNECTIONS.get(meeting_id)
@@ -421,9 +453,11 @@ async def meeting_stream_ws(
         return
 
     await websocket.accept()
+    connected_user_id = uuid.UUID(payload["sub"])
 
     if payload.get("view_only"):
         _VIEWER_CONNECTIONS.setdefault(meeting_id, []).append(websocket)
+        _add_active_participant(meeting_id, connected_user_id)
         try:
             while True:
                 message = await websocket.receive()
@@ -435,6 +469,7 @@ async def meeting_stream_ws(
                 viewers.remove(websocket)
                 if not viewers:
                     _VIEWER_CONNECTIONS.pop(meeting_id, None)
+            _remove_active_participant(meeting_id, connected_user_id)
             try:
                 await websocket.close()
             except Exception:
@@ -486,6 +521,7 @@ async def meeting_stream_ws(
     recording_file = _open_recording_file(meeting_id, participant_name, offset_ms)
 
     _register_connection(meeting_id)
+    _add_active_participant(meeting_id, connected_user_id)
     paused_event = _PAUSED_STREAMS.get(meeting_id)
     if paused_event is None:
         paused_event = asyncio.Event()
@@ -517,6 +553,7 @@ async def meeting_stream_ws(
             task.cancel()
     finally:
         is_last = _unregister_connection(meeting_id)
+        _remove_active_participant(meeting_id, connected_user_id)
         if is_last:
             _PAUSED_STREAMS.pop(meeting_id, None)
             _MEETING_SPEAKER_MAPS.pop(meeting_id, None)

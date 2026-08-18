@@ -24,9 +24,11 @@ class MeetingPostprocessState(CommonState, total=False):
     segment_chroma_ids: NotRequired[list[str]]
 
     # 회의 요약 생성
+    meeting_purpose: NotRequired[str]
     full_summary: NotRequired[str]
     short_summary: NotRequired[str]
     discussion_points: NotRequired[Any]
+    next_steps: NotRequired[str]
     summary_model_name: NotRequired[str]
     summary_generation_status: NotRequired[GenerationStatus]
     summary_generation_error: NotRequired[str]

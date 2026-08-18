@@ -16,6 +16,7 @@ from backend.schemas.contradiction_schema import (
     ContradictionListResponse,
     ContradictionResolveRequest,
     ChangeSummaryDraftSchema,
+    ContradictionUpdateRequest,
 )
 from backend.schemas.type_schema import ContradictionStatus
 
@@ -52,14 +53,19 @@ def _check_meeting_not_recording(db: Session, contradiction) -> None:
             detail="회의가 진행 중일 때는 모순을 처리할 수 없습니다. 회의 종료 후 처리해주세요.",
         )
     
-def _check_not_chat_sourced(contradiction) -> None:
-    """채팅발 모순은 알림 전용 — resolve/dismiss 처리 자체를 막는다.
-    이유: 반영 시 RAG(decision_collection) 재인덱싱이 안 되는 문제 때문에
-    회의처럼 실제로 변경을 확정하는 액션을 아직 지원할 수 없음."""
-    if contradiction.source_type == "room_message":
+def _check_not_chat_sourced(contradiction, resolution_type: str | None = None) -> None:
+    """채팅발 모순 중, decision 변경을 실제로 확정(전이)하는 조합만 막는다.
+    change_acknowledged + reference_type='decision'이면 decisions 테이블 전이가
+    일어나는데 RAG(decision_collection) 재인덱싱이 안 됨 - dismiss/keep_reference/
+    문서(content_chunk) 참조는 이 경로를 안 타므로 막을 이유 없음."""
+    if (
+        contradiction.source_type == "room_message"
+        and contradiction.reference_type == "decision"
+        and resolution_type == "change_acknowledged"
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="채팅에서 감지된 모순은 알림 용도로만 제공됩니다. 처리하려면 회의에서 다시 확인해주세요.",
+            detail="채팅에서 감지된 결정 변경은 아직 반영할 수 없습니다. 회의에서 다시 확인해주세요.",
         )
 
 
@@ -122,6 +128,8 @@ def _to_contradiction_schema(db: Session, contradiction) -> ContradictionSchema:
     if source_meeting:
         schema.source_meeting_title = source_meeting.title
         schema.source_meeting_time = source_meeting.started_at
+        if contradiction.source_type == "meeting_segment":
+            schema.meeting_id = source_meeting.id
 
     reference_meeting = _resolve_reference_meeting(db, contradiction)
     if reference_meeting:
@@ -206,13 +214,15 @@ def resolve_contradiction_api(
             detail="이미 처리된 모순입니다.",
         )
     _check_meeting_not_recording(db, contradiction)
-    _check_not_chat_sourced(contradiction)    
-
+    _check_not_chat_sourced(contradiction, request.resolution_type)
+    
     resolution = contradiction_crud.resolve_contradiction(
         db,
         contradiction_id=contradiction_id,
         resolved_by=uuid.UUID(current_user_id),
         resolution_type=request.resolution_type,
+        new_decision_text=request.new_decision_text,
+        new_decision_reason=request.new_decision_reason,
         note=request.note,
     )
 
@@ -227,7 +237,7 @@ def resolve_contradiction_api(
             resolution_id=resolution.id,
             context_type=context_type,
             original_reference_text=contradiction.reference_text_snapshot,
-            accepted_change_text=contradiction.statement_text_snapshot,
+            accepted_change_text=request.new_decision_text or contradiction.statement_text_snapshot,
         )
         # 요약 생성은 백그라운드로 — 응답은 draft가 pending인 채로 바로 나가고,
         # 프론트는 GET .../change-summary로 완료 여부를 폴링한다.
@@ -236,6 +246,13 @@ def resolve_contradiction_api(
             contradiction_id=str(contradiction_id),
             workspace_id=str(workspace_id),
             category_id=str(contradiction.category_id),
+        )
+        # [추가 - 리뷰 반영] 한 줄 요약 패치용 LLM 호출도 위와 동일한 이유로
+        # 백그라운드로 - contradiction_crud.regenerate_short_summary_after_change()가
+        # 자체 DB 세션을 열고 닫으므로 여기서 db를 넘길 필요 없음.
+        background_tasks.add_task(
+            contradiction_crud.regenerate_short_summary_after_change,
+            contradiction_id=contradiction_id,
         )
 
     updated = contradiction_crud.get_contradiction(db, contradiction_id)
@@ -259,7 +276,6 @@ def dismiss_contradiction_api(
             detail="이미 처리된 모순입니다.",
         )
     _check_meeting_not_recording(db, contradiction)
-    _check_not_chat_sourced(contradiction)
     
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
     return _to_contradiction_schema(db, updated)
@@ -308,4 +324,36 @@ def reopen_contradiction_api(
         )
 
     updated = contradiction_crud.reopen_contradiction(db, contradiction_id)
+    return _to_contradiction_schema(db, updated)
+
+
+# 잘못 감지된 모순 내용 수정
+@router.patch("/{contradiction_id}", response_model=ContradictionSchema)
+def update_contradiction_api(
+    workspace_id: uuid.UUID,
+    contradiction_id: uuid.UUID,
+    request: ContradictionUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    contradiction = _get_contradiction_or_404(db, contradiction_id, workspace_id)
+
+    if request.statement_text_snapshot is None and request.reference_text_snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="수정할 내용이 없습니다.",
+        )
+    if contradiction.status != "unresolved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 처리된 모순입니다.",
+        )
+    _check_meeting_not_recording(db, contradiction)
+
+    updated = contradiction_crud.update_contradiction_snapshots(
+        db, contradiction_id,
+        statement_text_snapshot=request.statement_text_snapshot,
+        reference_text_snapshot=request.reference_text_snapshot,
+    )
     return _to_contradiction_schema(db, updated)

@@ -88,6 +88,62 @@ def normalize_query(user_input: str) -> str:
     return response_text
 
 
+# [추가] AI chat 검색용 쿼리 재작성. "아 근데 코드리뷰 규칙 뭐였는지 기억이 안
+# 나는데 그것만 따로 알려줄 수 있어?"처럼 대화체 발화를 그대로 벡터 검색
+# query_text로 넘기면, 잡담성 토큰("아 근데"/"기억이 안 나는데"/"알려줄 수
+# 있어?")이 임베딩을 흐려서 핵심 키워드("코드리뷰 규칙")와의 유사도가 낮아지는
+# 문제가 있음. 임계값을 낮추는 건 오탐만 늘리는 미봉책이라, 임베딩 전에 핵심
+# 검색 의도만 추출하는 전처리로 해결한다 - normalize_query()(은어/약어 변환)와
+# 같은 "다운스트림에 맞게 발화를 다듬는 전처리" 계열이지만 다루는 노이즈
+# 종류가 다름(용어 치환 vs 잡담 제거)이라 별도 함수로 둔다.
+#
+# [설계] Model1(LIGHT)+프롬프트만 사용, 파인튜닝 없음 - "테스트 먼저, 부족하면
+# 그때 파인튜닝" 원칙 적용. Model2(HEAVY)는 실시간성 없는 post-meeting 전용이라
+# 매 채팅 요청마다 도는 이 전처리엔 안 맞음.
+#
+# [연결 필요] 이 함수 자체는 여기(내 파일)서 만들지만, 실제로 search_hybrid()
+# 호출부에 연결하는 건 backend/graphs/nodes/ai_chat_answer.py(내 파일 아님) 쪽
+# 작업이라 별도 요청 필요.
+EXTRACT_SEARCH_QUERY_INSTRUCTION = (
+    "아래는 사용자가 채팅으로 입력한 대화체 발화이다. 이 발화를 문서 검색에 쓸 "
+    "핵심 쿼리로 압축하라.\n\n"
+    "[규칙]\n"
+    "- 감탄사, 완곡 표현, \"기억이 안 나는데\"/\"알려줄 수 있어?\" 같은 대화체 "
+    "군더더기는 제거하고, 실제로 찾고 싶은 대상(주제/용어/개체명)만 남겨라.\n"
+    "- 발화에 없는 내용을 추측해서 추가하지 마라.\n"
+    "- 이미 짧고 핵심만 있는 발화면 그대로 반환해라.\n"
+    "- 결과는 완전한 문장이 아니어도 된다 (구/명사구 형태 권장).\n\n"
+    '다음 JSON 형식으로만 답하라: {"query": "..."}'
+)
+
+
+def extract_search_query(user_message: str) -> str:
+    """대화체 발화에서 벡터 검색용 핵심 쿼리만 추출. 실패 시 원문 그대로 반환
+    (검색 자체가 아예 안 되는 것보다는 잡음 섞인 원문으로라도 검색하는 게 낫다).
+
+    [수정 - 82서버 테스트에서 발견] _call_ollama()의 중국어 감지·재시도(최대 2회)를
+    거치고도 중국어가 섞인 채로 반환되는 경우가 있었음(예: "DB,选用"). 이런 응답도
+    문법적으론 유효한 JSON이라 파싱 자체는 성공하므로, 파싱 성공 여부만으로는
+    걸러지지 않는다 - normalize_query()와 동일하게 has_chinese() 체크를 추가해
+    원문으로 폴백시킨다."""
+    prompt = f"{EXTRACT_SEARCH_QUERY_INSTRUCTION}\n\n발화: {user_message}"
+    try:
+        raw = _call_ollama(prompt, timeout=30.0, model=OLLAMA_MODEL_LIGHT,
+                            response_format="json", temperature=0)
+        parsed = json.loads(raw)
+        query = parsed.get("query")
+        if not (isinstance(query, str) and query.strip()):
+            return user_message
+        query = query.strip()
+        if has_chinese(query):
+            print(f"[extract_search_query] 중국어 감지 → 원문으로 폴백: {query!r}")
+            return user_message
+        return query
+    except Exception as e:
+        print(f"[extract_search_query] 쿼리 추출 실패, 원문으로 폴백: {repr(e)}")
+        return user_message
+
+
 # ── 의도 분류 (4개 카테고리로 단순화) ──────────────────────────
 VALID_INTENTS = [
     "task_from_rag",      # RAG 자료(회의록/문서) 기반 할일 추출
@@ -221,6 +277,7 @@ def _call_ollama(
     timeout: float = 150.0,
     model: str = OLLAMA_MODEL_LIGHT,
     response_format: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """
     Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회).
@@ -234,14 +291,27 @@ def _call_ollama(
     쓰는 호출부(contradiction_detect 등)가 이 공용 함수를 쓰면서도 기존의
     format:json 보장을 잃지 않게 하기 위함. 기본값 None이면 payload에 아예
     포함하지 않으므로 기존 호출부 동작은 그대로다.
+
+    [추가] temperature 인자 추가. 기본값 None이면 Ollama 기본값(모델 Modelfile에
+    별도 설정 없으면 0.8 근처)이 그대로 적용되어, 완전히 같은 입력에도 매번 다른
+    출력이 나올 수 있다. 실시간 판단 파이프라인(decision_judgment.py)처럼 같은
+    입력에는 항상 같은 판단이 나와야 하는 호출부는 temperature=0으로 명시해서
+    호출해야 한다 - 재현성이 필요 없는 다른 호출부(채팅 답변, 요약 등)는 기본값
+    그대로 두면 기존 동작이 안 바뀐다.
     """
     # 프롬프트 끝에 한국어 강제 지시 추가
     ko_suffix = "\n\n[중요] 반드시 한국어로만 답하세요. 중국어 사용 절대 금지."
 
     def _payload(p: str) -> dict:
-        body = {"model": model, "prompt": p, "stream": False}
+        # [추가] keep_alive - 모델을 GPU 메모리에 계속 상주시켜 호출마다 재로드되는
+        # 오버헤드를 없앤다. 실시간 판단 파이프라인처럼 발화 하나당 여러 번 순차
+        # 호출하는 경우, 이게 없으면 매 호출이 로드→추론→언로드를 반복해 체감
+        # 지연이 크게 늘어난다.
+        body = {"model": model, "prompt": p, "stream": False, "keep_alive": "30m"}
         if response_format is not None:
             body["format"] = response_format
+        if temperature is not None:
+            body["options"] = {"temperature": temperature}
         return body
 
     response = httpx.post(

@@ -39,8 +39,12 @@ RUN mkdir -p storage/sqlite storage/uploads
 # 포트 개방
 EXPOSE 8000
 
-# 서버 실행 (운영 환경용 워커 4개) @@@@@#예시# 서버 GPU환경 확인 필요@@@@@@@@@
+# [수정 - 지수 리포트] 워커 4개(멀티프로세스)에서는 meeting_ws_router.py의
+# _VIEWER_CONNECTIONS/_MEETING_SPEAKER_MAPS가 프로세스 로컬 dict라 워커마다
+# 따로 놀아서, 이벤트를 처리하는 워커와 WS 연결을 든 워커가 다르면 실시간
+# push가 조용히 유실됨. Redis pub/sub 등 프로세스 간 공유로 가기 전까지
+# 임시로 워커 1개로 낮춰 정합성을 우선한다 (동시처리량 저하 트레이드오프 있음).
 CMD ["uvicorn", "backend.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "4"]
+     "--workers", "1"]

@@ -33,7 +33,7 @@ reasoned_change/unreasoned_change로 구분한다. 팝업은 세션 내 (decisio
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -126,7 +126,15 @@ TOPIC_MATCH_INPUT_TEMPLATE = """[과거 의사결정]
 
 
 def _ask_judgment_step(key: str, decision_text: str, decision_reason: str, statement: str) -> bool:
-    """JUDGMENT_MODEL에게 단계 하나(key)만 물어서 bool로 반환. 실패 시 False."""
+    """JUDGMENT_MODEL에게 단계 하나(key)만 물어서 bool로 반환. 실패 시 False.
+
+    [수정] temperature=0 명시 - 기본값(Ollama 기본 0.8 근처)이면 완전히 같은 발화를
+    두 번 판단시켜도 결과가 달라질 수 있다. 특히 STT가 같은 구간에 대해 "final"을
+    중복으로 보내는 경우(세그먼트 저장 쪽엔 중복 방지가 없음), 두 번째 판단이
+    첫 번째와 다른 case로 나오면서 서로 다른 팝업이 중복으로 뜨는 문제가 있었다.
+    temperature=0이면 같은 입력→같은 출력이 보장되어, 기존 dedup(같은 decision·
+    같은 case면 세션당 1회)이 정상적으로 두 번째를 걸러준다.
+    """
     input_text = JUDGMENT_INPUT_TEMPLATE.format(
         decision_text=decision_text, decision_reason=decision_reason, statement=statement,
     )
@@ -134,7 +142,7 @@ def _ask_judgment_step(key: str, decision_text: str, decision_reason: str, state
         f"{JUDGMENT_STEP_INSTRUCTIONS[key]}\n\n{input_text}\n\n"
         f'반드시 다음 JSON 형식으로만 답하라 (다른 설명 금지):\n{{\n  "{key}": true/false\n}}'
     )
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
+    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
     try:
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
@@ -154,15 +162,136 @@ def _ask_topic_match(decision_text: str, decision_reason: str, statement: str) -
     # (학습 데이터의 instruction 필드와 동일한 형식), 여기서 별도로 스펙을
     # 덧붙이지 않는다 - instruction 뒤에 input만 붙이는 게 학습 형식과 일치한다.
     prompt = f"{TOPIC_MATCH_INSTRUCTION}\n\n{input_text}"
-    raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL)
+    # temperature=0 명시 이유는 _ask_judgment_step() 주석 참조 - 같은 입력에는
+    # 항상 같은 판단이 나와야 dedup이 제대로 동작한다.
+    #
+    # [수정 - 리뷰 반영] _call_ollama() 호출이 try 밖에 있어서 네트워크/타임아웃 등
+    # httpx 예외가 그대로 던져지던 버그. _extract_change_reason()이 겪었던 것과 동일한
+    # 패턴 - decision_transition.py가 이 함수를 topic 1개당 최대 5회까지 호출하게
+    # 되면서 (해당 파일의 process_topics() 루프엔 try/except가 없음) 예외가
+    # meeting_postprocess_node의 최상위 except까지 전파되어 회의 후처리 전체(요약·
+    # 모든 결정사항·모든 할 일)가 실패 처리되는 문제로 이어질 수 있어 수정.
     try:
+        raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             return False
         parsed = json.loads(raw[start : end + 1])
         return bool(parsed.get("same_topic", False))
-    except (json.JSONDecodeError, ValueError):
+    except Exception as e:
+        print(f"[decision_judgment] topic_match 실패, 매칭 안 된 것으로 보수적 처리: {repr(e)}")
         return False
+
+
+# [추가 - 리뷰 반영, 2026.08.10] Case 2 팝업의 "이유" 필드 버그 수정용.
+# create_contradiction()에 reason=decision.reason(기존 결정의 사유)을 그대로
+# 넘기고 있었는데, 이건 "왜 예전에 그렇게 정했는지"지 "왜 지금 바뀌는지"가
+# 아님 - 기존 결정에 사유가 없으면 근거가 명확히 확인된 Case 2인데도 "사유
+# 미기재"로 뜨고, 있어도 다른 필드(기존 내용)와 내용이 겹쳐 보였음.
+# reason_is_clear 판단 단계는 bool만 반환하므로, 근거가 명확하다고 판단된
+# 경우(Case 2)에만 별도로 그 근거 텍스트 자체를 짧게 추출한다.
+#
+# [수정 - 2026.08.12 라이브 테스트 발견] statement가 단독 발화 하나뿐이라 실제
+# 근거는 다른 화자의 이전 turn에 있고 이 발화 자체엔 근거가 없는 경우, 기존
+# instruction이 "발화가 근거를 담고 있다"고 단정해서 물어봐서 LLM이 없는 근거를
+# 지어내는(할루시네이션) 문제가 실측으로 확인됨 (예: "리랭킹은 보류하고 질의
+# 확장을 먼저 넣는 걸로 확정하겠습니다"만 보고 대본에 없는 "질문 분야가
+# 명확해져 처리가 용이해서"를 만들어냄). "언급하고 있다면"으로 전제를 완화하고,
+# 근거가 실제로 없으면 지어내지 말고 원문을 그대로 반환하라는 탈출구를 명시.
+REASON_EXTRACT_INSTRUCTION = (
+    "아래는 회의/채팅에서 방금 나온 발화이다. 이 발화가 기존 결정과 다른 새 값을 "
+    "제시하면서 왜 바뀌는지 근거/이유도 명시적으로 언급하고 있다면, 그 부분만 "
+    "간결하게(20자 내외) 추출하라. 근거가 여러 개면 핵심만 요약하라. "
+    "발화 안에 근거가 실제로 언급되어 있지 않다면 절대로 지어내지 말고, "
+    "반드시 발화 원문을 그대로 반환하라."
+)
+
+REASON_EXTRACT_INPUT_TEMPLATE = """[발화]
+{statement}"""
+
+
+def _extract_change_reason(statement: str) -> str:
+    """Case 2(근거 명확)로 판단된 발화에서 근거 텍스트만 짧게 추출.
+    실패 시 발화 원문을 그대로 반환(빈 값보다는 원문이 나음 - 최소한 근거가
+    포함된 전체 맥락은 보여줄 수 있음).
+
+    [수정 - 리뷰 반영] _call_ollama() 호출까지 try 안으로 넣고 except를
+    Exception으로 넓힘. 원래는 JSON 파싱 실패만 잡고 있었는데, _call_ollama()
+    자체는 내부에 try/except가 없어 네트워크/타임아웃 시 httpx 예외를 그대로
+    던진다 - 이 호출부가 try 밖에 있으면 그 예외가 judge() -> run_judgment_
+    pipeline()의 최상위 except까지 안 잡히고 올라가서, 이미 끝난 Case 2 감지
+    자체(create_contradiction 호출 전)가 통째로 유실된다. 근거 추출은 부가
+    정보일 뿐이므로, 어떤 이유로 실패하든 원문 폴백으로 안전하게 넘어가야 한다.
+    """
+    input_text = REASON_EXTRACT_INPUT_TEMPLATE.format(statement=statement)
+    prompt = (
+        f"{REASON_EXTRACT_INSTRUCTION}\n\n{input_text}\n\n"
+        f'반드시 다음 JSON 형식으로만 답하라 (다른 설명 금지):\n{{\n  "reason": "..."\n}}'
+    )
+    try:
+        raw = _call_ollama(prompt, timeout=60.0, model=JUDGMENT_MODEL, temperature=0)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            return statement
+        parsed = json.loads(raw[start : end + 1])
+        reason = parsed.get("reason")
+        return reason.strip() if isinstance(reason, str) and reason.strip() else statement
+    except Exception as e:
+        print(f"[decision_judgment] 근거 추출 실패, 원문으로 폴백: {repr(e)}")
+        return statement
+
+
+# [추가 - 리뷰 반영] Case 0/2/3 메시지에 decision.decided_at(datetime)을 그대로
+# f-string에 넣으면 마이크로초(.831488)/타임존 오프셋(+00:00)까지 그대로
+# 노출된다. 이 메시지가 popup["message"]로 Notification 저장용과 WS push용
+# 양쪽에 동일하게 재사용되므로, 포맷 함수 하나로 통일해서 앞으로 이런
+# 불일치가 다시 안 생기게 한다.
+#
+# [수정 - 리뷰 반영] decided_at은 DateTime(timezone=True) 컬럼에 UTC로
+# 저장됨(decision_transition.py가 datetime.now(timezone.utc) 사용). 변환 없이
+# 바로 strftime하면 KST 새벽 0~9시 사이에 결정된 항목은 날짜가 하루 전으로
+# 잘못 표시됨 - astimezone(KST) 거친 뒤 포맷하도록 수정.
+KST = timezone(timedelta(hours=9))
+
+
+def _format_decided_at(decided_at) -> str:
+    if decided_at is None:
+        return "날짜 미상"
+    return decided_at.astimezone(KST).strftime("%Y-%m-%d")
+
+
+# [추가 - 팀 결정] Case 0(재확인/질문)과 Case 1(새 값처럼 말했지만 사실상 기존
+# 결정과 동일)은 둘 다 "이미 이렇게 결정된 이력이 있다"는 같은 성격의 FYI라,
+# 같은 decision_reminder 팝업을 공유한다. 세션당 1회 dedup도 case 구분 없이
+# reference_decision_id 하나로 공유 - 어느 쪽이 먼저 뜨든 같은 문구가 두 번
+# 뜨는 건 의미가 없으므로 의도된 동작이다.
+def _decision_reminder_result(
+    db: Session, *, case: str, workspace_id: uuid.UUID, category_id: uuid.UUID,
+    source_type: str, decision: "Decision", session_kwargs: dict,
+) -> dict:
+    already_shown = history_crud.already_notified_in_session(
+        db, reference_decision_id=decision.id, **session_kwargs
+    )
+    if already_shown:
+        return {"case": case, "popup": None, "decision_id": str(decision.id)}
+
+    history_crud.record_match(
+        db,
+        workspace_id=workspace_id, category_id=category_id,
+        source_type=source_type, match_type="decision_reminder",
+        reference_decision_id=decision.id,
+        confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
+        **session_kwargs,
+    )
+    return {
+        "case": case,
+        "popup": {
+            "type": "decision_reminder",
+            "message": f"이미 '{decision.decision_text}'로 결정된 이력이 있습니다"
+                       f" ({_format_decided_at(decision.decided_at)}, {decision.reason or '사유 미기재'})",
+        },
+        "decision_id": str(decision.id),
+    }
 
 
 def _get_candidate_decisions(
@@ -244,36 +373,23 @@ def judge(
 
     if not presents_new_value:
         # Case 0: 리마인더 - 세션당 1회
-        already_shown = history_crud.already_notified_in_session(
-            db, reference_decision_id=decision.id, **session_kwargs
+        return _decision_reminder_result(
+            db, case="0", workspace_id=workspace_id, category_id=category_id,
+            source_type=source_type, decision=decision, session_kwargs=session_kwargs,
         )
-        if already_shown:
-            return {"case": "0", "popup": None, "decision_id": str(decision.id)}
-
-        history_crud.record_match(
-            db,
-            workspace_id=workspace_id, category_id=category_id,
-            source_type=source_type, match_type="decision_reminder",
-            reference_decision_id=decision.id,
-            confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
-            **session_kwargs,
-        )
-        return {
-            "case": "0",
-            "popup": {
-                "type": "decision_reminder",
-                "message": f"이미 '{decision.decision_text}'로 결정된 이력이 있습니다"
-                           f" ({decision.decided_at}, {decision.reason or '사유 미기재'})",
-            },
-            "decision_id": str(decision.id),
-        }
 
     # 2단계: 값이 같은가?
     same_as_existing = _ask_judgment_step("same_as_existing", decision_text, decision_reason, statement)
 
     if same_as_existing:
-        # Case 1: 팝업 없음
-        return {"case": "1", "popup": None, "decision_id": str(decision.id)}
+        # [수정 - 팀 결정] Case 1: 새 값을 제시하는 것처럼 말했지만 실제로는 기존
+        # 결정과 같은 내용 - 이것도 "이미 결정된 이력이 있다"는 걸 알려주는 게
+        # 사용자에게 유용하다고 판단, Case 0과 동일한 리마인더 팝업을 띄우도록 변경.
+        # (예전엔 팝업 없이 조용히 무시했음)
+        return _decision_reminder_result(
+            db, case="1", workspace_id=workspace_id, category_id=category_id,
+            source_type=source_type, decision=decision, session_kwargs=session_kwargs,
+        )
 
     # 3단계: 근거가 명확한가?
     reason_is_clear = _ask_judgment_step("reason_is_clear", decision_text, decision_reason, statement)
@@ -283,19 +399,46 @@ def judge(
     if reason_is_clear:
         case, judgment_case = "2", "reasoned_change"
         message = (f"근거가 확인되어 결정이 바뀐 것으로 보입니다: '{statement}'"
-                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" (기존: {_format_decided_at(decision.decided_at)}에 결정된 '{decision.decision_text}')."
                    f" 바꾸시겠습니까?")
+        # [수정 - 리뷰 반영] 새 발언의 근거를 별도 추출 - 기존 decision.reason(예전
+        # 사유)이 아니라 "왜 지금 바뀌는지"를 보여줘야 함
+        new_reason = _extract_change_reason(statement)
     else:
         case, judgment_case = "3", "unreasoned_change"
         message = (f"명확한 근거 없이 결정이 바뀐 것으로 보입니다: '{statement}'"
-                   f" (기존: {decision.decided_at}에 결정된 '{decision.decision_text}')."
+                   f" (기존: {_format_decided_at(decision.decided_at)}에 결정된 '{decision.decision_text}')."
                    f" 바꾸시겠습니까?")
+        # [수정 - 라이브 테스트 발견] Case 3은 "근거가 명확하지 않음"이 핵심인데
+        # 예전엔 여기에 decision.reason(기존 결정을 왜 그렇게 정했었는지)을 그대로
+        # 넣고 있어서, "근거 없이 바뀜" 카드인데도 "이유"란에 뭔가 채워져서 나와
+        # 모순돼 보였음. Case 3엔 애초에 보여줄 "지금 바뀐 이유"가 없으므로,
+        # 고정 문구로 명확히 표시한다(프론트 변경 없이 안전하게 반영 가능).
+        new_reason = "근거가 명확히 확인되지 않음"
 
-    # 팝업은 세션 내 (decision, judgment_case) 단위로 1회만 - 같은 decision이어도
-    # 근거 명확/불명확 여부가 바뀌면 별개 알림으로 취급해 각각 1회씩 뜬다.
-    already_popped = contradiction_crud.already_popped_in_session_for_decision(
-        db, reference_decision_id=decision.id, judgment_case=judgment_case, **session_kwargs
+    # [수정 - 라이브 테스트 발견] 예전엔 팝업 dedup을 (decision, judgment_case) 단위로
+    # 걸어서, 같은 decision이라도 case가 다르면 각각 1회씩 떴다. 근데 실사용에서
+    # STT가 하나의 연속된 발화를 두 세그먼트로 쪼개는 바람에, 앞부분만 보고 "근거
+    # 불명확"(Case 3) 판단했다가 뒷부분까지 합쳐 다시 "근거 명확"(Case 2) 판단하면서
+    # 같은 변경 하나에 모순되는 팝업 두 개가 동시에 뜨는 문제가 확인됨.
+    #
+    # "근거를 알게 됨"(Case 2)은 Case 3이 먼저 떴어도 항상 사용자에게 새로운
+    # 정보지만, 그 반대(Case 2가 먼저 뜬 뒤 Case 3이 뜨는 것)는 이미 아는 것보다
+    # 못한 정보라 보여줄 이유가 없다 - 그래서 dedup을 대칭이 아니라 "한쪽 방향으로만
+    # 업그레이드 허용"으로 바꾼다. 세션 내 이 decision에 대해 Case 2가 이미 떴으면
+    # 그 이후엔 Case 2/3 어느 쪽이 와도 더 보여줄 새 정보가 없으므로 무시하고,
+    # Case 2가 아직 안 떴으면 Case 3은 (처음이든 반복이든) Case 3 자신의 기존
+    # dedup만, Case 2는 항상 새 정보로 취급해 띄운다.
+    already_shown_reasoned = contradiction_crud.already_popped_in_session_for_decision(
+        db, reference_decision_id=decision.id, judgment_case="reasoned_change", **session_kwargs
     )
+    if judgment_case == "unreasoned_change":
+        already_shown_unreasoned = contradiction_crud.already_popped_in_session_for_decision(
+            db, reference_decision_id=decision.id, judgment_case="unreasoned_change", **session_kwargs
+        )
+        already_popped = already_shown_reasoned or already_shown_unreasoned
+    else:
+        already_popped = already_shown_reasoned
 
     # make_deduplication_key의 3번째 인자명이 reference_file_id지만, decision 참조도
     # 같은 함수로 dedup key를 만들 수 있어 재사용 (해시 조합용이라 의미상 문제 없음)
@@ -311,7 +454,7 @@ def judge(
         reference_decision_id=decision.id,
         statement_text_snapshot=statement,
         reference_text_snapshot=decision.decision_text,
-        reason=decision.reason,  # [추가] 기존 결정의 사유 - Contradiction 모델의 실제 컬럼
+        reason=new_reason,  # Case 2: 새 발언에서 추출한 변경 근거 / Case 3: 기존 결정의 사유(위 주석 참조)
         confidence_score=1.0,  # 벡터 점수 대신 topic_match가 이미 같은 주제로 확정한 것이라 고정값
         deduplication_key=dedup_key,
         judgment_case=judgment_case,

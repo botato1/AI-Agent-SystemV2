@@ -33,6 +33,62 @@ def get_default_category(db: Session, workspace_id: uuid.UUID) -> Optional[Categ
         .first()
     )
 
+def get_category(db: Session, category_id: uuid.UUID) -> Optional[Category]:
+    return (
+        db.query(Category)
+        .filter(Category.id == category_id, Category.deleted_at.is_(None))
+        .first()
+    )
+
+
+def list_categories(db: Session, workspace_id: uuid.UUID) -> list[Category]:
+    return (
+        db.query(Category)
+        .filter(Category.workspace_id == workspace_id, Category.deleted_at.is_(None))
+        .order_by(Category.display_order.asc())
+        .all()
+    )
+
+
+def create_category(db: Session, workspace_id: uuid.UUID, name: str, created_by: uuid.UUID) -> Category:
+    max_order = (
+        db.query(Category)
+        .filter(Category.workspace_id == workspace_id, Category.deleted_at.is_(None))
+        .count()
+    )
+    row = Category(
+        workspace_id=workspace_id,
+        name=name,
+        is_default=False,
+        display_order=max_order,
+        created_by=created_by,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def update_category(db: Session, category_id: uuid.UUID, **fields) -> Optional[Category]:
+    row = get_category(db, category_id)
+    if not row:
+        return None
+    for k, v in fields.items():
+        if v is not None:
+            setattr(row, k, v)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def delete_category(db: Session, category_id: uuid.UUID) -> Optional[Category]:
+    row = get_category(db, category_id)
+    if row:
+        row.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+    return row
+
 
 def create_room(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, name: str, created_by: uuid.UUID) -> Room:
     row = Room(workspace_id=workspace_id, category_id=category_id, name=name, created_by=created_by)
@@ -42,13 +98,11 @@ def create_room(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, na
     return row
 
 
-def list_rooms(db: Session, workspace_id: uuid.UUID) -> list[Room]:
-    return (
-        db.query(Room)
-        .filter(Room.workspace_id == workspace_id, Room.deleted_at.is_(None))
-        .all()
-    )
-
+def list_rooms(db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID | None = None) -> list[Room]:
+    query = db.query(Room).filter(Room.workspace_id == workspace_id, Room.deleted_at.is_(None))
+    if category_id is not None:
+        query = query.filter(Room.category_id == category_id)
+    return query.all()
 
 def get_room_by_id(db: Session, room_id: uuid.UUID, workspace_id: uuid.UUID) -> Optional[Room]:
     return (
@@ -62,10 +116,11 @@ def get_room_by_id(db: Session, room_id: uuid.UUID, workspace_id: uuid.UUID) -> 
     )
 
 
-def update_room_name(db: Session, room_id: uuid.UUID, name: str) -> Optional[Room]:
+def update_room(db: Session, room_id: uuid.UUID, **fields) -> Optional[Room]:
     row = db.query(Room).filter(Room.id == room_id, Room.deleted_at.is_(None)).first()
     if row:
-        row.name = name
+        for k, v in fields.items():
+            setattr(row, k, v)
         db.commit()
         db.refresh(row)
     return row

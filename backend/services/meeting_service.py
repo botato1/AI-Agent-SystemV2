@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import os
 import uuid
+import time
 from pathlib import Path
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy.orm import Session
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
 from backend.modules.rag.document_loader import load_document
+from backend.modules.post_meeting import llm_extractor
 from backend.services import judgment_service
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.graphs.meeting_postprocess_graph import run_meeting_postprocess
@@ -53,6 +56,106 @@ async def _request_stt(file_content: bytes, filename: str) -> dict:
         )
     response.raise_for_status()
     return response.json()
+
+def regenerate_summary_from_refined_transcript(
+    meeting_id: str, refined_data: dict,
+    max_wait_seconds: float = 300.0, poll_interval_seconds: float = 5.0,
+) -> None:
+    """정밀 재분석 완료 웹훅 수신 시 요약만 다시 생성해 갱신한다.
+
+    meeting_postprocess_node는 재실행하지 않는다 - 그 노드가 결정사항/할 일
+    추출까지 한 번에 묶여있어서, 여기서 다시 부르면 decision/task가 중복
+    생성될 위험이 있다(가동현 - 웹훅 반영 보류 사유). 대신 llm_extractor.extract()만
+    직접 호출해서 요약 관련 필드(full_summary/short_summary/discussion_points/
+    meeting_purpose/next_steps)만 갱신하고, topics/action_items는 버린다.
+
+    [수정 - 리뷰 반영] meeting_postprocess_node(백그라운드, 무거움)와 이 함수가
+    회의 종료 시점에 동시에 시작되는데, 둘 사이에 순서 보장이 없었다. postprocess가
+    이 함수보다 늦게 끝나면, 이 함수가 먼저 써놓은 재분석 기반 요약(+발송된 완료
+    알림)을 postprocess가 뒤늦게 실시간본 기준으로 조용히 덮어써버리는 문제가 있었음.
+    그래서 이 함수 진입 시 postprocess가 실제로 끝났는지(generation_status가
+    completed/failed) 확인하고, 아직 진행 중이면 짧게 재시도하며 기다린다. postprocess가
+    끝난 뒤에만 이 함수가 쓰기 때문에, 이후로는 아무도 이 값을 덮어쓰지 않는다.
+    """
+    db = SessionLocal()
+    try:
+        meeting_uuid = uuid.UUID(meeting_id)
+        waited = 0.0
+        while True:
+            db.expire_all()
+            summary_row = meeting_crud.get_meeting_summary(db, meeting_uuid)
+            if summary_row and summary_row.generation_status in ("completed", "failed"):
+                break
+            if waited >= max_wait_seconds:
+                print(
+                    f"[meeting_service] meeting_postprocess_node 완료 대기 타임아웃"
+                    f"({max_wait_seconds}s), 재분석 요약 갱신 스킵: meeting_id={meeting_id}"
+                )
+                return
+            time.sleep(poll_interval_seconds)
+            waited += poll_interval_seconds
+
+        if summary_row.refined_at is not None:
+            print(f"[meeting_service] 이미 재분석 반영됨, 중복 웹훅 스킵: meeting_id={meeting_id}")
+            return
+
+        segments = refined_data.get("segments", [])
+        if not segments:
+            print(f"[meeting_service] 재분석 세그먼트 없음, 요약 갱신 스킵: meeting_id={meeting_id}")
+            return
+
+        indexed_transcript = "\n".join(
+            f"[{i}][{seg.get('speaker') or 'unknown'}] {seg.get('text', '')}"
+            for i, seg in enumerate(segments)
+        )
+
+        extraction = llm_extractor.extract(indexed_transcript)
+        if not extraction.get("full_summary"):
+            print(f"[meeting_service] 재분석 요약 생성 실패, 갱신 스킵: meeting_id={meeting_id}")
+            return
+
+        meeting = meeting_crud.get_meeting(db, meeting_uuid)
+        if not meeting:
+            print(f"[meeting_service] 재분석 요약 갱신 대상 회의를 찾을 수 없음: meeting_id={meeting_id}")
+            return
+
+        meeting_crud.upsert_summary(
+            db,
+            meeting_uuid,
+            meeting_purpose=extraction["meeting_purpose"],
+            full_summary=extraction["full_summary"],
+            short_summary=extraction["short_summary"],
+            discussion_points=extraction["discussion_points"],
+            next_steps=extraction["next_steps"],
+            generation_status="completed",
+            generated_at=datetime.now(timezone.utc),
+            refined_at=datetime.now(timezone.utc),
+        )
+
+        # [수정 - 리뷰 반영] create_notification 기본값(commit=True)을 그대로 쓰면
+        # 멤버 수만큼 개별 커밋이 일어나서, 중간에 실패하면 일부 멤버만 알림을 받은
+        # 채로 남는다. post_meeting/pipeline.py와 동일하게 commit=False로 쌓고
+        # 마지막에 한 번만 커밋한다.
+        for member, _user in workspace_crud.list_members(db, meeting.workspace_id):
+            if not notification_crud.is_notification_enabled(
+                db, meeting.workspace_id, member.user_id, "meeting_summary_ready",
+            ):
+                continue
+            notification_crud.create_notification(
+                db, user_id=member.user_id, workspace_id=meeting.workspace_id,
+                type="meeting_summary_ready", title="회의 요약 개선 완료",
+                message=f"'{meeting.title}' 회의 요약이 더 정확한 내용으로 갱신됐습니다.",
+                ref_type="meeting", ref_id=meeting.id,
+                commit=False,
+            )
+        db.commit()
+
+        print(f"[meeting_service] 재분석본 기준 요약 갱신 완료: meeting_id={meeting_id}")
+    except Exception as e:
+        db.rollback()
+        print(f"[meeting_service] 재분석본 요약 갱신 실패: meeting_id={meeting_id}, error={repr(e)}")
+    finally:
+        db.close()
 
 
 def _save_segments_bulk(
@@ -239,19 +342,69 @@ def save_summary_as_document(
     full_summary: str,
     short_summary: str,
     discussion_points: list[str],
+    decisions: list[dict] | None = None,
+    action_items: list[dict] | None = None,
 ):
     """회의 요약을 마크다운 문서로 저장하고 workspace_files에 등록한 뒤
     청킹+임베딩(ChromaDB)까지 마치고 meeting_summaries에 연결한다.
+
+    [수정] decisions/action_items 추가 - llm_extractor가 이미 뽑아둔 결정사항/할일이
+    지금까지는 요약 문서에 아예 안 들어가고 있었다(full_summary/short_summary/
+    discussion_points만 포함). "회의록"이라 부를 만한 핵심 정보(결정사항/할일)가
+    검색 대상에서 빠져있던 것 - 같이 포함시킨다.
+
+    [수정] 이 콘텐츠는 회의에서 나온 것이라 문서 업로드(DOCUMENT_COLLECTION)가 아니라
+    회의 컬렉션(MEETING_COLLECTION)에 들어가야 한다 - load_document() 호출 시
+    upload_context_override="meeting", chunk_type_override="meeting_summary"로 지정.
 
     부가 기능이라 실패해도 예외를 밖으로 던지지 않는다 — 이미 저장된 요약/결정사항/할일까지
     실패 처리되는 걸 막기 위함. 실패 시 None을 반환하고 로그만 남긴다.
     """
     try:
+        decisions = decisions or []
+        action_items = action_items or []
+
+        # [수정 - 리뷰 반영] decisions엔 status="reopened_no_conclusion"(재논의했지만
+        # 결론 안 남)인 항목도 섞여 들어온다. decision_text가 이 경우 "확정된 내용"이
+        # 아니라 "논의 중이던 내용"이라, 전부 "결정사항"에 넣으면 아직 안 정해진 걸
+        # 정해진 것처럼 보여주게 된다. status로 갈라서 별도 섹션으로 분리한다.
+        confirmed_decisions = [d for d in decisions if d.get("status") != "reopened_no_conclusion"]
+        pending_decisions = [d for d in decisions if d.get("status") == "reopened_no_conclusion"]
+
+        decisions_text = (
+            "\n".join(
+                f"- **{d.get('title', '')}**: {d.get('decision_text', '')}"
+                + (f" (사유: {d['reason']})" if d.get("reason") else "")
+                for d in confirmed_decisions
+            )
+            if confirmed_decisions else "(이번 회의에서 새로 확정된 결정사항 없음)"
+        )
+        pending_decisions_text = (
+            "\n".join(
+                f"- **{d.get('title', '')}**: {d.get('decision_text', '')}"
+                + (f" (사유: {d['reason']})" if d.get("reason") else "")
+                for d in pending_decisions
+            )
+            if pending_decisions else "(이번 회의에서 결론 안 난 안건 없음)"
+        )
+        action_items_text = (
+            "\n".join(
+                f"- {a.get('title', '')}"
+                + (f" (담당: {a['assignee']})" if a.get("assignee") else "")
+                + (f" (기한: {a['due_date']})" if a.get("due_date") else "")
+                for a in action_items
+            )
+            if action_items else "(이번 회의에서 새로 생성된 할 일 없음)"
+        )
+
         content = (
             f"# {title} 회의 요약\n\n"
             f"## 전체 요약\n{full_summary}\n\n"
             f"## 핵심 요약\n{short_summary}\n\n"
-            f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points)
+            f"## 논의 사항\n" + "\n".join(f"- {point}" for point in discussion_points) + "\n\n"
+            f"## 결정사항\n{decisions_text}\n\n"
+            f"## 논의 중/미결 안건\n{pending_decisions_text}\n\n"
+            f"## 할 일\n{action_items_text}"
         )
         content_bytes = content.encode("utf-8")
 
@@ -286,8 +439,22 @@ def save_summary_as_document(
             {"style": "body", "content": short_summary, "page_number": 1},
             {"style": "heading", "content": "논의 사항", "page_number": 1},
             {"style": "body", "content": "\n".join(f"- {p}" for p in discussion_points), "page_number": 1},
+            {"style": "heading", "content": "결정사항", "page_number": 1},
+            {"style": "body", "content": decisions_text, "page_number": 1},
+            {"style": "heading", "content": "논의 중/미결 안건", "page_number": 1},
+            {"style": "body", "content": pending_decisions_text, "page_number": 1},
+            {"style": "heading", "content": "할 일", "page_number": 1},
+            {"style": "body", "content": action_items_text, "page_number": 1},
         ]
-        load_result = load_document(db, workspace_file.id, chunks=chunks)
+        # upload_context_override="meeting" — 이 콘텐츠는 회의에서 나온 것이라
+        # DOCUMENT_COLLECTION이 아니라 MEETING_COLLECTION에 들어가야 한다
+        # (기존엔 문서 청킹 경로를 그대로 써서 upload_context가 "document"로
+        # 고정돼있었음 - 그래서 contradiction_detect 등 문서 전용 소비자가
+        # 회의 요약까지 일반 문서로 오인해서 스캔하는 문제가 있었다).
+        load_result = load_document(
+            db, workspace_file.id, chunks=chunks,
+            upload_context_override="meeting", chunk_type_override="meeting_summary",
+        )
         if load_result.get("status") == "success":
             file_crud.update_analysis_status(db, workspace_file.id, "completed")
         else:
@@ -326,6 +493,8 @@ def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, ca
                 full_summary=result.get("full_summary", ""),
                 short_summary=result.get("short_summary", ""),
                 discussion_points=result.get("discussion_points", []),
+                decisions=result.get("extracted_decisions", []),
+                action_items=result.get("extracted_tasks", []),
             )
 
         for member, _user in workspace_crud.list_members(db, uuid.UUID(workspace_id)):
