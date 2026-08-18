@@ -12,7 +12,7 @@ import {
 const PENDING_STATUSES = new Set(["pending", "processing"]);
 
 // 코드 폴더 업로드(워크트리) 실제 백엔드 연동
-export function useWorktrees(workspaceId: string) {
+export function useWorktrees(workspaceId: string, selectedCategoryId?: string | null) {
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedWorktreeId, setSelectedWorktreeId] = useState<string | null>(null);
@@ -35,6 +35,11 @@ export function useWorktrees(workspaceId: string) {
     setIsLoading(true);
     loadWorktrees().finally(() => setIsLoading(false));
   }, [workspaceId]);
+
+  // 사이드바 카테고리 전환 시, 다른 카테고리 워크트리를 계속 열어둔 채로 보여주지 않게 초기화.
+  useEffect(() => {
+    setSelectedWorktreeId(null);
+  }, [selectedCategoryId]);
 
   // 아직 처리 중인 워크트리가 있으면 완료될 때까지 목록을 주기적으로 재조회
   useEffect(() => {

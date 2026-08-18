@@ -19,6 +19,7 @@ export interface BackendTask {
   due_at?: string | null;
   completed_at?: string | null;
   created_at: string;
+  category_id?: string | null;
 }
 
 export interface GetTaskListResponse {
@@ -49,6 +50,7 @@ export interface CreateTaskParams {
   priority?: TaskPriority;
   status?: BackendTaskStatus;
   due_at?: string;
+  category_id?: string;
 }
 
 export interface UpdateTaskParams {
@@ -59,6 +61,8 @@ export interface UpdateTaskParams {
   priority?: TaskPriority;
   status?: BackendTaskStatus;
   due_at?: string | null;
+  // 다른 카테고리로 옮기는 용도로만 쓴다 - null로는 보낼 수 없다(백엔드 제약).
+  category_id?: string;
 }
 
 // ----------------------------------------------------------------------
@@ -70,7 +74,11 @@ export interface UpdateTaskParams {
  * includeAll=true면 ?status=all을 붙여서 done/cancelled/suggested까지 다 받아온다.
  * 기본값(false)은 예전과 동일하게 open/in_progress만 온다.
  */
-export async function getTaskListApi(workspaceId: string, includeAll = false): Promise<GetTaskListResponse> {
+export async function getTaskListApi(
+  workspaceId: string,
+  includeAll = false,
+  categoryId?: string
+): Promise<GetTaskListResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
 
@@ -84,7 +92,10 @@ export async function getTaskListApi(workspaceId: string, includeAll = false): P
   }
 
   try {
-    const query = includeAll ? "?status=all" : "";
+    const params = new URLSearchParams();
+    if (includeAll) params.set("status", "all");
+    if (categoryId) params.set("category_id", categoryId);
+    const query = params.toString() ? `?${params.toString()}` : "";
     const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/tasks${query}`, {
       method: "GET",
     });

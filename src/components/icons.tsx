@@ -16,6 +16,7 @@ export {
   Trash2 as TrashIcon,
   Star as StarIcon,
   ChevronDown as ChevronDownIcon,
+  ChevronUp as ChevronUpIcon,
   ChevronRight as ChevronRightIcon,
   Clock as ClockIcon,
   RefreshCw as RepeatIcon,
@@ -42,4 +43,5 @@ export {
   Calendar as CalendarIcon,
   Headphones as HeadphoneIcon,
   Scissors as SplitIcon,
+  GripVertical as GripIcon,
 } from "lucide-react";

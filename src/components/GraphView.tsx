@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import { getDocumentGraphApi } from "../services/document";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
 
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import { CloseIcon, MenuIcon, PlusIcon, MinusIcon, RepeatIcon, SearchIcon } from "./icons";
@@ -8,28 +10,23 @@ import { CloseIcon, MenuIcon, PlusIcon, MinusIcon, RepeatIcon, SearchIcon } from
 interface GraphViewProps {
   workspaceId: string;
   documents: AnalyzedDocument[];
+  categories: Category[];
   t: any;
 }
 
-// 파일 확장자별 카테고리 색상 — 진짜 문서 유형/토픽 분류가 생기기 전까지 확장자를 임시 카테고리로 사용
-const EXT_GROUP: Record<string, number> = { PDF: 1, DOCX: 2, HWPX: 3, PNG: 4, JPG: 4, JPEG: 4, TXT: 5 };
-const GROUP_COLORS = ["#7c6af7", "#4caf82", "#e8a838", "#ec7fb0", "#5bb8d9", "#94a3b8"]; // 마지막은 "기타"
-const GROUP_LABELS: Record<number, string> = {
-  1: "PDF",
-  2: "DOCX",
-  3: "HWPX",
-  4: "이미지",
-  5: "TXT",
-  6: "기타",
-};
+// 문서가 속한 카테고리 색 - 카테고리 지원 이전엔 확장자를 임시 분류로 썼는데, 이제 실제
+// 카테고리가 있으니 그걸로 그린다. 카테고리 미지정(null) 문서는 중립색으로 묶는다.
+const UNCATEGORIZED_COLOR = "#94a3b8";
 
-function getExtGroup(filename: string): number {
-  const ext = filename.split(".").pop()?.toUpperCase() ?? "";
-  return EXT_GROUP[ext] ?? 6;
+function getDocColor(categoryId: string | null, categories: Category[]): string {
+  if (!categoryId) return UNCATEGORIZED_COLOR;
+  const index = categories.findIndex((c) => c.id === categoryId);
+  return index >= 0 ? getCategoryColor(index) : UNCATEGORIZED_COLOR;
 }
 
-function getGroupColor(group: number): string {
-  return GROUP_COLORS[(group - 1) % GROUP_COLORS.length];
+function getDocCategoryLabel(categoryId: string | null, categories: Category[], t: any): string {
+  if (!categoryId) return t.graph_uncategorized_label || "미분류";
+  return categories.find((c) => c.id === categoryId)?.name ?? (t.graph_uncategorized_label || "미분류");
 }
 
 // 노드 아래 상시 라벨 - 그래프가 복잡해질 때 라벨끼리 너무 뒤엉키지 않도록 글자 수를 제한한다
@@ -42,7 +39,7 @@ function truncateLabel(name: string): string {
 interface Node {
   id: string;
   name: string;
-  group: number;
+  categoryId: string | null;
   x: number;
   y: number;
   vx: number;
@@ -56,7 +53,7 @@ interface Edge {
   strength: number; // 0~1
 }
 
-export default function GraphView({ workspaceId, documents, t }: GraphViewProps) {
+export default function GraphView({ workspaceId, documents, categories, t }: GraphViewProps) {
   const analyzedDocs = documents.filter((d) => d.status === "analyzed");
   const analyzedIds = analyzedDocs.map((d) => d.id).join(",");
 
@@ -145,7 +142,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
       return {
         id: doc.id,
         name: doc.name,
-        group: getExtGroup(doc.name),
+        categoryId: doc.category_id ?? null,
         x: width / 2 + radiusDist * Math.cos(angle) + (Math.random() - 0.5) * 40,
         y: height / 2 + radiusDist * Math.sin(angle) + (Math.random() - 0.5) * 40,
         vx: 0,
@@ -369,7 +366,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
           ctx.shadowBlur = 16;
         }
 
-        ctx.fillStyle = getGroupColor(node.group);
+        ctx.fillStyle = getDocColor(node.categoryId, categories);
         ctx.fill();
 
         if (isSelected || isHovered) {
@@ -398,7 +395,7 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
     render();
 
     return () => cancelAnimationFrame(animId);
-  }, [selectedDocId, hoveredNodeId]);
+  }, [selectedDocId, hoveredNodeId, categories]);
 
   // 화면 좌표 -> 그래프 좌표 변환
   const toGraphCoords = (clientX: number, clientY: number) => {
@@ -519,9 +516,8 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
         .filter((x) => x.doc)
     : [];
 
-  const presentGroups = Array.from(new Set(analyzedDocs.map((d) => getExtGroup(d.name)))).sort(
-    (a, b) => a - b
-  );
+  // 범례 - 실제로 화면에 나타난 문서들이 속한 카테고리만 모은다 (미지정 문서가 있으면 "미분류"도 포함)
+  const presentCategoryIds = Array.from(new Set(analyzedDocs.map((d) => d.category_id ?? null)));
 
   const filteredDocs = docSearch.trim()
     ? analyzedDocs.filter((d) => d.name.toLowerCase().includes(docSearch.trim().toLowerCase()))
@@ -574,19 +570,28 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
               <div className="h-0 w-0 border-x-4 border-x-transparent border-b-4 border-b-recall-bgMain" />
               <div className="whitespace-nowrap rounded-md border border-recall-border bg-recall-bgMain px-2.5 py-1 text-center shadow-xl">
                 <p className="text-xs font-semibold text-recall-text">{hoveredNode.name}</p>
+                <p className="flex items-center justify-center gap-1 text-[10px] text-recall-textMuted">
+                  <span
+                    className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                    style={{ background: getDocColor(hoveredNode.categoryId, categories) }}
+                  />
+                  {getDocCategoryLabel(hoveredNode.categoryId, categories, t)}
+                </p>
               </div>
             </div>
           )}
 
-          {presentGroups.length > 0 && (
+          {presentCategoryIds.length > 0 && (
             <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-wrap gap-2.5 rounded-lg border border-recall-border bg-recall-bgMain/85 px-3 py-2 backdrop-blur-sm">
-              {presentGroups.map((group) => (
-                <div key={group} className="flex items-center gap-1.5">
+              {presentCategoryIds.map((categoryId) => (
+                <div key={categoryId ?? "uncategorized"} className="flex items-center gap-1.5">
                   <span
                     className="h-2 w-2 flex-shrink-0 rounded-full"
-                    style={{ background: getGroupColor(group) }}
+                    style={{ background: getDocColor(categoryId, categories) }}
                   />
-                  <span className="text-xs text-recall-textMuted">{GROUP_LABELS[group] ?? "기타"}</span>
+                  <span className="text-xs text-recall-textMuted">
+                    {getDocCategoryLabel(categoryId, categories, t)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -687,8 +692,9 @@ export default function GraphView({ workspaceId, documents, t }: GraphViewProps)
                             }`}
                           >
                             <span
+                              title={getDocCategoryLabel(doc.category_id ?? null, categories, t)}
                               className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                              style={{ background: getGroupColor(getExtGroup(doc.name)) }}
+                              style={{ background: getDocColor(doc.category_id ?? null, categories) }}
                             />
                             <span className="truncate">{doc.name}</span>
                           </button>

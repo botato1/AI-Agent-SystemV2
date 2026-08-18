@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import {
   createAiChatSessionApi,
   getAiChatSessionsApi,
+  updateAiChatSessionCategoryApi,
+  createRoomAiChatSessionApi,
+  getRoomAiChatSessionsApi,
+  updateRoomAiChatSessionCategoryApi,
   deleteAiChatSessionApi,
   sendAiChatMessageApi,
   getAiChatMessagesApi,
@@ -21,7 +25,9 @@ export interface AiChatDisplayMessage {
   sources?: AIMessageSource[];
 }
 
-export function useAiChat(workspaceId: string) {
+// roomId를 주면 그 채팅방 안에 묶인 AI Chat(room-scoped)을 쓰고, 안 주면 워크스페이스
+// 단독 "AI 인사이트" 화면(standalone)을 쓴다 - 두 API 계약이 거의 동일해서 훅 하나로 분기한다.
+export function useAiChat(workspaceId: string, selectedCategoryId?: string | null, roomId?: string) {
   const [sessions, setSessions] = useState<AIChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AiChatDisplayMessage[]>([]);
@@ -34,7 +40,9 @@ export function useAiChat(workspaceId: string) {
     if (!workspaceId) return;
 
     setIsLoadingSessions(true);
-    const res = await getAiChatSessionsApi(workspaceId);
+    const res = roomId
+      ? await getRoomAiChatSessionsApi(workspaceId, roomId)
+      : await getAiChatSessionsApi(workspaceId);
     setIsLoadingSessions(false);
 
     if (res.status === "success") {
@@ -47,7 +55,14 @@ export function useAiChat(workspaceId: string) {
     setActiveSessionId(null);
     setMessages([]);
     loadSessions();
-  }, [workspaceId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, roomId]);
+
+  // 사이드바 카테고리 전환 시, 다른 카테고리 대화를 계속 열어둔 채로 보여주지 않게 선택을 초기화.
+  useEffect(() => {
+    setActiveSessionId(null);
+    setMessages([]);
+  }, [selectedCategoryId]);
 
   // 선택된 대화가 바뀌면 그 대화의 메시지 기록을 불러옴
   useEffect(() => {
@@ -80,9 +95,12 @@ export function useAiChat(workspaceId: string) {
     setActiveSessionId(sessionId);
   }
 
-  // 새 대화 생성 - 목록 맨 앞에 추가하고 바로 선택
-  async function createSession(): Promise<string | null> {
-    const res = await createAiChatSessionApi(workspaceId);
+  // 새 대화 생성 - 목록 맨 앞에 추가하고 바로 선택. categoryId를 주면 그 카테고리로 태깅된다
+  // (사이드바에서 특정 카테고리를 선택한 채로 새 대화를 시작한 경우).
+  async function createSession(categoryId?: string): Promise<string | null> {
+    const res = roomId
+      ? await createRoomAiChatSessionApi(workspaceId, roomId, categoryId)
+      : await createAiChatSessionApi(workspaceId, categoryId);
     if (res.status === "success" && res.session) {
       const session = res.session;
       setSessions((prev) => [session, ...prev]);
@@ -92,6 +110,20 @@ export function useAiChat(workspaceId: string) {
     }
     alert(`새 대화 생성 실패: ${res.message}`);
     return null;
+  }
+
+  // 대화를 다른 카테고리로 옮기기
+  async function changeSessionCategory(sessionId: string, categoryId: string): Promise<boolean> {
+    const res = roomId
+      ? await updateRoomAiChatSessionCategoryApi(workspaceId, roomId, sessionId, categoryId)
+      : await updateAiChatSessionCategoryApi(workspaceId, sessionId, categoryId);
+    if (res.status === "success" && res.session) {
+      const updated = res.session;
+      setSessions((prev) => prev.map((s) => (s.id === sessionId ? updated : s)));
+      return true;
+    }
+    alert(`카테고리 변경 실패: ${res.message}`);
+    return false;
   }
 
   async function deleteSession(sessionId: string) {
@@ -181,6 +213,7 @@ export function useAiChat(workspaceId: string) {
     activeSessionId,
     selectSession,
     createSession,
+    changeSessionCategory,
     deleteSession,
     messages,
     isLoadingSessions,

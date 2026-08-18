@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { useAiChat } from "../hooks/useAiChat";
 import { SendIcon, WarningIcon, DocumentIcon, PlusIcon, TrashIcon, ChevronLeftIcon, ChevronRightIcon } from "./icons";
 import DocumentPreviewModal from "./DocumentPreviewModal";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
+import CategoryBadge from "./CategoryBadge";
 
 function ThinkingDots() {
   return (
@@ -22,10 +25,14 @@ function formatSessionDate(iso: string): string {
 export default function AiChatView({
   workspaceId,
   chat,
+  categories,
+  selectedCategoryId,
   t,
 }: {
   workspaceId: string;
   chat: ReturnType<typeof useAiChat>;
+  categories: Category[];
+  selectedCategoryId: string | null;
   t: any;
 }) {
   const {
@@ -47,6 +54,18 @@ export default function AiChatView({
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const shouldScrollToBottomRef = useRef(false);
+
+  // 사이드바 전역 카테고리 선택기 - null("전체")이면 전부. 카테고리 지원 배포 이전에 생긴
+  // 세션은 category_id가 null이라, "기본" 카테고리를 선택했을 때는 그것도 같이 보여준다
+  // (안 그러면 예전 대화들이 어느 카테고리를 선택해도 영영 안 보이게 된다).
+  const defaultCategory = categories.find((c) => c.is_default) ?? null;
+  const visibleSessions = !selectedCategoryId
+    ? sessions
+    : sessions.filter(
+        (s) =>
+          s.category_id === selectedCategoryId ||
+          (!s.category_id && defaultCategory?.id === selectedCategoryId)
+      );
 
   // 메시지 전송/응답 반영은 서버 응답을 기다린 뒤에야 목록에 나타나므로, 전송 시점엔
   // 스크롤 예약만 해두고 실제 스크롤은 messages가 갱신된 뒤 useEffect에서 실행한다.
@@ -108,7 +127,7 @@ export default function AiChatView({
           </div>
 
           <button
-            onClick={() => createSession()}
+            onClick={() => createSession(selectedCategoryId ?? undefined)}
             className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-recall-accent py-2 text-xs font-bold text-white hover:opacity-90 transition"
           >
             <PlusIcon size={13} />
@@ -118,34 +137,47 @@ export default function AiChatView({
           <div className="flex-1 space-y-1 overflow-y-auto custom-scrollbar pr-0.5">
             {isLoadingSessions ? (
               <p className="py-6 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
-            ) : sessions.length === 0 ? (
+            ) : visibleSessions.length === 0 ? (
               <p className="py-6 text-center text-xs text-recall-textMuted">{t.ai_chat_no_sessions}</p>
             ) : (
-              sessions.map((s) => (
-                <div
-                  key={s.id}
-                  onClick={() => selectSession(s.id)}
-                  className={`group flex cursor-pointer items-center justify-between gap-1 rounded-xl border p-2 transition ${
-                    s.id === activeSessionId
-                      ? "border-recall-accent bg-recall-accent/10"
-                      : "border-recall-border/80 bg-recall-bgSoft/40 hover:bg-white/5"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-semibold text-recall-text">
-                      {s.title || t.ai_chat_untitled_session}
-                    </p>
-                    <p className="text-[10px] text-recall-textMuted">{formatSessionDate(s.updated_at)}</p>
-                  </div>
-                  <button
-                    onClick={(e) => handleDeleteSession(e, s.id)}
-                    className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline transition"
-                    aria-label={t.ai_chat_delete_session_aria}
+              visibleSessions.map((s) => {
+                const categoryIndex = categories.findIndex((c) => c.id === s.category_id);
+                const cat = categoryIndex >= 0 ? categories[categoryIndex] : null;
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => selectSession(s.id)}
+                    className={`group flex cursor-pointer items-center justify-between gap-1 rounded-xl border p-2 transition ${
+                      s.id === activeSessionId
+                        ? "border-recall-accent bg-recall-accent/10"
+                        : "border-recall-border/80 bg-recall-bgSoft/40 hover:bg-white/5"
+                    }`}
                   >
-                    <TrashIcon size={12} />
-                  </button>
-                </div>
-              ))
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-semibold text-recall-text">
+                        {s.title || t.ai_chat_untitled_session}
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[10px] text-recall-textMuted">{formatSessionDate(s.updated_at)}</p>
+                        {cat && !cat.is_default && (
+                          <CategoryBadge
+                            name={cat.name}
+                            color={getCategoryColor(categoryIndex)}
+                            className="!py-0 !text-[10px]"
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => handleDeleteSession(e, s.id)}
+                      className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline transition"
+                      aria-label={t.ai_chat_delete_session_aria}
+                    >
+                      <TrashIcon size={12} />
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

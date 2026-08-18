@@ -1,17 +1,230 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Language } from "../data/translations";
-import { ChevronRightIcon, MoonIcon, SunIcon } from "./icons";
+import { ChevronRightIcon, MoonIcon, SunIcon, PlusIcon, PencilIcon, TrashIcon, CheckIcon, CloseIcon, GripIcon } from "./icons";
 import { Theme } from "../hooks/useTheme";
 import { Workspace } from "../types";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
 import { resolveAvatarUrl, DeleteAccountResponse } from "../services/auth";
 import { hashAvatarColor } from "../data/avatarColors";
 import Avatar from "./Avatar";
+import { useCategories } from "../hooks/useCategories";
+import { Category } from "../services/category";
+import { showConfirm } from "../lib/confirm";
 import {
   getNotificationPreferencesApi,
   updateNotificationPreferencesApi,
   NotificationPreferences,
 } from "../services/notification";
+
+function categoryLabel(t: any, category: Category): string {
+  return category.is_default ? t.meeting_category_default_label : category.name;
+}
+
+function CategoryManagementSection({
+  categoriesState,
+  t,
+}: {
+  categoriesState: ReturnType<typeof useCategories>;
+  t: any;
+}) {
+  const { categories, isLoading, createCategory, renameCategory, reorderCategory, deleteCategory } =
+    categoriesState;
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  // 드래그로 순서 바꾸기 - 화살표 버튼(한 칸씩)보다 여러 칸을 한 번에 옮길 때 편하다.
+  // 네이티브 HTML5 drag events만 써서 별도 라이브러리 없이 처리한다.
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  function handleDrop(dropIndex: number) {
+    if (draggedIndex === null || draggedIndex === dropIndex) {
+      setDraggedIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    const reordered = [...categories];
+    const [moved] = reordered.splice(draggedIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+    reordered.forEach((cat, idx) => {
+      if (cat.display_order !== idx) reorderCategory(cat.id, idx);
+    });
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  }
+
+  const addRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isAdding) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (addRef.current && !addRef.current.contains(e.target as Node)) {
+        setIsAdding(false);
+        setNewName("");
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isAdding]);
+
+  function startEdit(category: Category) {
+    setEditingId(category.id);
+    setDraftName(category.name);
+  }
+
+  async function confirmEdit() {
+    const name = draftName.trim();
+    if (editingId && name) await renameCategory(editingId, name);
+    setEditingId(null);
+    setDraftName("");
+  }
+
+  async function handleAdd() {
+    const name = newName.trim();
+    if (!name) return;
+    await createCategory(name);
+    setIsAdding(false);
+    setNewName("");
+  }
+
+  async function handleDelete(category: Category) {
+    const ok = await showConfirm(
+      t.settings_category_delete_confirm(category.name),
+      t.settings_account_delete_confirm_btn,
+      t.task_cancel
+    );
+    if (ok) await deleteCategory(category.id);
+  }
+
+  return (
+    <div>
+      <p className="mb-2 text-sm font-semibold text-recall-textMuted">{t.meeting_category_label}</p>
+      <div className="overflow-hidden rounded-xl border border-recall-border bg-recall-bgSoft">
+        {isLoading ? (
+          <p className="px-4 py-3 text-sm text-recall-textMuted">{t.common_loading}</p>
+        ) : (
+          categories.map((cat, idx) => (
+            <div
+              key={cat.id}
+              draggable={editingId !== cat.id}
+              onDragStart={() => setDraggedIndex(idx)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (draggedIndex !== null) setDragOverIndex(idx);
+              }}
+              onDragLeave={() => setDragOverIndex((prev) => (prev === idx ? null : prev))}
+              onDrop={(e) => {
+                e.preventDefault();
+                handleDrop(idx);
+              }}
+              onDragEnd={() => {
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+              }}
+              className={`flex items-center gap-2 border-b border-recall-border px-4 py-2.5 last:border-b-0 ${
+                draggedIndex === idx ? "opacity-40" : ""
+              } ${dragOverIndex === idx && draggedIndex !== idx ? "bg-recall-accent/10" : ""}`}
+            >
+              <span className="cursor-grab text-recall-textMuted active:cursor-grabbing" title={t.settings_category_drag_hint}>
+                <GripIcon size={14} />
+              </span>
+
+              {editingId === cat.id ? (
+                <>
+                  <input
+                    autoFocus
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") confirmEdit();
+                      if (e.key === "Escape") setEditingId(null);
+                    }}
+                    className="flex-1 rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
+                  />
+                  <button type="button" onClick={confirmEdit} className="text-recall-accent hover:opacity-80">
+                    <CheckIcon size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(null)}
+                    className="text-recall-textMuted hover:text-recall-text"
+                  >
+                    <CloseIcon size={14} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 truncate text-sm font-medium text-recall-text">
+                    {categoryLabel(t, cat)}
+                  </span>
+                  {cat.is_default ? (
+                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs font-medium text-recall-textMuted">
+                      {t.meeting_category_default_label}
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(cat)}
+                        className="text-recall-textMuted hover:text-recall-text"
+                      >
+                        <PencilIcon size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(cat)}
+                        className="text-recall-textMuted hover:text-recall-danger"
+                      >
+                        <TrashIcon size={14} />
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          ))
+        )}
+
+        <div ref={addRef} className="px-4 py-2.5">
+          {isAdding ? (
+            <div className="flex gap-1.5">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdd();
+                  if (e.key === "Escape") setIsAdding(false);
+                }}
+                placeholder={t.meeting_category_create_placeholder}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
+              />
+              <button
+                type="button"
+                onClick={handleAdd}
+                disabled={!newName.trim()}
+                className="flex-shrink-0 rounded-lg bg-recall-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {t.meeting_category_create_confirm}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsAdding(true)}
+              className="flex items-center gap-1.5 text-sm font-semibold text-recall-accent hover:opacity-80"
+            >
+              <PlusIcon size={14} />
+              {t.meeting_category_add_btn}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface SettingsProps {
   onClose: () => void;
@@ -23,6 +236,10 @@ interface SettingsProps {
   t: any;
   onLogout: () => void | Promise<void>;
   onDeleteAccount?: (password: string) => Promise<DeleteAccountResponse>;
+  // App.tsx가 들고 있는 인스턴스를 그대로 받아쓴다 - 여기서 별도로 useCategories를 새로
+  // 부르면 App.tsx(사이드바 카테고리 선택기)와 상태가 어긋나서, 여기서 만든 카테고리가
+  // 사이드바에 바로 안 뜨는 문제가 생긴다.
+  categoriesState: ReturnType<typeof useCategories>;
 }
 
 export default function Settings({
@@ -35,6 +252,7 @@ export default function Settings({
   t,
   onLogout,
   onDeleteAccount,
+  categoriesState,
 }: SettingsProps) {
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [isMembersOpen, setIsMembersOpen] = useState(false);
@@ -210,6 +428,9 @@ export default function Settings({
               )}
             </div>
           </div>
+
+          {/* 1-1. 카테고리 관리 구역 */}
+          {currentWorkspace?.id && <CategoryManagementSection categoriesState={categoriesState} t={t} />}
 
           {/* 2. 알림 구역 */}
           <div>

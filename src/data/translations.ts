@@ -18,6 +18,10 @@ export const translations = {
     main_group: "메인",
     analysis_group: "분석",
     btn_close: "닫기",
+    sidebar_category_group: "카테고리",
+    sidebar_category_all: "전체",
+    sidebar_category_collapse: "접기",
+    sidebar_category_show_more: (n: number) => `${n}개 더보기`,
 
     // === 대시보드 및 칸반 업무 ===
     dashboard_tab_tasks: "할일",
@@ -148,6 +152,8 @@ export const translations = {
     contradiction_keep: "유지",
     contradiction_apply: "반영",
     contradiction_apply_confirm: "반영하면 기준문서 내용이 바뀌고, 나중에 되돌릴 수 없어요. 계속할까요?",
+    contradiction_apply_text_label: "반영할 결정 내용",
+    contradiction_apply_reason_label: "반영할 사유",
     contradiction_confidence: "신뢰도",
     contradiction_status_unresolved: "미해결",
     contradiction_status_resolved: "해결됨",
@@ -293,11 +299,12 @@ export const translations = {
     doc_list_title: "문서 목록",
     doc_btn_upload: "문서 업로드",
     graph_title: "그래프 시각화",
-    graph_sub: "문서 유형 · 키워드 공유 기반 연관성 시각화",
+    graph_sub: "문서 유형 · 의미 유사도 기반 연관성 시각화",
     graph_no_docs: "분석이 끝난 문서가 있어야 그래프에 표시돼요. (문서 분석에서 먼저 업로드해보세요)",
+    graph_uncategorized_label: "미분류",
     graph_btn_view_analysis: "문서 분석에서 보기",
     graph_connected_count: "연결된 문서",
-    graph_connected_suffix: "개 (키워드 공유 기준)",
+    graph_connected_suffix: "개 (의미 유사도 기준)",
     graph_group_etc: "기타",
 
     // === 채팅 시스템 메시지 & AI Chat ===
@@ -338,6 +345,7 @@ export const translations = {
     meeting_audio_loading: "원본 음성 불러오는 중...",
     meeting_audio_unavailable: "원본 음성을 재생할 수 없습니다.",
     meeting_audio_seek_title: "이 시점부터 원본 음성 재생",
+    meeting_segment_overlapped_notice: "여러 명이 동시에 말한 구간이라 화자 표시가 부정확할 수 있어요.",
 
     // === 회의록 내보내기 모달 ===
     meeting_export_title: "회의록 내보내기",
@@ -372,6 +380,7 @@ export const translations = {
     meeting_live_alert_reminder_title: "결정 리마인더",
     meeting_live_alert_reminder_ack_btn: "확인",
     meeting_live_alert_reminder_view_btn: "관련 결정 보기",
+    meeting_live_alert_agenda_title: "미해결 안건",
 
     // === 음성 회의 화면 상단 탭 (회의 / 회의록 내보내기 목록) ===
     meeting_top_tab_meetings: "회의",
@@ -675,6 +684,16 @@ export const translations = {
     meeting_voice_registered_tooltip: "목소리 등록됨",
     meeting_remove_chip: "제거",
     meeting_start_btn: "회의 시작",
+    meeting_category_label: "카테고리",
+    meeting_category_locked_hint: "이 카테고리 안에서 시작하면 자동으로 분류돼요.",
+    meeting_category_default_hint: "선택하지 않으면 기본 카테고리로 시작돼요.",
+    meeting_category_create_option: "+ 새 카테고리 만들기",
+    meeting_category_add_btn: "카테고리 추가",
+    meeting_category_create_placeholder: "카테고리 이름을 입력하세요",
+    meeting_category_create_confirm: "만들기",
+    meeting_category_default_label: "기본값",
+    settings_category_drag_hint: "드래그해서 순서 바꾸기",
+    settings_category_delete_confirm: (name: string) => `"${name}" 카테고리를 삭제할까요? 이 카테고리로 분류된 회의는 남아있지만, 카테고리 자체는 복구할 수 없어요.`,
 
     // === 참석자 관리 모달 ===
     meeting_attendees_manage_title: "참석자 관리",
@@ -716,6 +735,10 @@ export const translations = {
     main_group: "MAIN",
     analysis_group: "ANALYSIS",
     btn_close: "Close",
+    sidebar_category_group: "CATEGORIES",
+    sidebar_category_all: "All",
+    sidebar_category_collapse: "Show less",
+    sidebar_category_show_more: (n: number) => `${n} more`,
 
     // === Dashboard & Kanban ===
     dashboard_tab_tasks: "Tasks",
@@ -846,6 +869,8 @@ export const translations = {
     contradiction_keep: "Keep",
     contradiction_apply: "Apply",
     contradiction_apply_confirm: "Applying this will update the reference document and can't be undone later. Continue?",
+    contradiction_apply_text_label: "Decision content to apply",
+    contradiction_apply_reason_label: "Reason to apply",
     contradiction_confidence: "Confidence",
     contradiction_status_unresolved: "Unresolved",
     contradiction_status_resolved: "Resolved",
@@ -991,11 +1016,12 @@ export const translations = {
     doc_list_title: "Documents",
     doc_btn_upload: "Upload",
     graph_title: "Graph Visualization",
-    graph_sub: "Visualization of associations based on document types and shared keywords",
+    graph_sub: "Visualization of associations based on document types and semantic similarity",
     graph_no_docs: "There must be analyzed documents to display them on the graph. (Please upload in Doc Analysis first)",
+    graph_uncategorized_label: "Uncategorized",
     graph_btn_view_analysis: "View in Doc Analysis",
     graph_connected_count: "Connected Documents",
-    graph_connected_suffix: " (Based on shared keywords)",
+    graph_connected_suffix: " (Based on semantic similarity)",
     graph_group_etc: "Others",
 
     // === System Messages & AI Chat ===
@@ -1036,6 +1062,7 @@ export const translations = {
     meeting_audio_loading: "Loading original audio...",
     meeting_audio_unavailable: "Original audio unavailable.",
     meeting_audio_seek_title: "Play original audio from this point",
+    meeting_segment_overlapped_notice: "Multiple people spoke at once here, so the speaker shown may be inaccurate.",
 
     // === Meeting export modal ===
     meeting_export_title: "Export Meeting Minutes",
@@ -1070,6 +1097,7 @@ export const translations = {
     meeting_live_alert_reminder_title: "Decision Reminder",
     meeting_live_alert_reminder_ack_btn: "Got it",
     meeting_live_alert_reminder_view_btn: "View decision",
+    meeting_live_alert_agenda_title: "Pending agenda",
 
     // === Voice meeting top tabs (meetings / export list) ===
     meeting_top_tab_meetings: "Meetings",
@@ -1373,6 +1401,16 @@ export const translations = {
     meeting_voice_registered_tooltip: "Voice registered",
     meeting_remove_chip: "Remove",
     meeting_start_btn: "Start Meeting",
+    meeting_category_label: "Category",
+    meeting_category_locked_hint: "Starting inside this category assigns it automatically.",
+    meeting_category_default_hint: "If you don't choose one, it starts in the default category.",
+    meeting_category_create_option: "+ Create new category",
+    meeting_category_add_btn: "Add category",
+    meeting_category_create_placeholder: "Enter category name",
+    meeting_category_create_confirm: "Create",
+    meeting_category_default_label: "Default",
+    settings_category_drag_hint: "Drag to reorder",
+    settings_category_delete_confirm: (name: string) => `Delete category "${name}"? Meetings already in it will stay, but the category itself can't be recovered.`,
 
     // === Manage attendees modal ===
     meeting_attendees_manage_title: "Manage Attendees",
