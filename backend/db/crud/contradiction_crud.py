@@ -293,6 +293,28 @@ def _revise_short_summary(original_short_summary: str, old_text: str, new_text: 
     return revised
 
 
+def _rewrite_as_formal_decision_text(statement: str) -> Optional[str]:
+    """[추가 - 리뷰 반영] "직접수정해서 반영" 시 만들어지는 새 decision의 decision_text가
+    발화 원문(구어체) 그대로 저장되던 문제 수정. post-meeting이 만드는 다른 decision들은
+    llm_extractor.py의 지침대로 개조식(~함/~임)으로 다듬어지는데, 이 경로만 다듬는 단계가
+    없어서 같은 화면 안에서 문구 톤이 서로 안 맞았음(라이브 테스트에서 발견).
+
+    실패 시 None을 반환해 호출부가 원문(statement)을 그대로 쓰게 한다(폴백)."""
+    prompt = (
+        "아래 발화를 회의록에 쓰는 결정사항 문구로 간결하게 다듬어라. "
+        "개조식(\"~함\", \"~임\", \"~됨\" 등으로 끝나는 명사형 종결)으로 쓰고, "
+        "\"~습니다\", \"~해요\" 같은 평서문/구어체는 쓰지 않는다. "
+        "원래 의미를 바꾸지 말고, 다른 설명 없이 다듬어진 문구만 출력하라.\n\n"
+        f"[발화]\n{statement}"
+    )
+    try:
+        rewritten = _call_ollama(prompt, model=OLLAMA_MODEL_LIGHT, temperature=0).strip()
+    except Exception as e:
+        print(f"[resolve_contradiction] decision_text 개조식 변환 실패(원문으로 폴백): {repr(e)}")
+        return None
+    return rewritten or None
+
+
 def resolve_contradiction(
     db: Session,
     contradiction_id: uuid.UUID,
@@ -348,11 +370,17 @@ def resolve_contradiction(
                 # _check_not_chat_sourced()가 채팅발 모순은 resolve 자체를 막아서
                 # source_type이 항상 meeting_segment일 때만 여기 도달하므로 항상 채워져
                 # 있음(방어적으로 old_decision.meeting_id를 fallback으로 남김).
+                # [수정 - 리뷰 반영] new_decision_text가 없으면(현재 라우터는 항상 안 넘김)
+                # 발화 원문을 그대로 쓰지 않고 개조식으로 다듬는다 - 실패하면 원문 폴백.
+                decision_text = new_decision_text or _rewrite_as_formal_decision_text(
+                    contradiction.statement_text_snapshot
+                ) or contradiction.statement_text_snapshot
+
                 new_decision = Decision(
                     workspace_id=old_decision.workspace_id,
                     meeting_id=contradiction.session_meeting_id or old_decision.meeting_id,
                     title=old_decision.title,
-                    decision_text=new_decision_text or contradiction.statement_text_snapshot,
+                    decision_text=decision_text,
                     reason=new_decision_reason,
                     status="active",
                     supersedes_decision_id=old_decision.id,
