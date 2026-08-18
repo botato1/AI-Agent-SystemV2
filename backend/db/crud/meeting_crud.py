@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from backend.db.modules import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary, User
+from backend.modules.rag import chroma_client
 
 
 def create_meeting(
@@ -177,6 +178,22 @@ def delete_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
     row = get_meeting(db, meeting_id)
     if row:
         row.deleted_at = datetime.now(timezone.utc)
+
+        decisions = db.query(Decision).filter(
+            Decision.meeting_id == meeting_id,
+            Decision.deleted_at.is_(None),
+        ).all()
+        for d in decisions:
+            d.deleted_at = row.deleted_at
+            chroma_client.delete_document(
+                str(d.id), str(d.workspace_id), collection_name=chroma_client.DECISION_COLLECTION
+            )
+
+        db.query(Task).filter(
+            Task.meeting_id == meeting_id,
+            Task.deleted_at.is_(None),
+        ).update({"deleted_at": row.deleted_at}, synchronize_session=False)
+
         db.commit()
         db.refresh(row)
     return row

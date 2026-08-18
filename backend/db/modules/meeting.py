@@ -96,6 +96,7 @@ class MeetingSummary(Base):
     short_summary = Column(Text, nullable=True)
     discussion_points = Column(JSONB, nullable=True)
     next_steps = Column(Text, nullable=True)
+    refined_at = Column(DateTime(timezone=True), nullable=True)  # 정밀 재분석 반영 시각 - 중복 웹훅 방지용
     full_transcript = Column(Text, nullable=True)
     filtered_transcript = Column(Text, nullable=True)  # 잡담 제외한 전체 내용 (가동현 프롬프트 작업 전까지 NULL)
     generation_status = Column(String(20), nullable=False, server_default="pending")
