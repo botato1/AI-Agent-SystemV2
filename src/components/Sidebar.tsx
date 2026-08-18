@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Channel, User, Workspace } from "../types";
 import { Theme } from "../hooks/useTheme";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
 import ProfilePopup from "./ProfilePopup";
 import NotificationBell from "./NotificationBell";
 import InviteMemberModal from "./InviteMemberModal";
@@ -18,6 +20,7 @@ import {
   PencilIcon,
   TrashIcon,
   ChevronDownIcon,
+  ChevronUpIcon,
   ChevronRightIcon,
   CheckIcon,
 } from "./icons";
@@ -33,6 +36,10 @@ interface SidebarProps {
   onDeleteWorkspace?: (id: string) => void;
   channels: Channel[];
   selectedChannelId: string | null;
+  categories: Category[];
+  selectedCategoryId: string | null;
+  onSelectCategory: (id: string | null) => void;
+  onCreateCategory: (name: string) => void;
   activePlaceholder: PlaceholderKey | null;
   voiceMeetingStatus: "recording" | "paused" | null;
   onSelectChannel: (channel: Channel) => void;
@@ -59,6 +66,10 @@ export default function Sidebar({
   onDeleteWorkspace,
   channels,
   selectedChannelId,
+  categories,
+  selectedCategoryId,
+  onSelectCategory,
+  onCreateCategory,
   activePlaceholder,
   voiceMeetingStatus,
   onSelectChannel,
@@ -75,6 +86,32 @@ export default function Sidebar({
   t,
 }: SidebarProps) {
   const [isChannelsExpanded, setIsChannelsExpanded] = useState(true);
+  // 카테고리가 계속 늘어나면 사이드바가 한없이 길어지니, 기본으로는 일부만 보여주고 접어둔다.
+  const [isCategoryListExpanded, setIsCategoryListExpanded] = useState(false);
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
+  const addCategoryRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isAddingCategory) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (addCategoryRef.current && !addCategoryRef.current.contains(e.target as Node)) {
+        setIsAddingCategory(false);
+        setNewCategoryDraftName("");
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isAddingCategory]);
+
+  function handleConfirmAddCategory() {
+    const name = newCategoryDraftName.trim();
+    if (!name) return;
+    onCreateCategory(name);
+    setIsAddingCategory(false);
+    setNewCategoryDraftName("");
+  }
+
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [openMenuChannelId, setOpenMenuChannelId] = useState<string | null>(null);
@@ -303,6 +340,113 @@ export default function Sidebar({
 
       {/* 2. 중앙 스크롤 메인 메뉴 영역 */}
       <div className="flex-1 overflow-y-auto px-3 space-y-4 custom-scrollbar">
+        {/* 카테고리 선택기 - 워크스페이스 전환기처럼 여기서 고른 카테고리가 회의/문서 등
+            여러 페이지의 필터로 전역 적용된다. 홈/그래프 뷰는 이 필터를 적용받지 않는다. */}
+        <div ref={addCategoryRef}>
+          <div className="mb-1.5 flex items-center justify-between px-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-recall-textMuted">
+              {t.sidebar_category_group || "CATEGORIES"}
+            </p>
+            {!isAddingCategory && (
+              <button
+                onClick={() => setIsAddingCategory(true)}
+                title={t.meeting_category_add_btn}
+                className="text-recall-textMuted hover:text-recall-accent"
+              >
+                <PlusIcon size={13} />
+              </button>
+            )}
+          </div>
+          {isAddingCategory && (
+            <div className="mb-1.5 flex gap-1.5">
+              <input
+                autoFocus
+                value={newCategoryDraftName}
+                onChange={(e) => setNewCategoryDraftName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleConfirmAddCategory();
+                  if (e.key === "Escape") setIsAddingCategory(false);
+                }}
+                placeholder={t.meeting_category_create_placeholder}
+                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-2.5 py-1.5 text-sm text-recall-text outline-none focus:border-recall-accent"
+              />
+              <button
+                onClick={handleConfirmAddCategory}
+                disabled={!newCategoryDraftName.trim()}
+                className="flex-shrink-0 rounded-lg bg-recall-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                {t.meeting_category_create_confirm}
+              </button>
+            </div>
+          )}
+          <button
+            onClick={() => onSelectCategory(null)}
+            className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+              selectedCategoryId === null
+                ? "bg-recall-accent/15 text-recall-text font-medium"
+                : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+            }`}
+          >
+            <GridIcon size={16} className="flex-shrink-0" />
+            <span className="truncate">{t.sidebar_category_all || "All"}</span>
+          </button>
+          {(() => {
+            const CAP = 6;
+            const selectedIndex = categories.findIndex((c) => c.id === selectedCategoryId);
+            // 접힌 상태에서도 지금 선택 중인 카테고리는 목록에서 안 사라지게 포함시킨다.
+            const needsSelectedPin = !isCategoryListExpanded && selectedIndex >= CAP;
+            const visibleCategories = isCategoryListExpanded
+              ? categories
+              : needsSelectedPin
+              ? [categories[selectedIndex], ...categories.slice(0, CAP - 1)]
+              : categories.slice(0, CAP);
+            const hiddenCount = categories.length - visibleCategories.length;
+
+            return (
+              <>
+                {visibleCategories.map((cat) => {
+                  const index = categories.indexOf(cat);
+                  return (
+                    <button
+                      key={cat.id}
+                      onClick={() => onSelectCategory(cat.id)}
+                      className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+                        selectedCategoryId === cat.id
+                          ? "bg-recall-accent/15 text-recall-text font-medium"
+                          : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+                      }`}
+                    >
+                      <span
+                        className="h-2 w-2 flex-shrink-0 rounded-full"
+                        style={{ backgroundColor: getCategoryColor(index) }}
+                      />
+                      <span className="truncate">{cat.name}</span>
+                    </button>
+                  );
+                })}
+                {categories.length > CAP && (
+                  <button
+                    onClick={() => setIsCategoryListExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
+                  >
+                    {isCategoryListExpanded ? (
+                      <>
+                        <ChevronUpIcon size={13} className="flex-shrink-0" />
+                        {t.sidebar_category_collapse || "Show less"}
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDownIcon size={13} className="flex-shrink-0" />
+                        {(t.sidebar_category_show_more || ((n: number) => `${n} more`))(hiddenCount)}
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        </div>
+
         {/* 그룹 1: 메인 (MAIN) */}
         <div>
           <p className="mb-1.5 px-2 text-xs font-medium uppercase tracking-wide text-recall-textMuted">
@@ -401,6 +545,18 @@ export default function Sidebar({
                               : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
                           }`}
                         >
+                          {(() => {
+                            const categoryIndex = categories.findIndex((c) => c.id === channel.category_id);
+                            const cat = categoryIndex >= 0 ? categories[categoryIndex] : null;
+                            if (!cat || cat.is_default) return null;
+                            return (
+                              <span
+                                title={cat.name}
+                                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                                style={{ backgroundColor: getCategoryColor(categoryIndex) }}
+                              />
+                            );
+                          })()}
                           <span className="truncate">{channel.name}</span>
                         </button>
                         <button

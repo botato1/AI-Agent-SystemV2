@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorktrees } from "../hooks/useWorktrees";
 import { WorktreeStatus } from "../services/worktree";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
 import { UploadIcon, DocumentIcon, TrashIcon, ChevronLeftIcon } from "./icons";
 import {
   DocumentDetail,
@@ -11,6 +13,7 @@ import {
 } from "../services/document";
 import DocumentDetailPanel from "./DocumentDetailPanel";
 import DocumentOriginalViewer from "./DocumentOriginalViewer";
+import CategoryBadge from "./CategoryBadge";
 
 type PreviewContentTab = "summary" | "original";
 
@@ -61,9 +64,20 @@ function analysisStatusLabel(t: any, status: string): string {
   }
 }
 
-export default function WorktreePanel({ workspaceId, t }: { workspaceId: string; t: any }) {
+export default function WorktreePanel({
+  workspaceId,
+  categories,
+  selectedCategoryId,
+  t,
+}: {
+  workspaceId: string;
+  categories: Category[];
+  selectedCategoryId: string | null;
+  t: any;
+}) {
+  const categoryIndexById = new Map(categories.map((c, index) => [c.id, index]));
   const {
-    worktrees,
+    worktrees: allWorktrees,
     isLoading,
     selectedWorktreeId,
     setSelectedWorktreeId,
@@ -74,7 +88,12 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
     uploadFolder,
     deleteWorktree,
     deleteFile,
-  } = useWorktrees(workspaceId);
+  } = useWorktrees(workspaceId, selectedCategoryId);
+
+  // 사이드바 전역 카테고리 선택기에서 고른 값 - null("전체")이면 전부, 아니면 그 카테고리만.
+  const worktrees = selectedCategoryId
+    ? allWorktrees.filter((w) => w.category_id === selectedCategoryId)
+    : allWorktrees;
 
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [previewFile, setPreviewFile] = useState<{ id: string; name: string } | null>(null);
@@ -216,6 +235,16 @@ export default function WorktreePanel({ workspaceId, t }: { workspaceId: string;
                     </span>
                     <span className="text-xs text-recall-textMuted">{formatDate(w.created_at)}</span>
                   </span>
+                  {(() => {
+                    const cat = categories.find((c) => c.id === w.category_id);
+                    if (!cat || cat.is_default) return null;
+                    return (
+                      <CategoryBadge
+                        name={cat.name}
+                        color={getCategoryColor(categoryIndexById.get(cat.id) ?? 0)}
+                      />
+                    );
+                  })()}
                   <span className="text-xs text-recall-textMuted">
                     {t.worktree_file_count_label(w.completed_file_count, w.total_file_count)}
                     {w.failed_file_count > 0 ? t.worktree_failed_count_label(w.failed_file_count) : ""}

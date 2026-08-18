@@ -87,17 +87,32 @@ export function useContradictions(workspaceId: string) {
     };
   }, [workspaceId, pendingSummaryFor]);
 
-  async function resolve(id: string, resolutionType: ContradictionResolutionType, note?: string) {
+  async function resolve(
+    id: string,
+    resolutionType: ContradictionResolutionType,
+    note?: string,
+    // 결정 변경 반영 시 감지된 내용이 틀려서 사용자가 직접 고친 값 (change_acknowledged 전용)
+    newDecisionText?: string,
+    newDecisionReason?: string
+  ): Promise<boolean> {
     const target = contradictions.find((c) => c.id === id) ?? null;
-    const res = await resolveContradictionApi(workspaceId, id, resolutionType, note);
+    const res = await resolveContradictionApi(
+      workspaceId,
+      id,
+      resolutionType,
+      note,
+      newDecisionText,
+      newDecisionReason
+    );
     if (res.status === "success") {
       setContradictions((prev) => prev.filter((c) => c.id !== id));
       if (resolutionType === "change_acknowledged" && target) {
         setPendingSummaryFor(target);
       }
-    } else {
-      showToast(res.message);
+      return true;
     }
+    showToast(res.message);
+    return false;
   }
 
   async function dismiss(id: string, note?: string) {

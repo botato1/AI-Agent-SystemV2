@@ -25,6 +25,7 @@ function toAnalyzedDocument(d: DocumentListItem): AnalyzedDocument {
     keywords: [],
     fileType: "",
     fileUrl: "",
+    category_id: d.category_id ?? null,
   };
 }
 
@@ -148,7 +149,7 @@ export function useDocumentAnalysis(workspaceId: string) {
     loadDetail();
   }, [workspaceId, activeDocId, activeDocStatus]);
 
-  async function uploadDocument(fileList: FileList | null) {
+  async function uploadDocument(fileList: FileList | null, categoryId?: string) {
     if (!fileList || fileList.length === 0) return;
 
     const files = Array.from(fileList);
@@ -165,11 +166,12 @@ export function useDocumentAnalysis(workspaceId: string) {
         keywords: [],
         fileType: file.type || "application/octet-stream",
         fileUrl: "",
+        category_id: categoryId ?? null,
       };
       setDocuments((prev) => [placeholder, ...prev]);
       setActiveDocId(tempId);
 
-      const res = await uploadDocumentApi(workspaceId, file);
+      const res = await uploadDocumentApi(workspaceId, file, undefined, "document", undefined, categoryId);
 
       if (res.status === "success" && res.documentId) {
         setDocuments((prev) =>

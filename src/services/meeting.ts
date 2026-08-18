@@ -1271,7 +1271,8 @@ export async function startMeetingApi(
   workspaceId: string,
   title: string,
   relatedRoomId?: string,
-  recordingMode?: RecordingMode
+  recordingMode?: RecordingMode,
+  categoryId?: string
 ): Promise<StartMeetingResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -1295,6 +1296,9 @@ export async function startMeetingApi(
         title,
         related_room_id: relatedRoomId || null,
         recording_mode: recordingMode || "single_device",
+        // 백엔드가 category_id를 받도록 확장되기 전까지는 무시되고
+        // 워크스페이스의 기본 카테고리로 생성된다.
+        category_id: categoryId || null,
       }),
     });
 

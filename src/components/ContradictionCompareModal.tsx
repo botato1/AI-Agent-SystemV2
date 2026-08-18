@@ -3,13 +3,19 @@ import { useState } from "react";
 import { Contradiction, ContradictionResolutionType } from "../services/contradiction";
 import ContradictionMessage from "./ContradictionMessage";
 import ContradictionEditForm from "./ContradictionEditForm";
+import ContradictionApplyForm from "./ContradictionApplyForm";
 import { CloseIcon } from "./icons";
 import { showConfirm } from "../lib/confirm";
 
 interface ContradictionCompareModalProps {
   contradiction: Contradiction;
   onClose: () => void;
-  onResolve: (id: string, resolutionType: ContradictionResolutionType) => void;
+  onResolve: (
+    id: string,
+    resolutionType: ContradictionResolutionType,
+    newDecisionText?: string,
+    newDecisionReason?: string
+  ) => void;
   onUpdate?: (
     id: string,
     updates: { statement_text_snapshot: string; reference_text_snapshot: string }
@@ -34,7 +40,9 @@ export default function ContradictionCompareModal({
   // 변경은 그대로 반영 가능). dismiss/keep_reference는 source_type이나 reference_type과
   // 무관하게 항상 가능하다.
   const canApplyChange = !(contradiction.source_type === "room_message" && contradiction.reference_type === "decision");
+  const isDecisionCard = contradiction.reference_type === "decision";
   const [isEditing, setIsEditing] = useState(false);
+  const [isApplying, setIsApplying] = useState(false);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
@@ -61,6 +69,18 @@ export default function ContradictionCompareModal({
             }}
             t={t}
           />
+        ) : isApplying ? (
+          <ContradictionApplyForm
+            contradiction={contradiction}
+            onCancel={() => setIsApplying(false)}
+            onApply={async ({ newDecisionText, newDecisionReason }) => {
+              const confirmed = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+              if (!confirmed) return false;
+              onResolve(contradiction.id, "change_acknowledged", newDecisionText, newDecisionReason);
+              return true;
+            }}
+            t={t}
+          />
         ) : (
           <ContradictionMessage
             contradiction={contradiction}
@@ -72,33 +92,40 @@ export default function ContradictionCompareModal({
         )}
 
         <div className="mt-4 flex flex-col gap-2 border-t border-recall-border pt-4">
-          <div className="flex gap-2">
-            {onUpdate && !isEditing && (
+          {!isEditing && !isApplying && (
+            <div className="flex gap-2">
+              {onUpdate && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-textMuted hover:bg-white/5"
+                >
+                  {t.contradiction_edit}
+                </button>
+              )}
               <button
-                onClick={() => setIsEditing(true)}
-                className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-textMuted hover:bg-white/5"
+                onClick={() => onResolve(contradiction.id, "keep_reference")}
+                className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-text hover:bg-white/5"
               >
-                {t.contradiction_edit}
+                {t.contradiction_keep}
               </button>
-            )}
-            <button
-              onClick={() => onResolve(contradiction.id, "keep_reference")}
-              className="flex-1 rounded-lg border border-recall-border px-3 py-2 text-xs text-recall-text hover:bg-white/5"
-            >
-              {t.contradiction_keep}
-            </button>
-            {canApplyChange && (
-              <button
-                onClick={async () => {
-                  const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
-                  if (ok) onResolve(contradiction.id, "change_acknowledged");
-                }}
-                className="flex-1 rounded-lg bg-recall-accent px-3 py-2 text-xs font-medium text-white hover:opacity-90"
-              >
-                {t.contradiction_apply}
-              </button>
-            )}
-          </div>
+              {canApplyChange && (
+                <button
+                  onClick={async () => {
+                    // 결정 변경(decision)은 반영 전에 내용을 직접 고칠 수 있는 폼을 먼저 보여준다.
+                    if (isDecisionCard) {
+                      setIsApplying(true);
+                      return;
+                    }
+                    const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                    if (ok) onResolve(contradiction.id, "change_acknowledged");
+                  }}
+                  className="flex-1 rounded-lg bg-recall-accent px-3 py-2 text-xs font-medium text-white hover:opacity-90"
+                >
+                  {t.contradiction_apply}
+                </button>
+              )}
+            </div>
+          )}
 
           {!canApplyChange && (
             <p className="text-center text-xs text-recall-textMuted">{t.contradiction_decision_apply_notice}</p>

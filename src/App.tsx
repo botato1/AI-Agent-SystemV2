@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
@@ -10,6 +10,7 @@ import AiChatView from "./components/AiChatView";
 import Settings from "./components/Settings";
 import ProfileModal from "./components/ProfileModal";
 import DecisionPreviewModal from "./components/DecisionPreviewModal";
+import LiveMeetingBanner from "./components/LiveMeetingBanner";
 import AuthView from "./components/AuthView";
 import PasswordResetConfirmView from "./components/PasswordResetConfirmView";
 import { ToastContainer } from "./lib/toast";
@@ -20,6 +21,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useLiveMeeting } from "./hooks/useLiveMeeting";
 import { useDocumentAnalysis } from "./hooks/useDocumentAnalysis";
 import { useRealTasks } from "./hooks/useRealTasks";
+import { useCategories } from "./hooks/useCategories";
 import { useAiChat } from "./hooks/useAiChat";
 import { Language, translations } from "./data/translations";
 import { hashAvatarColor, loadAvatarColor, saveAvatarColor } from "./data/avatarColors";
@@ -92,6 +94,25 @@ export default function App() {
   // 백엔드 워크스페이스 목록 조회가 최소 1회 완료됐는지 (완료 전엔 "워크스페이스 없음" 화면을 보여주지 않음)
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
 
+  // 사이드바의 전역 카테고리 선택기 - 워크스페이스 전환기처럼 여기서 고른 카테고리가 회의/문서 등
+  // 여러 페이지에 필터로 적용된다. MeetingsPanel은 카테고리 CRUD UI 때문에 자체적으로 별도
+  // useCategories 인스턴스를 쓰고 있어서, 이 인스턴스는 사이드바/홈 배지/문서 필터 전용이다.
+  const categoriesState = useCategories(currentWorkspaceId);
+  // currentWorkspaceId를 localStorage에 저장하는 것과 동일하게, 선택한 카테고리도 새로고침 후
+  // 유지되게 워크스페이스별로 저장한다 (다른 워크스페이스엔 없는 카테고리 id일 수 있어서 워크스페이스별 키 사용).
+  const [selectedCategoryId, setSelectedCategoryIdState] = useState<string | null>(() =>
+    localStorage.getItem(`selected_category_id_${currentWorkspaceId}`) || null
+  );
+  function setSelectedCategoryId(id: string | null) {
+    setSelectedCategoryIdState(id);
+    if (!currentWorkspaceId) return;
+    if (id) localStorage.setItem(`selected_category_id_${currentWorkspaceId}`, id);
+    else localStorage.removeItem(`selected_category_id_${currentWorkspaceId}`);
+  }
+  useEffect(() => {
+    setSelectedCategoryIdState(localStorage.getItem(`selected_category_id_${currentWorkspaceId}`) || null);
+  }, [currentWorkspaceId]);
+
   // 워크스페이스 멤버 id → 표시 이름 매핑 (채팅 메시지 발신자 이름 표시용)
   const [memberNameById, setMemberNameById] = useState<Record<string, string>>({});
   // 워크스페이스 멤버 id → 프로필 이미지 URL 매핑 (채팅 메시지 발신자 아바타 표시용)
@@ -104,6 +125,20 @@ export default function App() {
     type: "placeholder",
     key: "home",
   });
+
+  // 사이드바에서 카테고리를 바꾸면(워크스페이스 전환과 달리) 채팅방은 목록에서 조용히
+  // 필터링될 뿐이라, 마침 다른 카테고리 채팅방을 보고 있었다면 그 화면이 그대로 남는다 -
+  // 워크스페이스 전환 때와 동일하게 홈으로 돌려보낸다. 워크스페이스 전환이 selectedCategoryId를
+  // null로 초기화하면서 이 이펙트도 같이 걸리므로, 그 경우엔(handleSelectWorkspace가 이미
+  // 알맞은 채널을 골라둔 상태) 건너뛴다.
+  const prevWorkspaceIdForCategoryResetRef = useRef(currentWorkspaceId);
+  useEffect(() => {
+    const workspaceChanged = prevWorkspaceIdForCategoryResetRef.current !== currentWorkspaceId;
+    prevWorkspaceIdForCategoryResetRef.current = currentWorkspaceId;
+    if (workspaceChanged) return;
+    setSelection((prev) => (prev.type === "channel" ? { type: "placeholder", key: "home" } : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategoryId]);
   // 홈 화면 "최근 회의록"에서 클릭한 회의를 음성 회의 화면에서 바로 선택된 상태로 열기 위한 값
   const [pendingMeetingId, setPendingMeetingId] = useState<string | null>(null);
   // 결정 근거 팝업에서 "그 발언이 나온 지점"으로 바로 가고 싶을 때 - 회의만 선택하는 게 아니라
@@ -195,23 +230,23 @@ export default function App() {
     loadRealWorkspaces();
   }, [currentUser]);
 
-  // 2-1. 워크스페이스 선택/전환 시 실시간 채팅방(rooms) 목록 조회
+  // 2-1. 워크스페이스 선택/전환 또는 사이드바 카테고리 선택 시 실시간 채팅방(rooms) 목록 조회
   useEffect(() => {
     async function loadRooms() {
       if (!currentWorkspaceId) return;
 
-      const res = await getRoomListApi(currentWorkspaceId);
+      const res = await getRoomListApi(currentWorkspaceId, selectedCategoryId ?? undefined);
 
       if (res.status === "success") {
         setChannelsByWorkspace((prev) => ({
           ...prev,
-          [currentWorkspaceId]: res.rooms.map((r) => ({ id: r.id, name: r.name })),
+          [currentWorkspaceId]: res.rooms.map((r) => ({ id: r.id, name: r.name, category_id: r.category_id })),
         }));
       }
     }
 
     loadRooms();
-  }, [currentWorkspaceId]);
+  }, [currentWorkspaceId, selectedCategoryId]);
 
   // 2-2. 워크스페이스 선택/전환 시 멤버 목록 조회 (채팅 메시지 발신자 이름 표시용)
   useEffect(() => {
@@ -254,6 +289,11 @@ export default function App() {
   const voiceMeetingStatus =
     liveMeeting.status === "recording" ? "recording" : liveMeeting.status === "paused" ? "paused" : null;
 
+  // 배너에 띄울 회의 - 내가 직접 시작/참가한 회의(liveMeeting.meeting)가 있으면 그걸 쓰고,
+  // 없으면 다른 사람이 시작해둔 회의(joinableMeeting, 유휴 상태에서 5초마다 폴링해서 얻음)를 쓴다.
+  const bannerMeeting = voiceMeetingStatus && liveMeeting.meeting ? liveMeeting.meeting : liveMeeting.joinableMeeting;
+  const bannerIsPaused = voiceMeetingStatus === "paused";
+
   const documentAnalysis = useDocumentAnalysis(currentWorkspaceId);
   const activeRecorderName = voiceMeetingStatus ? liveMeeting.startedByName : null;
 
@@ -269,7 +309,7 @@ export default function App() {
   // 언마운트되면서 대화 상태(메시지, 답변 생성 중 표시)가 통째로 날아간다 - 답변 생성
   // 중에 다른 곳 갔다 돌아오면 질문/생성중 표시가 잠깐 안 보이던 게 이것 때문이었음.
   // 다른 화면 전환에도 안 없어지도록 여기(App)로 끌어올려서 항상 마운트 상태로 유지한다.
-  const aiChat = useAiChat(currentWorkspaceId);
+  const aiChat = useAiChat(currentWorkspaceId, selectedCategoryId);
 
   // 회원가입
   const handleSignUp = (account: RegisteredAccount) => {
@@ -428,10 +468,12 @@ export default function App() {
   async function handleCreateChannel() {
     const newName = `${t.name_new_chatroom}${channels.length + 1}`;
 
-    const res = await createRoomApi(currentWorkspaceId, newName);
+    // 지금 사이드바에서 특정 카테고리를 선택 중이면, 새 채팅방도 거기 소속으로 만든다
+    // (회의 폴더에서 "+"로 만들 때와 동일한 패턴).
+    const res = await createRoomApi(currentWorkspaceId, newName, selectedCategoryId ?? undefined);
 
     if (res.status === "success" && res.room) {
-      const newChannel: Channel = { id: res.room.id, name: res.room.name };
+      const newChannel: Channel = { id: res.room.id, name: res.room.name, category_id: res.room.category_id };
       setChannelsByWorkspace((prev) => ({
         ...prev,
         [currentWorkspaceId]: [...(prev[currentWorkspaceId] ?? []), newChannel],
@@ -445,7 +487,7 @@ export default function App() {
   async function handleRenameChannel(id: string, name: string) {
     if (!name.trim()) return;
 
-    const res = await updateRoomApi(currentWorkspaceId, id, name);
+    const res = await updateRoomApi(currentWorkspaceId, id, { name });
 
     if (res.status === "success" && res.room) {
       const updatedName = res.room.name;
@@ -555,6 +597,10 @@ export default function App() {
         onDeleteWorkspace={handleDeleteWorkspace}
         channels={channels}
         selectedChannelId={selection.type === "channel" ? selection.channel.id : null}
+        categories={categoriesState.categories}
+        selectedCategoryId={selectedCategoryId}
+        onSelectCategory={setSelectedCategoryId}
+        onCreateCategory={(name) => categoriesState.createCategory(name)}
         activePlaceholder={selection.type === "placeholder" ? selection.key : null}
         voiceMeetingStatus={voiceMeetingStatus}
         onSelectChannel={(channel) => setSelection({ type: "channel", channel })}
@@ -572,7 +618,19 @@ export default function App() {
         t={t}
       />
 
-      {selection.type === "channel" ? (
+      <div className="flex h-full flex-1 flex-col overflow-hidden">
+        {bannerMeeting && (
+          <LiveMeetingBanner
+            title={bannerMeeting.title}
+            isPaused={bannerIsPaused}
+            hostUserId={bannerMeeting.started_by}
+            hostName={memberNameById[bannerMeeting.started_by] ?? bannerMeeting.started_by}
+            hostAvatarUrl={memberAvatarById[bannerMeeting.started_by] ?? null}
+            onClick={() => setSelection({ type: "placeholder", key: "voiceMeeting" })}
+            t={t}
+          />
+        )}
+        {selection.type === "channel" ? (
         <MainArea
           channel={selection.channel}
           workspaceId={currentWorkspaceId}
@@ -586,6 +644,8 @@ export default function App() {
           memberAvatarById={memberAvatarById}
           activeRecorderName={activeRecorderName}
           onOpenDecision={openDecision}
+          categories={categoriesState.categories}
+          selectedCategoryId={selectedCategoryId}
           t={t}
         />
       ) : selection.key === "home" ? (
@@ -604,10 +664,17 @@ export default function App() {
             setSelection({ type: "placeholder", key: "voiceMeeting" });
           }}
           onOpenDecision={openDecision}
+          categories={categoriesState.categories}
           t={t}
         />
       ) : selection.key === "aiChat" ? (
-        <AiChatView workspaceId={currentWorkspaceId} chat={aiChat} t={t} />
+        <AiChatView
+          workspaceId={currentWorkspaceId}
+          chat={aiChat}
+          categories={categoriesState.categories}
+          selectedCategoryId={selectedCategoryId}
+          t={t}
+        />
       ) : selection.key === "voiceMeeting" ? (
         <VoiceMeetingView
           workspaceId={currentWorkspaceId}
@@ -642,6 +709,7 @@ export default function App() {
           onInitialSegmentIdConsumed={() => setPendingSegmentId(null)}
           onOpenDecision={openDecision}
           onTaskApproved={realTasks.refetchTasks}
+          selectedCategoryId={selectedCategoryId}
           t={t}
         />
       ) : selection.key === "dashboard" ? (
@@ -655,14 +723,23 @@ export default function App() {
           onPriorityChange={realTasks.changePriority}
           onDeleteTask={realTasks.removeTask}
           onOpenDecision={openDecision}
+          categories={categoriesState.categories}
+          selectedCategoryId={selectedCategoryId}
           t={t}
         />
       ) : selection.key === "docAnalysis" ? (
-        <DocumentAnalysisView workspaceId={currentWorkspaceId} {...documentAnalysis} t={t} />
+        <DocumentAnalysisView
+          workspaceId={currentWorkspaceId}
+          {...documentAnalysis}
+          categories={categoriesState.categories}
+          selectedCategoryId={selectedCategoryId}
+          t={t}
+        />
       ) : selection.key === "graph" ? (
         <GraphView
           workspaceId={currentWorkspaceId}
           documents={documentAnalysis.documents}
+          categories={categoriesState.categories}
           t={t}
         />
       ) : (
@@ -672,6 +749,7 @@ export default function App() {
           </p>
         </div>
       )}
+      </div>
 
       {previewDecisionId && (
         <DecisionPreviewModal
@@ -709,6 +787,7 @@ export default function App() {
           t={t}
           onLogout={handleLogOut}
           onDeleteAccount={handleDeleteAccount}
+          categoriesState={categoriesState}
         />
       )}
     </div>

@@ -12,7 +12,7 @@ export type NotificationType =
   | "file_analysis_completed"
   | "file_analysis_failed";
 
-export type NotificationRefType = "meeting_segment" | "room_message";
+export type NotificationRefType = "meeting_segment" | "room_message" | "contradiction" | "meeting";
 
 export interface AppNotification {
   id: string;

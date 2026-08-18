@@ -24,10 +24,14 @@ import {
 } from "./icons";
 import { getWorkspaceMembersApi } from "../services/workspace";
 import { resolveAssigneeName } from "../lib/resolveAssigneeName";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
+import CategoryBadge from "./CategoryBadge";
 
 interface Props {
   taskList: Task[];
   workspaceId?: string;
+  categories?: Category[];
   onOpenModal: (status?: TaskStatus) => void;
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onPriorityChange: (taskId: string, newPriority: TaskPriority) => void;
@@ -459,11 +463,13 @@ function InsertionGap({ id }: { id: string }) {
 
 function DraggableCard({
   task,
+  categories,
   onStatusChange,
   onSelectDetail,
   t,
 }: {
   task: Task;
+  categories: Category[];
   onStatusChange: (taskId: string, newStatus: TaskStatus) => void;
   onSelectDetail: (task: Task) => void;
   t: any;
@@ -549,6 +555,17 @@ function DraggableCard({
           {formatDeadline(task.deadline)}
         </span>
       </div>
+
+      {(() => {
+        const categoryIndex = categories.findIndex((c) => c.id === task.category_id);
+        const cat = categoryIndex >= 0 ? categories[categoryIndex] : null;
+        if (!cat || cat.is_default) return null;
+        return (
+          <div className="mt-2">
+            <CategoryBadge name={cat.name} color={getCategoryColor(categoryIndex)} />
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -568,6 +585,7 @@ function DroppableColumn({ col, children }: { col: any; children: React.ReactNod
 export default function TaskBoard({
   taskList,
   workspaceId,
+  categories = [],
   onOpenModal,
   onStatusChange,
   onPriorityChange,
@@ -577,6 +595,15 @@ export default function TaskBoard({
 }: Props) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
+
+  // 카테고리 필터가 바뀌어 상세 패널을 열어둔 업무가 목록에서 빠지면, 다른 카테고리 업무를
+  // 계속 띄워두지 않게 상세 패널도 같이 닫는다.
+  useEffect(() => {
+    if (detailTask && !taskList.some((t) => t.id === detailTask.id)) {
+      setDetailTask(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskList]);
 
   const [sortMode, setSortMode] = useState<SortMode>("deadline");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -742,6 +769,7 @@ export default function TaskBoard({
                   <div key={task.id}>
                     <DraggableCard
                       task={task}
+                      categories={categories}
                       onStatusChange={onStatusChange}
                       onSelectDetail={(t) => setDetailTask(t)}
                       t={t}

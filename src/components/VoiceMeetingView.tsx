@@ -24,7 +24,8 @@ interface VoiceMeetingViewProps {
     relatedRoomId?: string,
     attendeeIds?: string[],
     location?: string,
-    recordingMode?: RecordingMode
+    recordingMode?: RecordingMode,
+    categoryId?: string
   ) => void;
   onJoin: (meetingId: string) => void;
   onPause: () => void;
@@ -41,6 +42,7 @@ interface VoiceMeetingViewProps {
   onInitialSegmentIdConsumed?: () => void;
   onOpenDecision: (decisionId: string) => void;
   onTaskApproved: () => void;
+  selectedCategoryId?: string | null;
   t: any;
 }
 
@@ -77,6 +79,7 @@ export default function VoiceMeetingView({
   onInitialSegmentIdConsumed,
   onOpenDecision,
   onTaskApproved,
+  selectedCategoryId,
   t,
 }: VoiceMeetingViewProps) {
   return (
@@ -118,6 +121,7 @@ export default function VoiceMeetingView({
         onInitialSegmentIdConsumed={onInitialSegmentIdConsumed}
         onOpenDecision={onOpenDecision}
         onTaskApproved={onTaskApproved}
+        selectedCategoryId={selectedCategoryId}
         t={t}
       />
     </div>

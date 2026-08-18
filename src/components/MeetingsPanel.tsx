@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
+import { useCategories } from "../hooks/useCategories";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert, ContradictionAlertAction, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
@@ -15,6 +16,7 @@ import {
   StopIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronDownIcon,
   WarningIcon,
   AssistIcon,
   PencilIcon,
@@ -29,6 +31,7 @@ import {
 } from "./icons";
 import ContradictionMessage from "./ContradictionMessage";
 import ContradictionEditForm from "./ContradictionEditForm";
+import ContradictionApplyForm from "./ContradictionApplyForm";
 import { showConfirm } from "../lib/confirm";
 import ChangeSummaryModal from "./ChangeSummaryModal";
 import DocumentPreviewModal from "./DocumentPreviewModal";
@@ -171,6 +174,7 @@ function SegmentRow({
   timeMs,
   content,
   hasContradiction,
+  overlapped,
   segmentId,
   speakerNameOptions,
   onAssignSpeaker,
@@ -186,6 +190,8 @@ function SegmentRow({
   timeMs: number;
   content: string;
   hasContradiction?: boolean;
+  // 여러 사람이 동시에 말한 실시간 세그먼트 - speaker_label이 부정확할 수 있다는 신호
+  overlapped?: boolean;
   segmentId?: string;
   speakerNameOptions?: string[];
   onAssignSpeaker?: (segmentId: string, name: string) => void;
@@ -253,6 +259,11 @@ function SegmentRow({
           )}
           {hasContradiction && (
             <AssistIcon size={12} className="flex-shrink-0 text-recall-accent" />
+          )}
+          {overlapped && (
+            <span title={t.meeting_segment_overlapped_notice} className="flex-shrink-0">
+              <WarningIcon size={12} className="text-amber-400" />
+            </span>
           )}
           {canAssign && (
             <AssignSpeakerControl
@@ -467,7 +478,8 @@ interface MeetingsPanelProps {
     relatedRoomId?: string,
     attendeeIds?: string[],
     location?: string,
-    recordingMode?: RecordingMode
+    recordingMode?: RecordingMode,
+    categoryId?: string
   ) => void;
   onJoinLive: (meetingId: string) => void;
   onPauseLive: () => void;
@@ -488,6 +500,9 @@ interface MeetingsPanelProps {
   onInitialSegmentIdConsumed?: () => void;
   onOpenDecision: (decisionId: string) => void;
   onTaskApproved: () => void;
+  // 사이드바 전역 카테고리 선택기에서 고른 값 - null("전체")이면 기존 폴더뷰 그대로,
+  // 특정 카테고리면 그 카테고리 회의만 폴더 없이 플랫하게 보여준다.
+  selectedCategoryId?: string | null;
   t: any;
 }
 
@@ -1336,6 +1351,7 @@ export default function MeetingsPanel({
   onInitialSegmentIdConsumed,
   onOpenDecision,
   onTaskApproved,
+  selectedCategoryId,
   t,
 }: MeetingsPanelProps) {
   const {
@@ -1367,7 +1383,8 @@ export default function MeetingsPanel({
     updateFullSummary,
     updateShortSummary,
     reload,
-  } = useRealMeetings(workspaceId);
+    upsertMeeting,
+  } = useRealMeetings(workspaceId, selectedCategoryId);
 
   // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어온 경우, 그 회의를 바로 선택해서 보여준다.
   useEffect(() => {
@@ -1518,11 +1535,16 @@ export default function MeetingsPanel({
   const [isContradictionListOpen, setIsContradictionListOpen] = useState(true);
   const [expandedContradictionIds, setExpandedContradictionIds] = useState<Set<string>>(new Set());
   const [editingContradictionId, setEditingContradictionId] = useState<string | null>(null);
+  const [applyingContradictionId, setApplyingContradictionId] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
   const [showAttendeesModal, setShowAttendeesModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showStartModal, setShowStartModal] = useState(false);
   const [topTab, setTopTab] = useState<"meetings" | "exports">("meetings");
+  const categoriesState = useCategories(workspaceId);
+  const categoryById = new Map(categoriesState.categories.map((c) => [c.id, c]));
+  const [startCategoryId, setStartCategoryId] = useState<string | null>(null);
+
   const audioPlayerRef = useRef<MeetingAudioPlayerHandle>(null);
 
   // 결정 근거 팝업의 "원본 회의로 이동"에서 세그먼트 id까지 넘어온 경우 - 그 회의가 선택되고
@@ -1615,6 +1637,12 @@ export default function MeetingsPanel({
 
   useEffect(() => {
     if (liveStatus === "ended") {
+      // 서버 목록을 다시 받아오기 전에, 방금 끝난 회의를 "분석 중" 상태로 즉시 반영해서
+      // reload()가 실패/지연되더라도 화면이 통째로 비어 보이지 않게 한다.
+      if (liveMeeting) {
+        upsertMeeting({ ...liveMeeting, status: "processing" });
+        setSelectedMeetingId(liveMeeting.id);
+      }
       reload();
       onResetLive();
     }
@@ -1630,8 +1658,65 @@ export default function MeetingsPanel({
     return t.meeting_default_title(d.getMonth() + 1, d.getDate());
   }
 
+  // 지금 사이드바에서 특정 카테고리를 보고 있으면, 새로 시작하는 회의도 거기 소속으로 만든다
+  // (채팅방/할 일/AI 대화 생성 때와 동일한 패턴).
   function handleStartRecording() {
+    setStartCategoryId(selectedCategoryId ?? null);
     setShowStartModal(true);
+  }
+
+  function renderMeetingCard(m: Meeting, opts: { showCategoryChip: boolean }) {
+    const isSelected = m.id === selectedMeetingId;
+    const isThisLive = isLiveActive && liveMeeting && m.id === liveMeeting.id;
+    const badge = statusBadge(t, m.status);
+    const category = m.category_id ? categoryById.get(m.category_id) : null;
+    return (
+      <div
+        key={m.id}
+        onClick={() => setSelectedMeetingId(m.id)}
+        className={`group flex cursor-pointer flex-col gap-1 rounded-xl border p-2.5 transition ${
+          isSelected
+            ? "border-recall-accent bg-recall-accent/10 shadow-sm"
+            : "border-recall-border/80 bg-recall-bgSoft/40 hover:bg-white/5"
+        }`}
+      >
+        <div className="flex items-center gap-1.5">
+          {m.input_type === "live_recording" ? (
+            <MicIcon
+              size={12}
+              className={`flex-shrink-0 ${isThisLive ? "text-recall-danger" : "text-recall-textMuted"}`}
+            />
+          ) : (
+            <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
+          )}
+          <span className="min-w-0 flex-1 truncate text-xs font-bold text-recall-text">{m.title}</span>
+          {!isThisLive && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                removeMeeting(m.id);
+              }}
+              className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline transition"
+              aria-label={t.meeting_delete_aria}
+            >
+              <TrashIcon size={12} />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {isThisLive && <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-recall-danger" />}
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
+            {isThisLive ? liveStatusLabel(t, liveStatus) : badge.label}
+          </span>
+          <span className="text-[11px] text-recall-textMuted">{formatDate(m.created_at)}</span>
+          {opts.showCategoryChip && category && !category.is_default && (
+            <span className="ml-auto truncate rounded-full border border-recall-accent/30 bg-recall-accent/10 px-2 py-0.5 text-xs font-semibold text-recall-accent">
+              {category.name}
+            </span>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -1692,7 +1777,7 @@ export default function MeetingsPanel({
           {/* 🌟 단일 메인 CTA 버튼: 새 회의 시작 */}
           <div className="mb-3 space-y-2">
             <button
-              onClick={handleStartRecording}
+              onClick={() => handleStartRecording()}
               disabled={isLiveActive}
               title={isLiveActive ? t.meeting_already_running : undefined}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-recall-accent py-3 px-4 text-sm font-bold text-white shadow-md shadow-recall-accent/25 hover:opacity-95 active:scale-95 transition-all disabled:cursor-not-allowed disabled:opacity-40"
@@ -1711,65 +1796,21 @@ export default function MeetingsPanel({
             </button>
           </div>
 
-          {/* 회의 리스트 영역 */}
+          {/* 회의 리스트 영역 - 카테고리 필터링은 사이드바 전역 선택기가 담당하므로, 여기서는
+              항상 평평한 목록만 보여준다. "전체"를 보고 있을 때만 카드에 카테고리 배지를 붙여서
+              어느 카테고리 소속인지 알 수 있게 한다(필터링된 상태에선 다 같은 카테고리라 불필요). */}
           <div className="flex-1 space-y-1.5 overflow-y-auto custom-scrollbar pr-0.5">
             {isLoading ? (
               <p className="py-6 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
-            ) : meetings.length === 0 ? (
-              <p className="py-6 text-center text-xs text-recall-textMuted">{t.meeting_none}</p>
-            ) : (
-              meetings.map((m) => {
-                const isSelected = m.id === selectedMeetingId;
-                const isThisLive = isLiveActive && liveMeeting && m.id === liveMeeting.id;
-                const badge = statusBadge(t, m.status);
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => setSelectedMeetingId(m.id)}
-                    className={`group flex cursor-pointer flex-col gap-1 rounded-xl border p-2.5 transition ${
-                      isSelected
-                        ? "border-recall-accent bg-recall-accent/10 shadow-sm"
-                        : "border-recall-border/80 bg-recall-bgSoft/40 hover:bg-white/5"
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      {m.input_type === "live_recording" ? (
-                        <MicIcon
-                          size={12}
-                          className={`flex-shrink-0 ${isThisLive ? "text-recall-danger" : "text-recall-textMuted"}`}
-                        />
-                      ) : (
-                        <DocumentIcon size={12} className="flex-shrink-0 text-recall-textMuted" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-xs font-bold text-recall-text">
-                        {m.title}
-                      </span>
-                      {!isThisLive && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeMeeting(m.id);
-                          }}
-                          className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-danger group-hover:inline transition"
-                          aria-label={t.meeting_delete_aria}
-                        >
-                          <TrashIcon size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {isThisLive && (
-                        <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-recall-danger" />
-                      )}
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${badge.className}`}>
-                        {isThisLive ? liveStatusLabel(t, liveStatus) : badge.label}
-                      </span>
-                      <span className="text-[11px] text-recall-textMuted">{formatDate(m.created_at)}</span>
-                    </div>
-                  </div>
-                );
-              })
-            )}
+            ) : (() => {
+              const visibleMeetings = selectedCategoryId
+                ? meetings.filter((m) => m.category_id === selectedCategoryId)
+                : meetings;
+              if (visibleMeetings.length === 0) {
+                return <p className="py-6 text-center text-xs text-recall-textMuted">{t.meeting_none}</p>;
+              }
+              return visibleMeetings.map((m) => renderMeetingCard(m, { showCategoryChip: !selectedCategoryId }));
+            })()}
           </div>
         </div>
       )}
@@ -1918,6 +1959,7 @@ export default function MeetingsPanel({
                       timeMs={s.start_ms}
                       content={s.content}
                       hasContradiction={liveContradictionAlerts.some((a) => a.statement_text === s.content)}
+                      overlapped={s.overlapped}
                       t={t}
                     />
                   ))}
@@ -1976,9 +2018,21 @@ export default function MeetingsPanel({
                   t={t}
                   onRename={(title) => renameMeeting(selectedRealMeeting.id, title)}
                 />
-                <p className="text-xs text-recall-textMuted mt-0.5">
-                  {statusBadge(t, selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
-                  {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
+                <p className="flex items-center gap-1.5 text-xs text-recall-textMuted mt-0.5">
+                  <span>
+                    {statusBadge(t, selectedRealMeeting.status).label} · {formatDate(selectedRealMeeting.created_at)}
+                    {selectedRealMeeting.duration_ms ? ` · ${formatDuration(selectedRealMeeting.duration_ms)}` : ""}
+                  </span>
+                  {(() => {
+                    const category = selectedRealMeeting.category_id
+                      ? categoryById.get(selectedRealMeeting.category_id)
+                      : null;
+                    return category && !category.is_default ? (
+                      <span className="rounded-full border border-recall-accent/30 bg-recall-accent/10 px-2 py-0.5 text-xs font-semibold text-recall-accent">
+                        {category.name}
+                      </span>
+                    ) : null;
+                  })()}
                 </p>
               </div>
               <div className="flex flex-shrink-0 gap-1.5">
@@ -2402,6 +2456,29 @@ export default function MeetingsPanel({
             </div>
           )}
 
+          {/* 미해결 안건 리마인더 - 예전엔 회의 시작 시 카드 팝업으로만 잠깐 떴다가 넘기면
+              완전히 사라져서 회의 중간에 다시 확인할 방법이 없었다. 팝업이 떠 있는 동안엔
+              여기 목록에도 같이 보여서, 회의 중에도 접었다 펼쳐서 다시 볼 수 있게 한다. */}
+          {agendaReminder && agendaReminder.items.length > 0 && (
+            <div className="mb-3 space-y-1.5 border-b border-recall-border pb-3">
+              <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-recall-textMuted">
+                {t.meeting_live_alert_agenda_title}
+                <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal">
+                  {agendaReminder.items.length}
+                </span>
+              </p>
+              {agendaReminder.items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs text-recall-text"
+                >
+                  <p className="font-semibold">{item.title}</p>
+                  <p className="mt-0.5 text-recall-textMuted">{item.decision_text}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
           {isViewingLive ? (
             <p className="mb-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-400">
               {t.meeting_live_contradiction_notice}
@@ -2479,6 +2556,29 @@ export default function MeetingsPanel({
                         }}
                         t={t}
                       />
+                    ) : applyingContradictionId === c.id ? (
+                      <ContradictionApplyForm
+                        contradiction={c}
+                        onCancel={() => setApplyingContradictionId(null)}
+                        onApply={async ({ newDecisionText, newDecisionReason }) => {
+                          const confirmed = await showConfirm(
+                            t.contradiction_apply_confirm,
+                            t.contradiction_apply,
+                            t.task_cancel
+                          );
+                          if (!confirmed) return false;
+                          const ok = await resolve(
+                            c.id,
+                            "change_acknowledged",
+                            undefined,
+                            newDecisionText,
+                            newDecisionReason
+                          );
+                          if (ok) setApplyingContradictionId(null);
+                          return ok;
+                        }}
+                        t={t}
+                      />
                     ) : (
                       <ContradictionMessage
                         contradiction={c}
@@ -2488,7 +2588,7 @@ export default function MeetingsPanel({
                         t={t}
                       />
                     )}
-                    {!isViewingLive && editingContradictionId !== c.id && (
+                    {!isViewingLive && editingContradictionId !== c.id && applyingContradictionId !== c.id && (
                       <div className="flex gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
                         {c.status === "unresolved" ? (
                           <>
@@ -2510,6 +2610,13 @@ export default function MeetingsPanel({
                             {!(c.source_type === "room_message" && isDecisionCard) && (
                               <button
                                 onClick={async () => {
+                                  // 결정 변경 감지(decision)는 반영 전에 내용을 직접 고칠 수 있게 폼을
+                                  // 먼저 보여준다. 그 외(문서 모순)는 고칠 "결정 내용" 개념이 없으므로
+                                  // 기존처럼 바로 확인만 받는다.
+                                  if (isDecisionCard) {
+                                    setApplyingContradictionId(c.id);
+                                    return;
+                                  }
                                   const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
                                   if (ok) resolve(c.id, "change_acknowledged");
                                 }}
@@ -2610,9 +2717,14 @@ export default function MeetingsPanel({
           currentUserId={currentUserId}
           defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
-          onStart={(title, attendeeIds, location, recordingMode) => {
+          categories={categoriesState.categories}
+          suggestedCategoryId={categoriesState.suggestedCategoryId}
+          lockedCategory={startCategoryId ? categoryById.get(startCategoryId) ?? null : null}
+          onCreateCategory={categoriesState.createCategory}
+          onStart={(title, attendeeIds, location, recordingMode, categoryId) => {
             setShowStartModal(false);
-            onStartLive(title, undefined, attendeeIds, location, recordingMode);
+            if (categoryId) categoriesState.markCategoryUsed(categoryId);
+            onStartLive(title, undefined, attendeeIds, location, recordingMode, categoryId);
           }}
           t={t}
         />
