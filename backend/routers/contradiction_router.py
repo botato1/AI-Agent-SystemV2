@@ -237,6 +237,13 @@ def resolve_contradiction_api(
             workspace_id=str(workspace_id),
             category_id=str(contradiction.category_id),
         )
+        # [추가 - 리뷰 반영] 한 줄 요약 패치용 LLM 호출도 위와 동일한 이유로
+        # 백그라운드로 - contradiction_crud.regenerate_short_summary_after_change()가
+        # 자체 DB 세션을 열고 닫으므로 여기서 db를 넘길 필요 없음.
+        background_tasks.add_task(
+            contradiction_crud.regenerate_short_summary_after_change,
+            contradiction_id=contradiction_id,
+        )
 
     updated = contradiction_crud.get_contradiction(db, contradiction_id)
     return _to_contradiction_schema(db, updated)
