@@ -215,8 +215,8 @@ def resolve_contradiction_api(
         )
     _check_meeting_not_recording(db, contradiction)
     _check_not_chat_sourced(contradiction, request.resolution_type)
-    
-    resolution = contradiction_crud.resolve_contradiction(
+
+    resolution, resolved_decision_text = contradiction_crud.resolve_contradiction(
         db,
         contradiction_id=contradiction_id,
         resolved_by=uuid.UUID(current_user_id),
@@ -225,11 +225,14 @@ def resolve_contradiction_api(
         new_decision_reason=request.new_decision_reason,
         note=request.note,
     )
-
     _notify_contradiction_resolved(db, workspace_id, contradiction)
 
     if request.resolution_type == "change_acknowledged":
         context_type = "meeting" if contradiction.source_type == "meeting_segment" else "chat"
+        # [수정 - 리뷰 반영] resolve_contradiction()이 decision_text로 실제 저장한
+        # 값(개조식으로 다듬어진 문구, 실패 시 원문)을 그대로 써서 결정사항 이력과
+        # 변경 요약 카드의 문구 톤이 어긋나지 않게 함 - 이전엔 항상 구어체 원문
+        # (statement_text_snapshot)을 썼음.
         contradiction_crud.create_change_summary_draft(
             db,
             workspace_id=workspace_id,
@@ -237,7 +240,7 @@ def resolve_contradiction_api(
             resolution_id=resolution.id,
             context_type=context_type,
             original_reference_text=contradiction.reference_text_snapshot,
-            accepted_change_text=request.new_decision_text or contradiction.statement_text_snapshot,
+            accepted_change_text=resolved_decision_text or contradiction.statement_text_snapshot,
         )
         # 요약 생성은 백그라운드로 — 응답은 draft가 pending인 채로 바로 나가고,
         # 프론트는 GET .../change-summary로 완료 여부를 폴링한다.
