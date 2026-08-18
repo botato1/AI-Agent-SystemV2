@@ -613,9 +613,11 @@ def build_qwen_context(speaker_names=None, extra_terms=None) -> str | None:
     프롬프트가 "앞 문맥"으로 해석돼 이어쓰기 사고가 났지만, Qwen은 컨텍스트를 별도
     채널로 받으므로 목록을 그대로 나열하는 게 가장 잘 먹힌다.
 
-    extra_terms: 이 회의에만 해당하는 용어(지난 회의록에서 수집한 것 등).
-                 정적 목록 뒤에 붙는다. ⚠️ 목록 길이가 곧 지연이므로
-                 (실측 204개 0.85초 / 3000개 2.15초) 호출부가 개수를 통제해야 한다.
+    extra_terms: 이 회의에만 해당하는 용어. 정적 목록 뒤에 붙는다.
+                 ⚠️ 목록 길이가 곧 지연이므로(실측 204개 0.85초 / 3000개 2.15초)
+                 호출부가 개수를 통제해야 한다. 현재 이 인자를 쓰는 호출부는 없다 —
+                 지난 회의록에서 자동 수집하던 기능은 2026-08-18에 제거했다
+                 (아래 build_context_hint 주석 참고).
     """
     if not (STT_ENGINE == "qwen" and QWEN_CONTEXT_ENABLED):
         return None
@@ -633,13 +635,9 @@ def build_qwen_context(speaker_names=None, extra_terms=None) -> str | None:
     return " / ".join(parts)
 
 
-# 지난 회의록에서 가져올 용어 수 상한. 목록 길이가 곧 지연이라 예산을 정해둔다
-# (실측: 204개 0.85초 / 3000개 2.15초). 정적 목록이 9개로 줄어 예산 여유가 커졌지만,
-# 상한은 그대로 둔다 — 동적 수집은 오류 되먹임 위험이 있어 양보다 질이 중요하다.
-SESSION_TERMS_LIMIT = int(os.getenv("SESSION_TERMS_LIMIT", "50"))
 
 
-def build_context_hint(speaker_names=None, session_id: str | None = None) -> str | None:
+def build_context_hint(speaker_names=None) -> str | None:
     """
     엔진에 맞는 용어/이름 힌트를 만든다. 호출부(realtime, refine)는 어느 엔진이
     돌고 있는지 몰라도 된다 — 그 판단을 여기 한 곳에 모아둔다.
@@ -648,21 +646,25 @@ def build_context_hint(speaker_names=None, session_id: str | None = None) -> str
     받아적는 사고가 실측으로 확인돼 폐기했다 — 위 'Whisper initial_prompt는 폐기됨'
     주석 참고. Qwen은 컨텍스트 주입이 학습된 기능이라 안전해서 기본 활성이다.
 
-    session_id를 주면 같은 회의 시리즈의 지난 회의록에서 용어를 추가로 수집한다
-    (services/meeting_terms.py). 그 팀이 실제로 쓰는 말이 정적 목록보다 정확하다.
+    ⛔ 2026-08-18: 지난 회의록에서 용어를 자동 수집해 보태던 기능(meeting_terms.py)을
+       **제거했다.** 앞으로도 이 방향으로 설계하지 않는다.
+
+       왜: 컨텍스트 힌트는 목록에 있는 말로 인식을 끌어당긴다. 발음이 비슷한 단어가
+       목록에 있으면 실제로 하지 않은 말이 회의록에 남는데, 문장이 자연스럽게 읽혀서
+       **사람이 알아채기 가장 어려운 종류의 오류**가 된다.
+
+       실측 근거 둘:
+         · 숫자를 힌트에 넣자 "8003 서버"가 "팔천 삼 서버"에서 "8000 사항 서버"로 악화
+         · Qwen도 면역이 아니다 — 2026-07-31 짧고 불분명한 구간이 용어 목록을 그대로
+           받아적었다(qwen_engine의 _is_context_echo가 그런 출력을 걸러낸다)
+
+       그리고 자동 수집은 **오류 되먹임**을 더한다. 1회차의 오인식이 2회차 목록에 들어가
+       3회차에 더 확신 있게 재생산된다. 방어 장치를 세 겹 넣었지만, 이득은 한 번도
+       측정되지 않았고 실제 회의에서 작동한 적조차 없었다(회의마다 session_id가 달랐다).
+
+       **측정되지 않은 이득 + 실측된 위험**이라 제거를 택했다. 정적 목록 9개는 남는다 —
+       그건 실제 오인식이 확인된 것들이라 근거가 있다.
     """
     if STT_ENGINE != "qwen":
         return None
-
-    extra = []
-    if session_id and QWEN_CONTEXT_ENABLED:
-        # 지연 임포트 — config는 services보다 먼저 로드되므로 상단 임포트는 순환이 된다
-        from ..services.meeting_terms import collect_session_terms
-        try:
-            extra = collect_session_terms(
-                session_id, set(QWEN_CONTEXT_TERMS), limit=SESSION_TERMS_LIMIT
-            )
-        except Exception:
-            # 용어 수집 실패가 회의를 막으면 안 된다 — 정적 목록만으로 진행
-            logger.exception(f"⚠️ [{session_id}] 지난 회의 용어 수집 실패 — 정적 목록만 사용")
-    return build_qwen_context(speaker_names, extra_terms=extra)
+    return build_qwen_context(speaker_names)

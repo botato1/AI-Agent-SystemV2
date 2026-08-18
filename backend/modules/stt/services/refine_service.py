@@ -332,7 +332,7 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     refined_segments = await _transcribe_turns(
         app_state, meeting_id, turns,
         audio_of=lambda t: tracks.get(t["speaker"], (None, REALTIME_SAMPLE_RATE)),
-        initial_prompt=build_context_hint(list(tracks.keys()), session_id=meta.get("session_id")),
+        initial_prompt=build_context_hint(list(tracks.keys())),
     )
     refined_segments.sort(key=lambda s: s["start"])
 
@@ -431,7 +431,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     refined_segments = await _transcribe_turns(
         app_state, meeting_id, turns,
         audio_of=lambda _turn: (audio, sample_rate),  # 공용 마이크는 회의 오디오 하나뿐
-        initial_prompt=build_context_hint(enrolled_names, session_id=meta.get("session_id")),
+        initial_prompt=build_context_hint(enrolled_names),
     )
 
     # 4. 익명 라벨(SPEAKER_00 등) → 실제 이름. 위에서 만든 타임라인을 그대로 쓴다.
@@ -467,7 +467,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     if REFINE_LLM_ENABLED:
         await loop.run_in_executor(
             None, correct_transcript, refined_segments,
-            build_context_hint(enrolled_names, session_id=meta.get("session_id")),
+            build_context_hint(enrolled_names),
         )
 
     # 실시간 결과는 비교/디버깅용으로 보존하고 segments를 정밀본으로 교체
@@ -518,7 +518,7 @@ async def _split_overlaps(
     separated = await _transcribe_turns(
         app_state, meeting_id, turns,
         audio_of=lambda turn: (channels[turn["_channel"]], sample_rate),
-        initial_prompt=build_context_hint(enrolled_names, session_id=meta.get("session_id")),
+        initial_prompt=build_context_hint(enrolled_names),
     )
     if not separated:
         return segments
