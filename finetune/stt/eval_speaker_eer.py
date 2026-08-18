@@ -39,10 +39,39 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "backend", "modules"))
 
-from stt.core.config import REALTIME_SAMPLE_RATE  # noqa: E402
+from stt.core.config import (  # noqa: E402
+    REALTIME_SAMPLE_RATE, HF_TOKEN, SPEAKER_EMBEDDING_MODEL, DEVICE,
+)
 from stt.services.speaker_id_service import (  # noqa: E402
     LiveSpeakerIdentifier, load_speaker_embedding_inference,
 )
+
+
+def load_inference(checkpoint: str | None):
+    """기본은 서버와 똑같은 경로. --checkpoint를 주면 파인튜닝 가중치를 얹는다.
+
+    학습 결과를 **같은 잣대로** 재기 위해 모델만 갈아끼우고 나머지(창 방식, 디바이스,
+    임베딩 추출)는 서버와 동일하게 둔다.
+    """
+    if not checkpoint:
+        return load_speaker_embedding_inference()
+
+    import torch
+    from pyannote.audio import Model, Inference
+    model = Model.from_pretrained(SPEAKER_EMBEDDING_MODEL, use_auth_token=HF_TOKEN)
+    state = torch.load(checkpoint, map_location="cpu")
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        # 조용히 넘어가면 "학습이 안 먹었는데 좋아 보이는" 결과가 나온다
+        print(f"⚠️ 가중치 불일치 — 없는 키 {len(missing)}개 / 남는 키 {len(unexpected)}개")
+        if len(missing) > len(state) // 2:
+            raise SystemExit("❌ 체크포인트가 이 모델 구조와 맞지 않는다")
+    model.eval()
+    inference = Inference(model, window="whole")
+    if DEVICE == "cuda":
+        inference.to(torch.device("cuda"))
+    print(f"체크포인트 적용: {checkpoint}")
+    return inference
 
 
 def read_trials(path: str) -> list[tuple[int, tuple, tuple]]:
@@ -122,13 +151,15 @@ def min_dcf(labels: np.ndarray, scores: np.ndarray,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trials", default="trials_aihub.tsv")
+    parser.add_argument("--checkpoint", default=None,
+                        help="파인튜닝 가중치. 없으면 서버가 쓰는 사전학습 모델 그대로")
     args = parser.parse_args()
 
     trials = read_trials(args.trials)
     keys = {k for _, a, b in trials for k in (a, b)}
     print(f"시험 쌍 {len(trials)}개 / 서로 다른 발화 {len(keys)}건")
 
-    identifier = LiveSpeakerIdentifier(load_speaker_embedding_inference())
+    identifier = LiveSpeakerIdentifier(load_inference(args.checkpoint))
     cache = embed_all(keys, identifier)
 
     labels, scores = [], []
