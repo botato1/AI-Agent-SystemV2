@@ -24,10 +24,13 @@ import { Contradiction, ContradictionSeverity } from "../services/contradiction"
 import { AppNotification } from "../services/notification";
 import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
+import { useAiChat } from "../hooks/useAiChat";
+import { Category } from "../services/category";
 import Avatar from "./Avatar";
 import ContradictionMessage from "./ContradictionMessage";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
+import AiChatView from "./AiChatView";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -47,6 +50,8 @@ interface MainAreaProps {
   memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
   onOpenDecision: (decisionId: string) => void;
+  categories: Category[];
+  selectedCategoryId: string | null;
   t: any;
 }
 
@@ -65,7 +70,7 @@ function resolveSenderAvatar(
   };
 }
 
-type Tab = "message" | "docs";
+type Tab = "message" | "docs" | "ai";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
@@ -872,6 +877,8 @@ export default function MainArea({
   memberAvatarById,
   activeRecorderName,
   onOpenDecision,
+  categories,
+  selectedCategoryId,
   t,
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
@@ -886,6 +893,9 @@ export default function MainArea({
     useChannelRuntime(workspaceId, channel.id, currentUser, memberNameById);
 
   const roomFiles = useRoomFiles(workspaceId, channel.id);
+
+  // 이 채팅방에 묶인 AI Chat - workspaceId는 같지만 roomId를 넘겨서 이 채팅방 전용 대화 목록을 쓴다.
+  const roomAiChat = useAiChat(workspaceId, selectedCategoryId, channel.id);
 
   const { contradictions: workspaceContradictions } = useContradictions(workspaceId);
 
@@ -944,6 +954,7 @@ export default function MainArea({
   const tabs: { id: Tab; label: string }[] = [
     { id: "message", label: t.chat_tab_message },
     { id: "docs", label: t.chat_tab_docs },
+    { id: "ai", label: t.chat_tab_ai },
   ];
 
   const participants = Object.entries(memberNameById).map(([id, name]) => ({ id, name }));
@@ -1021,6 +1032,17 @@ export default function MainArea({
           onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           t={t}
         />
+      )}
+      {activeTab === "ai" && (
+        <div className="flex flex-1 overflow-hidden rounded-xl border border-recall-border">
+          <AiChatView
+            workspaceId={workspaceId}
+            chat={roomAiChat}
+            categories={categories}
+            selectedCategoryId={selectedCategoryId}
+            t={t}
+          />
+        </div>
       )}
 
       {showLinkModal && (

@@ -43,4 +43,5 @@ export {
   Calendar as CalendarIcon,
   Headphones as HeadphoneIcon,
   Scissors as SplitIcon,
+  GripVertical as GripIcon,
 } from "lucide-react";
