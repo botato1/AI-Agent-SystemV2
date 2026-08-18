@@ -60,9 +60,6 @@ checkpoint-*/
 dist/
 build/
 *.log
-
-# 레거시 중복 frontend 폴더
-frontend/
 *.tsbuildinfo
 
 # Python
