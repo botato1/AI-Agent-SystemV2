@@ -4,7 +4,7 @@ services:
   # 접속 가능 - 외부 공개 전이라 별도 도메인/HTTPS 없이 IP:포트로 접속한다.
   frontend:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile.frontend
       args:
         VITE_API_URL: http://61.81.98.82:8000
