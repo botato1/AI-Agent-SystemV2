@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
 from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
+from backend.modules.llm.ollama_client import _call_ollama, OLLAMA_MODEL_LIGHT
 
 
 def make_deduplication_key(
@@ -247,6 +248,51 @@ def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Option
     )
 
 
+def _revise_short_summary(original_short_summary: str, old_text: str, new_text: str) -> Optional[str]:
+    """[추가 - 2026.08.18] "직접수정해서 반영" 시 회의 요약 카드의 한 줄 요약에서
+    이번에 바뀐 결정 관련 부분만 새 내용으로 고쳐 쓴다.
+
+    전체를 다시 요약하게 하면 상관없는 문장까지 손댈 위험이 있어서, 프롬프트로
+    "그 부분만 고치고 나머지는 그대로 유지"를 강하게 제약한다. 그래도 LLM이라
+    통째로 다시 쓰거나 형식이 깨질 수 있어 길이 기반 안전장치를 둔다 - 원문
+    대비 절반 미만/2배 초과로 달라지면 신뢰하지 않고 None을 반환해 호출부가
+    원본을 그대로 둔다 (실패해도 위의 decision 전이 자체는 이미 커밋된 뒤라
+    핵심 기능에는 영향 없음)."""
+    prompt = (
+        "아래는 회의의 한 줄 요약 문장이다.\n\n"
+        f"[기존 한 줄 요약]\n{original_short_summary}\n\n"
+        f"[옛 결정 내용]\n{old_text}\n\n"
+        f"[새로 확정된 내용]\n{new_text}\n\n"
+        "위 한 줄 요약에서 [옛 결정 내용]과 관련된 부분만 [새로 확정된 내용]을 "
+        "반영해서 자연스럽게 고쳐라. 관련 없는 나머지 문장·표현은 절대 바꾸지 말고 "
+        "원문 그대로 유지하라. 개조식(~함/~임 등 명사형 종결) 문체를 유지하라. "
+        "다른 설명 없이 고쳐진 한 줄 요약 문장만 출력하라."
+    )
+    # [수정 - 리뷰 반영] 독자적으로 OLLAMA_MODEL/httpx를 재선언해서 호출하던 것을
+    # 공용 _call_ollama()로 통일 - contradiction_detect.py/ai_chat_answer.py와
+    # 동일한 이유(운영자가 OLLAMA_MODEL_LIGHT/HEAVY만 설정하고 레거시
+    # OLLAMA_MODEL은 안 건드리면 이 함수만 다른 모델을 쓰게 됨) + 중국어 출력
+    # 재시도 로직도 이걸 통해야 같이 받을 수 있음. keep_alive도 이 함수 안에
+    # 이미 포함돼 있어 모델 재로드 지연 문제도 별도 조치 없이 해결됨.
+    try:
+        revised = _call_ollama(prompt, model=OLLAMA_MODEL_LIGHT, temperature=0).strip()
+    except Exception as e:
+        print(f"[resolve_contradiction] 한 줄 요약 갱신 LLM 호출 실패: {repr(e)}")
+        return None
+
+    if not revised:
+        return None
+
+    orig_len = len(original_short_summary)
+    if len(revised) < orig_len * 0.5 or len(revised) > orig_len * 2:
+        print(
+            f"[resolve_contradiction] 한 줄 요약 갱신 결과가 원문과 길이 차이가 커서 무시함 "
+            f"(원본 {orig_len}자 -> 결과 {len(revised)}자)"
+        )
+        return None
+    return revised
+
+
 def resolve_contradiction(
     db: Session,
     contradiction_id: uuid.UUID,
@@ -293,9 +339,18 @@ def resolve_contradiction(
             if old_decision and old_decision.status == "active":
                 old_decision.status = "superseded"
 
+                # [수정 - 라이브 테스트 발견] meeting_id를 old_decision.meeting_id(그
+                # 결정이 원래 확정됐던 옛날 회의)로 넣고 있었음 - 지금 이 변경을 실제로
+                # 확인/확정한 건 현재 회의인데, 새 decision이 옛날 회의 소속으로 생겨서
+                # list_decisions_by_meeting(현재_회의_id) 조회 시 안 잡혀 "직접수정해서
+                # 반영"해도 회의 요약/회의록에는 안 보이는 문제로 이어짐.
+                # contradiction.session_meeting_id가 바로 그 "현재 회의"임 -
+                # _check_not_chat_sourced()가 채팅발 모순은 resolve 자체를 막아서
+                # source_type이 항상 meeting_segment일 때만 여기 도달하므로 항상 채워져
+                # 있음(방어적으로 old_decision.meeting_id를 fallback으로 남김).
                 new_decision = Decision(
                     workspace_id=old_decision.workspace_id,
-                    meeting_id=old_decision.meeting_id,
+                    meeting_id=contradiction.session_meeting_id or old_decision.meeting_id,
                     title=old_decision.title,
                     decision_text=new_decision_text or contradiction.statement_text_snapshot,
                     reason=new_decision_reason,
@@ -308,6 +363,57 @@ def resolve_contradiction(
     db.commit()
     db.refresh(resolution)
     return resolution
+
+
+def regenerate_short_summary_after_change(contradiction_id: uuid.UUID) -> None:
+    """[수정 - 리뷰 반영] "직접수정해서 반영" 시 요약 카드의 한 줄 요약을 갱신하는
+    LLM 호출을 resolve_contradiction() 안에서 동기로 하던 것을 떼어냈다.
+    change_summary_generate_node와 같은 이유(_ask_topic_match 등과 달리 이건
+    사용자 응답을 막을 이유가 없는 부가 처리) - 라우터가 change_acknowledged
+    처리 직후 background_tasks.add_task(...)로 이 함수를 스케줄해야 한다.
+
+    요청 스코프 db 세션을 백그라운드 태스크에 그대로 넘기면 응답이 나간 뒤
+    세션이 이미 닫혀있을 수 있어 위험하다 - change_summary_generate_node와
+    동일하게 이 함수가 독립적으로 자기 세션을 열고 닫는다. resolve_contradiction()
+    이 이미 커밋해놓은 old_decision(superseded)/new_decision(active,
+    supersedes_decision_id로 연결)을 contradiction_id로부터 다시 조회한다.
+    """
+    from backend.db.session import SessionLocal
+    from backend.db.crud import meeting_crud
+    from backend.db.modules import Decision
+
+    db = SessionLocal()
+    try:
+        contradiction = db.get(Contradiction, contradiction_id)
+        if not contradiction or contradiction.reference_decision_id is None:
+            return
+
+        old_decision = db.get(Decision, contradiction.reference_decision_id)
+        if not old_decision:
+            return
+
+        new_decision = (
+            db.query(Decision)
+            .filter(Decision.supersedes_decision_id == old_decision.id)
+            .order_by(Decision.created_at.desc())
+            .first()
+        )
+        if not new_decision:
+            return
+
+        summary_row = meeting_crud.get_meeting_summary(db, new_decision.meeting_id)
+        if not summary_row or not summary_row.short_summary:
+            return
+
+        revised = _revise_short_summary(
+            summary_row.short_summary, old_decision.decision_text, new_decision.decision_text,
+        )
+        if revised:
+            meeting_crud.upsert_summary(db, new_decision.meeting_id, short_summary=revised)
+    except Exception as e:
+        print(f"[regenerate_short_summary_after_change] 처리 중 예외 발생(무시): {repr(e)}")
+    finally:
+        db.close()
 
 
 def create_change_summary_draft(
