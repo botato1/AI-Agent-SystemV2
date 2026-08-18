@@ -323,7 +323,7 @@ def resolve_contradiction(
     new_decision_text: Optional[str] = None,
     new_decision_reason: Optional[str] = None,
     note: Optional[str] = None,
-) -> ContradictionResolution:
+) -> tuple[ContradictionResolution, Optional[str]]:
     """
     [수정 - 2026.07.16] decision 대비 모순("변경 인지함") 처리 시 실제로
     decisions 테이블을 전이시키는 로직 추가.
@@ -337,6 +337,13 @@ def resolve_contradiction(
     Case A(재결정)와 동일한 전이를 실시간으로 수행한다:
       기존 decision.status = 'superseded'
       새 decision 생성, status = 'active', supersedes_decision_id = 기존.id
+
+    [수정 - 리뷰 반영] 반환값을 (resolution, resolved_decision_text) 튜플로 변경.
+    new decision을 만들 때 실제로 저장한 decision_text(개조식으로 다듬어진 값, 또는
+    다듬기 실패 시 원문)를 호출부(라우터)가 알 수 있는 방법이 없어서,
+    create_change_summary_draft()에는 여전히 구어체 원문(statement_text_snapshot)이
+    들어가 결정사항 이력과 변경 요약 카드의 문구 톤이 서로 어긋나는 문제가 있었음.
+    new decision을 안 만든 경우(keep_reference 등)엔 두 번째 값이 None.
     """
     resolution = ContradictionResolution(
         contradiction_id=contradiction_id,
@@ -345,6 +352,8 @@ def resolve_contradiction(
         note=note,
     )
     db.add(resolution)
+
+    resolved_decision_text: Optional[str] = None
 
     contradiction = db.get(Contradiction, contradiction_id)
     if contradiction:
@@ -359,6 +368,16 @@ def resolve_contradiction(
 
             old_decision = db.get(Decision, contradiction.reference_decision_id)
             if old_decision and old_decision.status == "active":
+                # [수정 - 리뷰 반영] old_decision.status 변경(UPDATE) 전에 먼저
+                # decision_text를 확정한다. _rewrite_as_formal_decision_text()가
+                # 느린 LLM 호출인데, UPDATE를 먼저 걸어놓고 그 아래서 LLM을
+                # 기다리면 커밋 전까지 그 UPDATE의 행 잠금이 계속 열려있게 됨 -
+                # 여기서는 아직 SELECT만 실행된 상태라 잠금 위험 없이 대기 가능.
+                decision_text = new_decision_text or _rewrite_as_formal_decision_text(
+                    contradiction.statement_text_snapshot
+                ) or contradiction.statement_text_snapshot
+                resolved_decision_text = decision_text
+
                 old_decision.status = "superseded"
 
                 # [수정 - 라이브 테스트 발견] meeting_id를 old_decision.meeting_id(그
@@ -370,12 +389,6 @@ def resolve_contradiction(
                 # _check_not_chat_sourced()가 채팅발 모순은 resolve 자체를 막아서
                 # source_type이 항상 meeting_segment일 때만 여기 도달하므로 항상 채워져
                 # 있음(방어적으로 old_decision.meeting_id를 fallback으로 남김).
-                # [수정 - 리뷰 반영] new_decision_text가 없으면(현재 라우터는 항상 안 넘김)
-                # 발화 원문을 그대로 쓰지 않고 개조식으로 다듬는다 - 실패하면 원문 폴백.
-                decision_text = new_decision_text or _rewrite_as_formal_decision_text(
-                    contradiction.statement_text_snapshot
-                ) or contradiction.statement_text_snapshot
-
                 new_decision = Decision(
                     workspace_id=old_decision.workspace_id,
                     meeting_id=contradiction.session_meeting_id or old_decision.meeting_id,
@@ -390,7 +403,7 @@ def resolve_contradiction(
 
     db.commit()
     db.refresh(resolution)
-    return resolution
+    return resolution, resolved_decision_text
 
 
 def regenerate_short_summary_after_change(contradiction_id: uuid.UUID) -> None:
