@@ -10,10 +10,12 @@ import httpx
 from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
 from backend.db.modules import RoomFileLink
+from backend.core.dependencies import resolve_category
 
 from backend.db.crud import ai_chat_crud, content_chunk_crud, contradiction_crud, document_crud, file_crud, meeting_crud, room_crud, similarity_crud
 from backend.modules.rag.document_loader import load_document
 from backend.modules.rag.chroma_client import delete_document as chroma_delete_document
+from backend.routers.document_ws_router import broadcast_document_event, broadcast_document_event_sync
 from backend.services import similarity_service
 
 
@@ -311,7 +313,7 @@ def _make_fallback_summary(original_text: str, max_length: int = 500) -> str:
 
 async def upload_and_process_document(
     db, workspace_id, file, room_id=None, meeting_id=None, document_type="document",
-    previous_file_id=None, current_user_id=None, background_tasks=None,
+    previous_file_id=None, current_user_id=None, background_tasks=None, category_id=None,
 ):
     filename = Path(file.filename).name if file and file.filename else "uploaded_file"
 
@@ -388,7 +390,7 @@ async def upload_and_process_document(
         analysis_metadata = _extract_analysis_metadata(processed_result)
         summary = processed_result.get("summary") or _make_fallback_summary(content_markdown)
 
-        category = room_crud.get_default_category(db, workspace_id)
+        category = resolve_category(db, workspace_id, category_id)
         if not category:
             raise RuntimeError("워크스페이스의 기본 카테고리를 찾을 수 없습니다.")
 
@@ -440,6 +442,13 @@ async def upload_and_process_document(
         try:
             load_document(db, workspace_file.id, chunks=chunks)
             file_crud.update_analysis_status(db, workspace_file.id, "completed")
+            document_dict = {
+                "document_id": str(workspace_file.id),
+                "filename": filename,
+                "analysis_status": "completed",
+                "created_at": workspace_file.created_at.isoformat() if workspace_file.created_at else None,
+            }
+            await broadcast_document_event(workspace_id, {"type": "document_added", "document": document_dict})
             background_tasks.add_task(
                 similarity_service.compute_similarities_for_document_background,
                 workspace_id, workspace_file.id,
@@ -447,6 +456,13 @@ async def upload_and_process_document(
         except Exception as e:
             file_crud.update_analysis_status(db, workspace_file.id, "failed", error=repr(e))
             print(f"[document_service] ChromaDB 적재 실패: {repr(e)}")
+            document_dict = {
+                "document_id": str(workspace_file.id),
+                "filename": filename,
+                "analysis_status": "failed",
+                "created_at": workspace_file.created_at.isoformat() if workspace_file.created_at else None,
+            }
+            await broadcast_document_event(workspace_id, {"type": "document_added", "document": document_dict})
 
         # 4. room에 연결 (room_id가 있을 때만)
         link_status = "not_applicable"
@@ -497,6 +513,15 @@ async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: 
                 file_content = f.read()
         except OSError as e:
             file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
+            await broadcast_document_event(
+                workspace_file.workspace_id,
+                {"type": "document_analysis_updated", "document": {
+                    "document_id": str(file_id),
+                    "filename": filename,
+                    "analysis_status": "failed",
+                    "created_at": workspace_file.created_at.isoformat() if workspace_file.created_at else None,
+                }},
+            )
             return _build_error_response(
                 None, filename, workspace_file.origin_type,
                 "원본 파일을 찾을 수 없어 재분석할 수 없습니다.", "source_file_missing",
@@ -516,6 +541,15 @@ async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: 
 
         if not content_markdown.strip() and not (isinstance(raw_chunks, list) and raw_chunks):
             file_crud.update_analysis_status(db, file_id, "failed", error="document_content_missing")
+            await broadcast_document_event(
+                workspace_file.workspace_id,
+                {"type": "document_analysis_updated", "document": {
+                    "document_id": str(file_id),
+                    "filename": filename,
+                    "analysis_status": "failed",
+                    "created_at": workspace_file.created_at.isoformat() if workspace_file.created_at else None,
+                }},
+            )
             return _build_error_response(
                 None, filename, workspace_file.origin_type,
                 "8003 문서 처리 결과에 content 또는 chunks가 없습니다.", "document_content_missing",
@@ -557,6 +591,15 @@ async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: 
         try:
             load_document(db, file_id, chunks=chunks)
             file_crud.update_analysis_status(db, file_id, "completed")
+            await broadcast_document_event(
+                workspace_file.workspace_id,
+                {"type": "document_analysis_updated", "document": {
+                    "document_id": str(file_id),
+                    "filename": filename,
+                    "analysis_status": "completed",
+                    "created_at": workspace_file.created_at.isoformat() if workspace_file.created_at else None,
+                }},
+            )
             if background_tasks is not None:
                 background_tasks.add_task(
                     similarity_service.compute_similarities_for_document_background,
@@ -565,6 +608,15 @@ async def retry_document_analysis(db: Session, file_id: UUID, background_tasks: 
         except Exception as e:
             file_crud.update_analysis_status(db, file_id, "failed", error=repr(e))
             print(f"[document_service] 재분석 ChromaDB 적재 실패: {repr(e)}")
+            await broadcast_document_event(
+                workspace_file.workspace_id,
+                {"type": "document_analysis_updated", "document": {
+                    "document_id": str(file_id),
+                    "filename": filename,
+                    "analysis_status": "failed",
+                    "created_at": workspace_file.created_at.isoformat() if workspace_file.created_at else None,
+                }},
+            )
 
         return {
             "status": "success",
@@ -639,6 +691,7 @@ def get_document_detail(db: Session, file_id: UUID) -> dict:
             "document": {
                 "document_id": str(workspace_file.id),
                 "workspace_id": str(workspace_file.workspace_id),
+                "category_id": str(workspace_file.category_id),
                 "filename": workspace_file.original_filename,
                 "file_kind": workspace_file.file_kind,
                 "analysis_status": workspace_file.analysis_status,
@@ -705,6 +758,11 @@ def delete_processed_document(db: Session, file_id: UUID) -> dict:
         similarity_crud.delete_similarities_for_file(db, file_id)
         file_crud.delete_file(db, file_id)
 
+        broadcast_document_event_sync(
+            workspace_file.workspace_id,
+            {"type": "document_removed", "document_id": str(file_id)},
+        )
+        
         return {
             "status": "success",
             "document_id": str(file_id),

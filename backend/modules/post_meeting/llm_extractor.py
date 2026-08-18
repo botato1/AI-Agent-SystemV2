@@ -30,6 +30,13 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
 - 인사말/날씨/안부 등 회의 주제와 무관한 잡담은 full_summary/discussion_points/topics
   어디에도 포함하지 마라. 대신 그런 발화의 번호를 chit_chat_segment_indexes에 전부 나열하라.
 - title은 이 회의 내용을 대표하는 15자 내외의 짧은 제목이다.
+- full_summary, meeting_purpose, next_steps, discussion_points, topics의 title/decision_text/
+  evidence/reason, action_items의 description은 전부 회의록/보고서에 쓰는 개조식("~함", "~임",
+  "~됨" 등으로 끝나는 명사형 종결)으로 작성한다. "~습니다", "~했어요" 같은 평서문/구어체로
+  쓰지 않는다. (예: "출시일을 9월 15일로 확정함", "배포 인프라 변경 필요성 논의함")
+- 날짜·기간·수량 등 숫자 정보는 모든 필드(short_summary/full_summary/decision_text 등)에서
+  일관되게 아라비아 숫자로 표기한다("10월 20일" O, "십월 이십일"/"시월 이십일" X). 같은 회의를
+  가리키는 여러 필드끼리 표기가 서로 달라지지 않도록 주의한다.
 
 [회의 전체 발화]
 {transcript}
@@ -39,6 +46,8 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
   "title": "회의 제목으로 쓸 15자 내외의 짧은 문구",
   "full_summary": "회의 전체를 상세히 요약한 텍스트",
   "short_summary": "한두 문장으로 요약한 텍스트",
+  "meeting_purpose": "이 회의를 하는 목적/배경을 1~2문장으로 (예: 하반기 프로젝트 추진 현황을 공유하고 주요 이슈를 논의하기 위함)",
+  "next_steps": "회의에서 논의된 내용을 바탕으로 이후 진행할 향후 계획을 1~2문장으로. 다음 회의 일정이 명시적으로 언급되지 않았으면 이 문장에도 다음 회의 날짜를 지어내지 마라. 향후 계획을 언급할 내용이 전혀 없으면 빈 문자열로 둔다.",
   "discussion_points": ["논의 포인트1", "논의 포인트2"],
   "chit_chat_segment_indexes": [1, 5, 12],
   "topics": [
@@ -81,7 +90,8 @@ def extract(transcript: str) -> dict:
 
     Returns:
         {
-          "full_summary": str, "short_summary": str, "discussion_points": list[str],
+          "full_summary": str, "short_summary": str, "meeting_purpose": str,
+          "next_steps": str, "discussion_points": list[str],
           "topics": list[dict], "action_items": list[dict]
         }
     실패 시 모든 값이 비어있는 안전한 기본값을 반환한다 (파이프라인 중단 방지).
@@ -92,6 +102,8 @@ def extract(transcript: str) -> dict:
         "title": "",
         "full_summary": "",
         "short_summary": "",
+        "meeting_purpose": "",
+        "next_steps": "",
         "discussion_points": [],
         "chit_chat_segment_indexes": [],
         "topics": [],

@@ -14,10 +14,10 @@ import uuid
 import httpx
 
 from backend.db.crud import content_chunk_crud
-from backend.db.modules import Decision
+from backend.db.modules import Decision, MeetingSummary
 from backend.db.session import SessionLocal
 from backend.graphs.states.ai_chat_state import AIChatState
-from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
+from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama, extract_search_query
 from backend.modules.rag.chroma_client import (
     DECISION_COLLECTION,
     DOCUMENT_COLLECTION,
@@ -268,17 +268,24 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
     user_message = state["user_message"]
     chat_history = state.get("chat_history")
 
+    # [추가] 대화체 발화("아 근데 코드리뷰 규칙 뭐였는지 기억이 안 나는데 그것만
+    # 따로 알려줄 수 있어?")를 그대로 벡터 검색에 넘기면, 잡음 토큰이 임베딩을
+    # 흐려 핵심 키워드와의 유사도가 낮아짐 - 검색용으로만 별도 쿼리를 뽑는다.
+    # 실패해도 user_message가 그대로 반환되므로(extract_search_query 자체
+    # 안전장치) 검색이 아예 안 되는 회귀는 없다.
+    search_query = extract_search_query(user_message)
+
     try:
         doc_results = search_hybrid(
-            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            query_text=search_query, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=DOCUMENT_COLLECTION,
         )
         meeting_results = search_hybrid(
-            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            query_text=search_query, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=MEETING_COLLECTION,
         )
         decision_results = search_hybrid(
-            query_text=user_message, workspace_id=workspace_id, category_id=category_id,
+            query_text=search_query, workspace_id=workspace_id, category_id=category_id,
             top_k=TOP_K_PER_COLLECTION, collection_name=DECISION_COLLECTION,
         )
     except Exception as e:
@@ -290,9 +297,18 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
     # 남은 것만 리랭킹하는 상황(=리랭커가 볼 후보 자체가 이미 편향됨)을 피할 수 있다.
     # rerank_results()는 reranker_score만 채우고 정렬은 하지 않으므로, 정렬/슬라이싱은
     # merge_and_rank_candidates()가 담당한다.
+    #
+    # [수정 - 실사용 테스트에서 발견] user_message(원문) → search_query(정제된 쿼리)로
+    # 변경. search_hybrid()는 이미 search_query로 검색해서 정제된 쿼리와 잘 맞는
+    # 후보를 찾아오는데, 리랭킹은 여전히 잡음 섞인 원문으로 재채점하고 있었음 -
+    # 검색 단계에서 찾은 후보를 리랭킹 단계가 원문의 잡음 때문에 낮은 점수로
+    # 되돌려서 MIN_RELEVANCE_SCORE 필터에 걸러지는 현상 확인함(실제 재현:
+    # "아 근데 코드리뷰 규칙 뭐였는지 기억이 안 나는데 그것만 따로 알려줄 수
+    # 있어?" - 검색은 성공(dense count 5)했는데 최종 답변은 NO_RESULTS_ANSWER).
+    # 검색-리랭킹-필터링을 같은 쿼리 기준으로 일관시켜 해결.
     for results in (doc_results, meeting_results, decision_results):
         if results:
-            rerank_results(user_message, results)
+            rerank_results(search_query, results)
 
     candidates = merge_and_rank_candidates(doc_results, meeting_results, decision_results, top_k=TOP_K_FINAL)
     candidates = filter_by_relevance(candidates)
@@ -337,7 +353,29 @@ def ai_chat_answer_node(state: AIChatState) -> dict:
                     if decision.status != "active":
                         # superseded/cancelled된 결정은 이제 유효하지 않으므로 근거로 안 씀
                         continue
-                    resolved.append((candidate, "decision", decision))
+
+                    # [수정 - 팀 결정] decision_text/reason은 LLM이 회의에서 추출·요약한
+                    # 결과물이지 사용자가 직접 작성한 원문이 아니다. 결정사항이 최고
+                    # 유사도로 매칭되면, 그 결정이 나온 원본 회의 요약 문서(meeting_id로
+                    # 연결된 MeetingSummary → 그 파일의 "결정사항" 섹션 청크)를 근거로
+                    # 대체해서 보여준다. 연결된 문서를 못 찾으면 결정 레코드 자체로 폴백
+                    # (근거자료가 통째로 사라지는 것보다 낫다).
+                    meeting_summary = (
+                        db.query(MeetingSummary)
+                        .filter(MeetingSummary.meeting_id == decision.meeting_id)
+                        .first()
+                    )
+                    summary_chunk = None
+                    if meeting_summary and meeting_summary.file_id:
+                        summary_chunks = content_chunk_crud.get_chunks_by_file(db, meeting_summary.file_id)
+                        summary_chunk = next(
+                            (c for c in summary_chunks if c.section_title == "결정사항"),
+                            summary_chunks[0] if summary_chunks else None,
+                        )
+                    if summary_chunk is not None:
+                        resolved.append((candidate, "content_chunk", summary_chunk))
+                    else:
+                        resolved.append((candidate, "decision", decision))
                     continue
 
                 chunk = content_chunk_crud.get_chunk_by_chroma_id(db, candidate["id"])

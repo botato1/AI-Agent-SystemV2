@@ -28,7 +28,8 @@ class Notification(Base):
         CheckConstraint(
             "type IN ('contradiction_detected','contradiction_resolved',"
             "'meeting_summary_ready','file_analysis_completed','file_analysis_failed',"
-            "'decision_reminder','repeat_discussion','document_recommendation')",
+            "'decision_reminder','repeat_discussion','document_recommendation',"
+            "'meeting_reminder')",
             name="chk_notifications_type",
         ),
         Index(

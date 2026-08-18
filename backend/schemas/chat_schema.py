@@ -254,6 +254,7 @@ class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
     id: UUID
     workspace_id: UUID
     room_id: Optional[UUID] = None
+    category_id: Optional[UUID] = None 
     user_id: UUID
 
     title: Optional[str] = Field(
@@ -263,6 +264,10 @@ class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
 
 class AIChatSessionListResponse(BaseModel):
     sessions: list[AIChatSessionSchema] = Field(default_factory=list)
+
+
+class AIChatSessionUpdateRequest(BaseModel):   
+    category_id: Optional[UUID] = None   
 
 
 # =============================================================================

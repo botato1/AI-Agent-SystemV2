@@ -54,9 +54,10 @@ def get_or_create_session(
     return row
 
 def create_session(
-    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
+    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID],
+    user_id: uuid.UUID, category_id: Optional[uuid.UUID] = None,
 ) -> AiChatSession:
-    row = AiChatSession(workspace_id=workspace_id, room_id=room_id, user_id=user_id)
+    row = AiChatSession(workspace_id=workspace_id, room_id=room_id, user_id=user_id, category_id=category_id)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -64,7 +65,8 @@ def create_session(
 
 
 def list_sessions(
-    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID], user_id: uuid.UUID
+    db: Session, workspace_id: uuid.UUID, room_id: Optional[uuid.UUID],
+    user_id: uuid.UUID, category_id: Optional[uuid.UUID] = None,
 ) -> list[AiChatSession]:
     query = db.query(AiChatSession).filter(
         AiChatSession.workspace_id == workspace_id,
@@ -76,7 +78,17 @@ def list_sessions(
         if room_id is not None
         else query.filter(AiChatSession.room_id.is_(None))
     )
-    return query.order_by(AiChatSession.updated_at.desc()).all()
+    if category_id is not None:
+        query = query.filter(AiChatSession.category_id == category_id)
+    return query.all()
+
+def update_session_category(db: Session, session_id: uuid.UUID, category_id: uuid.UUID) -> Optional[AiChatSession]:
+    row = get_session(db, session_id)
+    if row:
+        row.category_id = category_id
+        db.commit()
+        db.refresh(row)
+    return row
 
 
 def get_session(db: Session, session_id: uuid.UUID) -> Optional[AiChatSession]:

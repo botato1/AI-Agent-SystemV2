@@ -309,4 +309,5 @@ NotificationType = Literal[
     "decision_reminder",
     "repeat_discussion",
     "document_recommendation",
+    "meeting_reminder",
 ]
