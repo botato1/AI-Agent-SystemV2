@@ -106,6 +106,7 @@ class TaskCreateRequest(BaseModel):
     assignee_label: Optional[str] = Field(default=None, max_length=100)
     priority: Optional[TaskPriority] = None
     due_at: Optional[datetime] = None
+    category_id: Optional[UUID] = None 
 
 
 class TaskStatusUpdateRequest(BaseModel):
@@ -125,11 +126,13 @@ class TaskUpdateRequest(BaseModel):
     priority: Optional[TaskPriority] = None
     status: Optional[TaskStatus] = None
     due_at: Optional[datetime] = None
+    category_id: Optional[UUID] = None
 
 
 class TaskResponse(ORMBaseSchema):
     id: UUID
     workspace_id: UUID
+    category_id: UUID
     meeting_id: Optional[UUID] = None
 
     title: str

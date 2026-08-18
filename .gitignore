@@ -60,6 +60,12 @@ checkpoint-*/
 dist/
 build/
 *.log
+*.tsbuildinfo
 
-# 레거시 중복 frontend 폴더
-frontend/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local dev config
+.claude/

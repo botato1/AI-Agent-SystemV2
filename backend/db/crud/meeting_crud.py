@@ -2,12 +2,13 @@
 
 import uuid
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from backend.db.modules import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary, User
+from backend.modules.rag import chroma_client
 
 
 def create_meeting(
@@ -177,6 +178,22 @@ def delete_meeting(db: Session, meeting_id: uuid.UUID) -> Optional[Meeting]:
     row = get_meeting(db, meeting_id)
     if row:
         row.deleted_at = datetime.now(timezone.utc)
+
+        decisions = db.query(Decision).filter(
+            Decision.meeting_id == meeting_id,
+            Decision.deleted_at.is_(None),
+        ).all()
+        for d in decisions:
+            d.deleted_at = row.deleted_at
+            chroma_client.delete_document(
+                str(d.id), str(d.workspace_id), collection_name=chroma_client.DECISION_COLLECTION
+            )
+
+        db.query(Task).filter(
+            Task.meeting_id == meeting_id,
+            Task.deleted_at.is_(None),
+        ).update({"deleted_at": row.deleted_at}, synchronize_session=False)
+
         db.commit()
         db.refresh(row)
     return row
@@ -246,6 +263,17 @@ def list_open_tasks(db: Session, workspace_id: uuid.UUID) -> list[Task]:
         )
         .all()
     )
+
+def list_tasks(db: Session, workspace_id: uuid.UUID, include_done: bool = False, category_id: uuid.UUID | None = None) -> list[Task]:
+    query = db.query(Task).filter(
+        Task.workspace_id == workspace_id,
+        Task.deleted_at.is_(None),
+    )
+    if not include_done:
+        query = query.filter(Task.status.in_(["open", "in_progress"]))
+    if category_id is not None:
+        query = query.filter(Task.category_id == category_id)
+    return query.all()
 
 
 def list_open_tasks_by_category(db: Session, category_id: uuid.UUID) -> list[Task]:
@@ -333,9 +361,20 @@ def update_speaker_labels(db: Session, meeting_id: uuid.UUID, mapping: dict[str,
     return meeting
 
 def set_attendees(db: Session, meeting_id: uuid.UUID, user_ids: list[uuid.UUID]) -> list[tuple[MeetingAttendee, User]]:
-    """참석자 목록을 통째로 교체한다."""
+    """참석자 목록을 통째로 교체한다. 회의 시작자는 프론트가 보낸 목록에 없어도 항상 포함되고
+    is_initial=True로 표시된다 (시작자 본인이 자동 등록 안 되던 버그 수정)."""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    started_by = meeting.started_by if meeting else None
+
+    final_ids = set(user_ids)
+    if started_by:
+        final_ids.add(started_by)
+
     db.query(MeetingAttendee).filter(MeetingAttendee.meeting_id == meeting_id).delete(synchronize_session=False)
-    db.add_all([MeetingAttendee(meeting_id=meeting_id, user_id=uid) for uid in user_ids])
+    db.add_all([
+        MeetingAttendee(meeting_id=meeting_id, user_id=uid, is_initial=(uid == started_by))
+        for uid in final_ids
+    ])
     db.commit()
     return get_attendees(db, meeting_id)
 
@@ -521,3 +560,32 @@ def split_segment(
         db.refresh(second)
         return segment, second
     raise RuntimeError(f"세그먼트 분할 재시도 초과 (meeting_id={segment.meeting_id})")
+
+def get_decision(db: Session, decision_id: uuid.UUID) -> Optional[Decision]:
+    return db.query(Decision).filter(Decision.id == decision_id, Decision.deleted_at.is_(None)).first()
+
+
+def update_decision(db: Session, decision_id: uuid.UUID, **fields) -> Optional[Decision]:
+    row = get_decision(db, decision_id)
+    if not row:
+        return None
+    for key, value in fields.items():
+        setattr(row, key, value)
+    db.commit()
+    db.refresh(row)
+    return row
+
+def list_meetings_needing_reminder(db: Session, reminder_minutes: int) -> list[Meeting]:
+    """지금부터 reminder_minutes 이내에 시작하는 예약 회의 목록."""
+    now = datetime.now(timezone.utc)
+    window_end = now + timedelta(minutes=reminder_minutes)
+    return (
+        db.query(Meeting)
+        .filter(
+            Meeting.deleted_at.is_(None),
+            Meeting.status == "scheduled",
+            Meeting.scheduled_at > now,
+            Meeting.scheduled_at <= window_end,
+        )
+        .all()
+    )
