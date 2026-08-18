@@ -70,8 +70,18 @@ def unit(v: np.ndarray) -> np.ndarray:
 
 
 def meeting_embeddings(meeting: str, script: str, identifier,
-                       min_sec: float) -> dict[str, list[np.ndarray]]:
-    """회의 하나에서 화자별 발화 임베딩을 모은다."""
+                       min_sec: float, chunk_sec: float = 0.0) -> dict[str, list[np.ndarray]]:
+    """회의 하나에서 화자별 발화 임베딩을 모은다.
+
+    chunk_sec > 0이면 긴 구간을 그 길이로 잘라 각각 임베딩을 뽑는다.
+
+    왜 필요한가 (2026-08-18): 파인튜닝 모델이 우리 화자들을 오히려 뭉갠다
+    (김나연↔이승주 0.606 → 0.834). 의심되는 원인은 **학습은 3초로 잘라서 했는데
+    등록·판정은 10~30초를 통째로 넣는다**는 것이다. 모델이 3초 길이의 통계에
+    적응했다면 긴 입력에서 임베딩이 무너질 수 있다.
+    같은 길이로 잘라 재보면 그 가설이 맞는지 갈린다 — 유사도가 떨어지면 길이
+    불일치가 원인이고, 그대로면 학습 자체가 공간을 뭉갠 것이다.
+    """
     path = os.path.join(MEETINGS_DIR, meeting, "audio.wav")
     audio, sr = sf.read(path, dtype="float32")
     if audio.ndim > 1:
@@ -82,7 +92,15 @@ def meeting_embeddings(meeting: str, script: str, identifier,
         if end - start < min_sec:
             continue
         clip = audio[int(start * sr):int(end * sr)]
-        out[speaker].append(unit(identifier.extract_embedding(clip)))
+        if chunk_sec <= 0:
+            out[speaker].append(unit(identifier.extract_embedding(clip)))
+            continue
+        step = int(chunk_sec * sr)
+        for i in range(0, len(clip), step):
+            piece = clip[i:i + step]
+            if len(piece) < min_sec * sr:      # 자투리가 너무 짧으면 버린다
+                continue
+            out[speaker].append(unit(identifier.extract_embedding(piece)))
     return out
 
 
@@ -94,6 +112,9 @@ def main():
     parser.add_argument("--names", nargs="*", default=None,
                         help="등록할 이름. 안 주면 대본에 나오는 사람 전부")
     parser.add_argument("--min-sec", type=float, default=MIN_SPAN_SEC)
+    parser.add_argument("--chunk-sec", type=float, default=0.0,
+                        help="긴 구간을 이 길이로 잘라 각각 임베딩을 뽑는다(0이면 통째로). "
+                             "학습 crop 길이와 맞춰 길이 불일치를 검증할 때 쓴다")
     parser.add_argument("--profiles-dir", default=VOICE_PROFILES_DIR)
     parser.add_argument("--dry-run", action="store_true",
                         help="저장하지 않고 어떤 프로필이 나올지만 보여준다")
@@ -115,7 +136,7 @@ def main():
     per_meeting: dict[str, dict[str, np.ndarray]] = {}
     counts: dict[str, dict[str, int]] = {}
     for meeting, script in specs:
-        embs = meeting_embeddings(meeting, script, identifier, args.min_sec)
+        embs = meeting_embeddings(meeting, script, identifier, args.min_sec, args.chunk_sec)
         per_meeting[meeting] = {s: unit(np.mean(v, axis=0)) for s, v in embs.items()}
         counts[meeting] = {s: len(v) for s, v in embs.items()}
         print(f"  {meeting[:38]}: " +
