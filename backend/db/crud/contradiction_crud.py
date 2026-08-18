@@ -6,14 +6,20 @@
 """
 
 import hashlib
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
 from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
+
+# change_summary_generate.py와 동일한 설정 소스 - 한 줄 요약 패치용 LLM 호출에도 그대로 씀
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
 
 def make_deduplication_key(
@@ -247,6 +253,51 @@ def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Option
     )
 
 
+def _revise_short_summary(original_short_summary: str, old_text: str, new_text: str) -> Optional[str]:
+    """[추가 - 2026.08.18] "직접수정해서 반영" 시 회의 요약 카드의 한 줄 요약에서
+    이번에 바뀐 결정 관련 부분만 새 내용으로 고쳐 쓴다.
+
+    전체를 다시 요약하게 하면 상관없는 문장까지 손댈 위험이 있어서, 프롬프트로
+    "그 부분만 고치고 나머지는 그대로 유지"를 강하게 제약한다. 그래도 LLM이라
+    통째로 다시 쓰거나 형식이 깨질 수 있어 길이 기반 안전장치를 둔다 - 원문
+    대비 절반 미만/2배 초과로 달라지면 신뢰하지 않고 None을 반환해 호출부가
+    원본을 그대로 둔다 (실패해도 위의 decision 전이 자체는 이미 커밋된 뒤라
+    핵심 기능에는 영향 없음)."""
+    prompt = (
+        "아래는 회의의 한 줄 요약 문장이다.\n\n"
+        f"[기존 한 줄 요약]\n{original_short_summary}\n\n"
+        f"[옛 결정 내용]\n{old_text}\n\n"
+        f"[새로 확정된 내용]\n{new_text}\n\n"
+        "위 한 줄 요약에서 [옛 결정 내용]과 관련된 부분만 [새로 확정된 내용]을 "
+        "반영해서 자연스럽게 고쳐라. 관련 없는 나머지 문장·표현은 절대 바꾸지 말고 "
+        "원문 그대로 유지하라. 개조식(~함/~임 등 명사형 종결) 문체를 유지하라. "
+        "다른 설명 없이 고쳐진 한 줄 요약 문장만 출력하라."
+    )
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0}},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        revised = resp.json().get("response", "").strip()
+    except (httpx.HTTPError, ValueError, KeyError, AttributeError) as e:
+        print(f"[resolve_contradiction] 한 줄 요약 갱신 LLM 호출 실패: {repr(e)}")
+        return None
+
+    if not revised:
+        return None
+
+    orig_len = len(original_short_summary)
+    if len(revised) < orig_len * 0.5 or len(revised) > orig_len * 2:
+        print(
+            f"[resolve_contradiction] 한 줄 요약 갱신 결과가 원문과 길이 차이가 커서 무시함 "
+            f"(원본 {orig_len}자 -> 결과 {len(revised)}자)"
+        )
+        return None
+    return revised
+
+
 def resolve_contradiction(
     db: Session,
     contradiction_id: uuid.UUID,
@@ -278,6 +329,9 @@ def resolve_contradiction(
     )
     db.add(resolution)
 
+    old_decision = None
+    new_decision = None
+
     contradiction = db.get(Contradiction, contradiction_id)
     if contradiction:
         contradiction.status = "resolved"
@@ -293,9 +347,18 @@ def resolve_contradiction(
             if old_decision and old_decision.status == "active":
                 old_decision.status = "superseded"
 
+                # [수정 - 라이브 테스트 발견] meeting_id를 old_decision.meeting_id(그
+                # 결정이 원래 확정됐던 옛날 회의)로 넣고 있었음 - 지금 이 변경을 실제로
+                # 확인/확정한 건 현재 회의인데, 새 decision이 옛날 회의 소속으로 생겨서
+                # list_decisions_by_meeting(현재_회의_id) 조회 시 안 잡혀 "직접수정해서
+                # 반영"해도 회의 요약/회의록에는 안 보이는 문제로 이어짐.
+                # contradiction.session_meeting_id가 바로 그 "현재 회의"임 -
+                # _check_not_chat_sourced()가 채팅발 모순은 resolve 자체를 막아서
+                # source_type이 항상 meeting_segment일 때만 여기 도달하므로 항상 채워져
+                # 있음(방어적으로 old_decision.meeting_id를 fallback으로 남김).
                 new_decision = Decision(
                     workspace_id=old_decision.workspace_id,
-                    meeting_id=old_decision.meeting_id,
+                    meeting_id=contradiction.session_meeting_id or old_decision.meeting_id,
                     title=old_decision.title,
                     decision_text=new_decision_text or contradiction.statement_text_snapshot,
                     reason=new_decision_reason,
@@ -307,6 +370,27 @@ def resolve_contradiction(
 
     db.commit()
     db.refresh(resolution)
+
+    # [추가 - 2026.08.18] decision 리스트는 위에서 새 meeting_id로 바로 붙지만,
+    # 요약 카드의 "한 줄 요약"은 회의 종료 시 llm_extractor가 한 번 생성한 뒤로는
+    # 자동 갱신되지 않는 정적 텍스트라 따로 패치해야 함. 실패해도 위 decision
+    # 전이는 이미 커밋된 뒤라 핵심 기능엔 영향 없이 조용히 넘어간다.
+    if new_decision is not None and old_decision is not None:
+        try:
+            from backend.db.crud import meeting_crud
+
+            summary_row = meeting_crud.get_meeting_summary(db, new_decision.meeting_id)
+            if summary_row and summary_row.short_summary:
+                revised = _revise_short_summary(
+                    summary_row.short_summary,
+                    old_decision.decision_text,
+                    new_decision.decision_text,
+                )
+                if revised:
+                    meeting_crud.upsert_summary(db, new_decision.meeting_id, short_summary=revised)
+        except Exception as e:
+            print(f"[resolve_contradiction] 한 줄 요약 갱신 중 예외 발생(무시하고 진행): {repr(e)}")
+
     return resolution
 
 
