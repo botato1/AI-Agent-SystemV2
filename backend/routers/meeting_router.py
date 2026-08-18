@@ -20,6 +20,7 @@ from backend.services import document_service, meeting_service
 from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
 from backend.modules.judgment import agenda_reminder
+from backend.db.modules import Meeting
 from backend.routers import meeting_ws_router
 from backend.schemas.task_schema import TaskResponse, TaskListResponse
 from backend.schemas.meeting_schema import (
