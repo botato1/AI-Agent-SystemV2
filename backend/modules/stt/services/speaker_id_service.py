@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch
 from pyannote.audio import Model, Inference
@@ -9,6 +11,7 @@ from ..core.config import (
     DEVICE,
     REALTIME_SAMPLE_RATE,
     SPEAKER_EMBEDDING_MODEL,
+    SPEAKER_EMBEDDING_CHECKPOINT,
     SPEAKER_SIMILARITY_THRESHOLD,
     SPEAKER_MIN_ASSIGN_SIMILARITY,
     SPEAKER_MIN_MARGIN,
@@ -32,9 +35,33 @@ def load_speaker_embedding_inference() -> Inference:
     실제 GPU 서버(faster-whisper/pyannote 설치된 환경)에서 한 번 동작 검증이 필요함.
     """
     model = Model.from_pretrained(SPEAKER_EMBEDDING_MODEL, use_auth_token=HF_TOKEN)
+
+    # 파인튜닝 가중치가 지정돼 있으면 얹는다. config의 SPEAKER_EMBEDDING_CHECKPOINT 주석 참고 —
+    # 특히 이 값을 켜면 기존 목소리 프로필을 다시 만들어야 한다.
+    if SPEAKER_EMBEDDING_CHECKPOINT:
+        if not os.path.isfile(SPEAKER_EMBEDDING_CHECKPOINT):
+            raise FileNotFoundError(
+                f"화자 임베딩 체크포인트를 못 찾음: {SPEAKER_EMBEDDING_CHECKPOINT}")
+        state = torch.load(SPEAKER_EMBEDDING_CHECKPOINT, map_location="cpu")
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        # 조용히 넘어가면 "가중치가 안 실렸는데 잘 도는 것처럼 보이는" 상태가 된다.
+        # 화자 인식은 틀려도 예외가 안 나므로 여기서 막지 않으면 아무도 못 알아챈다.
+        if len(missing) > len(state) // 2:
+            raise RuntimeError(
+                f"체크포인트가 모델 구조와 맞지 않음 (없는 키 {len(missing)}개)")
+        if missing or unexpected:
+            logger.warning(
+                f"⚠️ 화자 임베딩 가중치 일부 불일치 — 없는 키 {len(missing)}개 / "
+                f"남는 키 {len(unexpected)}개")
+        logger.info(f"🎯 화자 임베딩 파인튜닝 가중치 적용: {SPEAKER_EMBEDDING_CHECKPOINT}")
+        logger.warning("⚠️ 목소리 프로필이 이 가중치로 만들어진 것인지 확인할 것 — "
+                       "옛 프로필과 섞으면 화자 인식이 망가진다")
+
     inference = Inference(model, window="whole")
     if DEVICE == "cuda":
-        import torch
+        # torch는 모듈 최상단에서 이미 import 한다. 여기서 다시 import 하면 파이썬이
+        # 이 함수 전체에서 torch를 지역 이름으로 보게 되어, 위쪽의 torch.load가
+        # UnboundLocalError로 죽는다.
         inference.to(torch.device("cuda"))
     return inference
 
