@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Meeting,
   MeetingSegment,
@@ -26,11 +26,12 @@ import {
   updateMeetingInfoApi,
 } from "../services/meeting";
 import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
+import { useNotifications } from "./useNotifications";
 
 const PENDING_STATUSES = new Set(["created", "processing"]);
 
 // 업로드된 회의(STT 요약/결정사항) 실제 백엔드 연동
-export function useRealMeetings(workspaceId: string) {
+export function useRealMeetings(workspaceId: string, selectedCategoryId?: string | null) {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
@@ -64,6 +65,12 @@ export function useRealMeetings(workspaceId: string) {
     setIsLoading(true);
     loadMeetings().finally(() => setIsLoading(false));
   }, [workspaceId]);
+
+  // 사이드바에서 카테고리를 바꾸면 지금 보던 회의가 새 카테고리에 없을 수 있으니, 상세 패널을
+  // 열어둔 채로 다른 카테고리 회의가 계속 보이지 않게 선택을 초기화한다.
+  useEffect(() => {
+    setSelectedMeetingId(null);
+  }, [selectedCategoryId]);
 
   // 아직 STT/후처리 중인 회의가 있으면 완료될 때까지 목록을 주기적으로 재조회
   useEffect(() => {
@@ -106,6 +113,30 @@ export function useRealMeetings(workspaceId: string) {
 
     loadDetail();
   }, [workspaceId, selectedMeetingId, selectedMeeting?.status]);
+
+  // 정밀 재분석으로 요약이 갱신되면 서버가 ref_type="meeting", ref_id=meeting_id인
+  // meeting_summary_ready 알림을 보낸다 - 지금 보고 있는 회의 것이면 요약을 다시 받아온다.
+  const { notifications } = useNotifications(workspaceId);
+  const handledSummaryNotificationIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!workspaceId || !selectedMeetingId) return;
+
+    const pending = notifications.filter(
+      (n) =>
+        n.type === "meeting_summary_ready" &&
+        n.ref_type === "meeting" &&
+        n.ref_id === selectedMeetingId &&
+        !handledSummaryNotificationIdsRef.current.has(n.id)
+    );
+    if (pending.length === 0) return;
+
+    pending.forEach((n) => handledSummaryNotificationIdsRef.current.add(n.id));
+
+    getMeetingSummaryApi(workspaceId, selectedMeetingId).then((res) => {
+      if (res.status === "success") setSummary(res.summary);
+    });
+  }, [notifications, workspaceId, selectedMeetingId]);
 
   async function reloadAttendees() {
     if (!workspaceId || !selectedMeetingId) return;
