@@ -51,10 +51,15 @@ function toLocalTask(bt: BackendTask, memberNameById: Record<string, string>): T
     deadline: bt.due_at ? toLocalDateTimeInput(bt.due_at) : null,
     status: toLocalStatus(bt.status),
     priority: bt.priority ?? "medium",
+    category_id: bt.category_id ?? null,
   };
 }
 
-export function useRealTasks(workspaceId: string, memberNameById: Record<string, string>) {
+export function useRealTasks(
+  workspaceId: string,
+  memberNameById: Record<string, string>,
+  selectedCategoryId?: string | null
+) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   // 방금 내가 직접 바꾼(생성/수정/상태변경/삭제) 시각 - 백그라운드 폴링 요청이 그 이후에도
@@ -67,7 +72,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
     if (!workspaceId) return;
     const requestStartedAt = Date.now();
     // status=all로 done/cancelled/suggested까지 다 받아온다 (칸반보드 "완료" 칸에 필요)
-    const res = await getTaskListApi(workspaceId, true);
+    const res = await getTaskListApi(workspaceId, true, selectedCategoryId ?? undefined);
     if (requestStartedAt < lastMutationAtRef.current) return;
     if (res.status === "success") {
       // "suggested"(회의에서 제안됐지만 아직 승인 안 된 항목)는 회의 화면의 별도 승인
@@ -82,7 +87,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
     setIsLoading(true);
     loadTasks().finally(() => setIsLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId]);
+  }, [workspaceId, selectedCategoryId]);
 
   // 다른 팀원이 추가/수정/삭제한 할 일은 내 화면엔 신호가 안 오므로(전용 웹소켓 없음),
   // 알림벨과 같은 방식으로 백그라운드에서 조용히 주기적 재조회해서 새로고침 없이 반영한다
@@ -91,7 +96,7 @@ export function useRealTasks(workspaceId: string, memberNameById: Record<string,
     const timer = setInterval(loadTasks, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId]);
+  }, [workspaceId, selectedCategoryId]);
 
   // 1. 생성
   async function createTask(input: Omit<Task, "id">) {

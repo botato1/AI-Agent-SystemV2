@@ -18,6 +18,10 @@ export const translations = {
     main_group: "메인",
     analysis_group: "분석",
     btn_close: "닫기",
+    sidebar_category_group: "카테고리",
+    sidebar_category_all: "전체",
+    sidebar_category_collapse: "접기",
+    sidebar_category_show_more: (n: number) => `${n}개 더보기`,
 
     // === 대시보드 및 칸반 업무 ===
     dashboard_tab_tasks: "할일",
@@ -297,6 +301,7 @@ export const translations = {
     graph_title: "그래프 시각화",
     graph_sub: "문서 유형 · 의미 유사도 기반 연관성 시각화",
     graph_no_docs: "분석이 끝난 문서가 있어야 그래프에 표시돼요. (문서 분석에서 먼저 업로드해보세요)",
+    graph_uncategorized_label: "미분류",
     graph_btn_view_analysis: "문서 분석에서 보기",
     graph_connected_count: "연결된 문서",
     graph_connected_suffix: "개 (의미 유사도 기준)",
@@ -340,6 +345,7 @@ export const translations = {
     meeting_audio_loading: "원본 음성 불러오는 중...",
     meeting_audio_unavailable: "원본 음성을 재생할 수 없습니다.",
     meeting_audio_seek_title: "이 시점부터 원본 음성 재생",
+    meeting_segment_overlapped_notice: "여러 명이 동시에 말한 구간이라 화자 표시가 부정확할 수 있어요.",
 
     // === 회의록 내보내기 모달 ===
     meeting_export_title: "회의록 내보내기",
@@ -686,6 +692,7 @@ export const translations = {
     meeting_category_create_placeholder: "카테고리 이름을 입력하세요",
     meeting_category_create_confirm: "만들기",
     meeting_category_default_label: "기본값",
+    settings_category_drag_hint: "드래그해서 순서 바꾸기",
     settings_category_delete_confirm: (name: string) => `"${name}" 카테고리를 삭제할까요? 이 카테고리로 분류된 회의는 남아있지만, 카테고리 자체는 복구할 수 없어요.`,
 
     // === 참석자 관리 모달 ===
@@ -728,6 +735,10 @@ export const translations = {
     main_group: "MAIN",
     analysis_group: "ANALYSIS",
     btn_close: "Close",
+    sidebar_category_group: "CATEGORIES",
+    sidebar_category_all: "All",
+    sidebar_category_collapse: "Show less",
+    sidebar_category_show_more: (n: number) => `${n} more`,
 
     // === Dashboard & Kanban ===
     dashboard_tab_tasks: "Tasks",
@@ -1007,6 +1018,7 @@ export const translations = {
     graph_title: "Graph Visualization",
     graph_sub: "Visualization of associations based on document types and semantic similarity",
     graph_no_docs: "There must be analyzed documents to display them on the graph. (Please upload in Doc Analysis first)",
+    graph_uncategorized_label: "Uncategorized",
     graph_btn_view_analysis: "View in Doc Analysis",
     graph_connected_count: "Connected Documents",
     graph_connected_suffix: " (Based on semantic similarity)",
@@ -1050,6 +1062,7 @@ export const translations = {
     meeting_audio_loading: "Loading original audio...",
     meeting_audio_unavailable: "Original audio unavailable.",
     meeting_audio_seek_title: "Play original audio from this point",
+    meeting_segment_overlapped_notice: "Multiple people spoke at once here, so the speaker shown may be inaccurate.",
 
     // === Meeting export modal ===
     meeting_export_title: "Export Meeting Minutes",
@@ -1396,6 +1409,7 @@ export const translations = {
     meeting_category_create_placeholder: "Enter category name",
     meeting_category_create_confirm: "Create",
     meeting_category_default_label: "Default",
+    settings_category_drag_hint: "Drag to reorder",
     settings_category_delete_confirm: (name: string) => `Delete category "${name}"? Meetings already in it will stay, but the category itself can't be recovered.`,
 
     // === Manage attendees modal ===

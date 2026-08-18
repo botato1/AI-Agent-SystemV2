@@ -2,9 +2,12 @@
 import { useRef, useState } from "react";
 import { AnalyzedDocument } from "../types";
 import { DocumentDetail, DocumentFigure } from "../services/document";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
 import WorktreePanel from "./WorktreePanel";
 import DocumentDetailPanel from "./DocumentDetailPanel";
 import DocumentOriginalViewer from "./DocumentOriginalViewer";
+import CategoryBadge from "./CategoryBadge";
 import { RepeatIcon, TrashIcon } from "./icons";
 
 type AnalysisTab = "document" | "worktree";
@@ -17,10 +20,12 @@ interface DocumentAnalysisViewProps {
   activeDocDetail?: DocumentDetail | null;
   activeDocFigures?: DocumentFigure[];
   isDetailLoading?: boolean;
-  uploadDocument: (fileList: FileList | null) => Promise<void> | void;
+  uploadDocument: (fileList: FileList | null, categoryId?: string) => Promise<void> | void;
   selectDocument: (id: string | null) => void;
   deleteDocument?: (id: string) => void;
   retryDocument?: (id: string) => void;
+  categories: Category[];
+  selectedCategoryId: string | null;
   t: any;
 }
 
@@ -35,9 +40,16 @@ export default function DocumentAnalysisView({
   selectDocument,
   deleteDocument,
   retryDocument,
+  categories,
+  selectedCategoryId,
   t,
 }: DocumentAnalysisViewProps) {
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? null;
+  // 사이드바 전역 카테고리 선택기 - null("전체")이면 전부, 아니면 그 카테고리 문서만.
+  const visibleDocuments = selectedCategoryId
+    ? documents.filter((d) => d.category_id === selectedCategoryId)
+    : documents;
+  const categoryIndexById = new Map(categories.map((c, index) => [c.id, index]));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<AnalysisTab>("document");
   
@@ -52,7 +64,7 @@ export default function DocumentAnalysisView({
     setIsUploading(true);
 
     try {
-      await uploadDocument(fileList);
+      await uploadDocument(fileList, selectedCategoryId ?? undefined);
     } catch (error) {
       console.error("파일 업로드 오류:", error);
     } finally {
@@ -88,7 +100,12 @@ export default function DocumentAnalysisView({
           </button>
         </div>
         <div className="flex flex-1 overflow-hidden">
-          <WorktreePanel workspaceId={workspaceId} t={t} />
+          <WorktreePanel
+            workspaceId={workspaceId}
+            categories={categories}
+            selectedCategoryId={selectedCategoryId}
+            t={t}
+          />
         </div>
       </div>
     );
@@ -138,8 +155,9 @@ export default function DocumentAnalysisView({
           </div>
 
           <div className="flex-1 space-y-1.5 overflow-y-auto custom-scrollbar">
-            {documents.map((doc) => {
+            {visibleDocuments.map((doc) => {
               const isSelected = doc.id === activeDocId;
+              const cat = doc.category_id ? categories.find((c) => c.id === doc.category_id) : null;
               return (
                 <div
                   key={doc.id}
@@ -159,12 +177,18 @@ export default function DocumentAnalysisView({
                     )}
                     <span className="truncate">{doc.name}</span>
                   </span>
-                  <span className="text-[11px] text-recall-textMuted">
+                  <span className="flex items-center gap-1.5 text-[11px] text-recall-textMuted">
                     {doc.status === "analyzing"
                       ? t.analyzing_msg || "AI 분석 중..."
                       : doc.status === "failed"
                       ? t.doc_status_failed_short
                       : "DOCUMENT"}
+                    {cat && !cat.is_default && (
+                      <CategoryBadge
+                        name={cat.name}
+                        color={getCategoryColor(categoryIndexById.get(cat.id) ?? 0)}
+                      />
+                    )}
                   </span>
 
                   <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">

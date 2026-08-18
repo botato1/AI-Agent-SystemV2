@@ -174,6 +174,7 @@ function SegmentRow({
   timeMs,
   content,
   hasContradiction,
+  overlapped,
   segmentId,
   speakerNameOptions,
   onAssignSpeaker,
@@ -189,6 +190,8 @@ function SegmentRow({
   timeMs: number;
   content: string;
   hasContradiction?: boolean;
+  // 여러 사람이 동시에 말한 실시간 세그먼트 - speaker_label이 부정확할 수 있다는 신호
+  overlapped?: boolean;
   segmentId?: string;
   speakerNameOptions?: string[];
   onAssignSpeaker?: (segmentId: string, name: string) => void;
@@ -256,6 +259,11 @@ function SegmentRow({
           )}
           {hasContradiction && (
             <AssistIcon size={12} className="flex-shrink-0 text-recall-accent" />
+          )}
+          {overlapped && (
+            <span title={t.meeting_segment_overlapped_notice} className="flex-shrink-0">
+              <WarningIcon size={12} className="text-amber-400" />
+            </span>
           )}
           {canAssign && (
             <AssignSpeakerControl
@@ -492,6 +500,9 @@ interface MeetingsPanelProps {
   onInitialSegmentIdConsumed?: () => void;
   onOpenDecision: (decisionId: string) => void;
   onTaskApproved: () => void;
+  // 사이드바 전역 카테고리 선택기에서 고른 값 - null("전체")이면 기존 폴더뷰 그대로,
+  // 특정 카테고리면 그 카테고리 회의만 폴더 없이 플랫하게 보여준다.
+  selectedCategoryId?: string | null;
   t: any;
 }
 
@@ -1340,6 +1351,7 @@ export default function MeetingsPanel({
   onInitialSegmentIdConsumed,
   onOpenDecision,
   onTaskApproved,
+  selectedCategoryId,
   t,
 }: MeetingsPanelProps) {
   const {
@@ -1372,7 +1384,7 @@ export default function MeetingsPanel({
     updateShortSummary,
     reload,
     upsertMeeting,
-  } = useRealMeetings(workspaceId);
+  } = useRealMeetings(workspaceId, selectedCategoryId);
 
   // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어온 경우, 그 회의를 바로 선택해서 보여준다.
   useEffect(() => {
@@ -1531,32 +1543,7 @@ export default function MeetingsPanel({
   const [topTab, setTopTab] = useState<"meetings" | "exports">("meetings");
   const categoriesState = useCategories(workspaceId);
   const categoryById = new Map(categoriesState.categories.map((c) => [c.id, c]));
-  const [collapsedCategoryIds, setCollapsedCategoryIds] = useState<Set<string>>(new Set());
   const [startCategoryId, setStartCategoryId] = useState<string | null>(null);
-  const [isAddingCategory, setIsAddingCategory] = useState(false);
-  const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
-
-  async function handleConfirmAddCategory() {
-    const name = newCategoryDraftName.trim();
-    if (!name) return;
-    await categoriesState.createCategory(name);
-    setIsAddingCategory(false);
-    setNewCategoryDraftName("");
-  }
-
-  // 카테고리 추가 입력창이 열려 있을 때 바깥을 클릭하면 만들지 않고 그냥 접는다
-  const addCategoryRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!isAddingCategory) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (addCategoryRef.current && !addCategoryRef.current.contains(e.target as Node)) {
-        setIsAddingCategory(false);
-        setNewCategoryDraftName("");
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isAddingCategory]);
 
   const audioPlayerRef = useRef<MeetingAudioPlayerHandle>(null);
 
@@ -1671,18 +1658,11 @@ export default function MeetingsPanel({
     return t.meeting_default_title(d.getMonth() + 1, d.getDate());
   }
 
-  function handleStartRecording(categoryId?: string) {
-    setStartCategoryId(categoryId ?? null);
+  // 지금 사이드바에서 특정 카테고리를 보고 있으면, 새로 시작하는 회의도 거기 소속으로 만든다
+  // (채팅방/할 일/AI 대화 생성 때와 동일한 패턴).
+  function handleStartRecording() {
+    setStartCategoryId(selectedCategoryId ?? null);
     setShowStartModal(true);
-  }
-
-  function toggleCategoryCollapsed(categoryId: string) {
-    setCollapsedCategoryIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(categoryId)) next.delete(categoryId);
-      else next.add(categoryId);
-      return next;
-    });
   }
 
   function renderMeetingCard(m: Meeting, opts: { showCategoryChip: boolean }) {
@@ -1816,106 +1796,21 @@ export default function MeetingsPanel({
             </button>
           </div>
 
-          {/* 카테고리 추가 - 설정 화면까지 안 가고 회의 페이지에서 바로 만들 수 있게 */}
-          <div ref={addCategoryRef}>
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-recall-textMuted">
-              {t.meeting_category_label}
-            </p>
-            {!isAddingCategory && (
-              <button
-                onClick={() => setIsAddingCategory(true)}
-                className="flex items-center gap-1 text-[11px] font-semibold text-recall-accent hover:opacity-80"
-              >
-                <PlusIcon size={12} />
-                {t.meeting_category_add_btn}
-              </button>
-            )}
-          </div>
-          {isAddingCategory && (
-            <div className="mb-2 flex gap-1.5">
-              <input
-                autoFocus
-                value={newCategoryDraftName}
-                onChange={(e) => setNewCategoryDraftName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleConfirmAddCategory();
-                  if (e.key === "Escape") setIsAddingCategory(false);
-                }}
-                placeholder={t.meeting_category_create_placeholder}
-                className="w-full rounded-lg border border-recall-border bg-recall-bgSoft px-2.5 py-1.5 text-xs text-recall-text outline-none focus:border-recall-accent"
-              />
-              <button
-                onClick={handleConfirmAddCategory}
-                disabled={!newCategoryDraftName.trim()}
-                className="flex-shrink-0 rounded-lg bg-recall-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-              >
-                {t.meeting_category_create_confirm}
-              </button>
-            </div>
-          )}
-          </div>
-
-          {/* 회의 리스트 영역 - 기본 카테고리는 폴더로 안 묶고 그냥 flat하게 보여주고
-              (모든 회의가 다 "기본값" 폴더 하나에 몰려 있는 건 의미가 없으니), 사용자가
-              직접 만든 카테고리만 접고 펼 수 있는 폴더로 묶는다 */}
+          {/* 회의 리스트 영역 - 카테고리 필터링은 사이드바 전역 선택기가 담당하므로, 여기서는
+              항상 평평한 목록만 보여준다. "전체"를 보고 있을 때만 카드에 카테고리 배지를 붙여서
+              어느 카테고리 소속인지 알 수 있게 한다(필터링된 상태에선 다 같은 카테고리라 불필요). */}
           <div className="flex-1 space-y-1.5 overflow-y-auto custom-scrollbar pr-0.5">
             {isLoading ? (
               <p className="py-6 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
-            ) : meetings.length === 0 ? (
-              <p className="py-6 text-center text-xs text-recall-textMuted">{t.meeting_none}</p>
-            ) : (
-              <>
-                {meetings
-                  .filter((m) => {
-                    const cat = m.category_id ? categoryById.get(m.category_id) : null;
-                    return !cat || cat.is_default;
-                  })
-                  .map((m) => renderMeetingCard(m, { showCategoryChip: false }))}
-
-                {categoriesState.categories
-                  .filter((cat) => !cat.is_default)
-                  .map((cat) => {
-                    const catMeetings = meetings.filter((m) => m.category_id === cat.id);
-                    const isCollapsed = collapsedCategoryIds.has(cat.id);
-                    return (
-                      <div key={cat.id}>
-                        <div className="group/cat flex items-center gap-1 rounded-lg px-1 py-1.5 hover:bg-white/5">
-                          <button
-                            onClick={() => toggleCategoryCollapsed(cat.id)}
-                            className="flex flex-1 items-center gap-1.5 text-left"
-                          >
-                            {isCollapsed ? (
-                              <ChevronRightIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
-                            ) : (
-                              <ChevronDownIcon size={13} className="flex-shrink-0 text-recall-textMuted" />
-                            )}
-                            <span className="truncate text-sm font-bold text-recall-text">{cat.name}</span>
-                            <span className="flex-shrink-0 text-xs text-recall-textMuted">{catMeetings.length}</span>
-                          </button>
-                          <button
-                            onClick={() => handleStartRecording(cat.id)}
-                            disabled={isLiveActive}
-                            title={t.meeting_start_new}
-                            className="hidden flex-shrink-0 text-recall-textMuted hover:text-recall-accent group-hover/cat:inline disabled:opacity-40"
-                          >
-                            <PlusIcon size={14} />
-                          </button>
-                        </div>
-                        {!isCollapsed && (
-                          <div className="mt-1 space-y-1.5 pl-1">
-                            {catMeetings.length === 0 ? (
-                              <p className="px-1.5 py-1 text-[11px] text-recall-textMuted">{t.meeting_none}</p>
-                            ) : (
-                              catMeetings.map((m) => renderMeetingCard(m, { showCategoryChip: false }))
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-              </>
-            )}
+            ) : (() => {
+              const visibleMeetings = selectedCategoryId
+                ? meetings.filter((m) => m.category_id === selectedCategoryId)
+                : meetings;
+              if (visibleMeetings.length === 0) {
+                return <p className="py-6 text-center text-xs text-recall-textMuted">{t.meeting_none}</p>;
+              }
+              return visibleMeetings.map((m) => renderMeetingCard(m, { showCategoryChip: !selectedCategoryId }));
+            })()}
           </div>
         </div>
       )}
@@ -2064,6 +1959,7 @@ export default function MeetingsPanel({
                       timeMs={s.start_ms}
                       content={s.content}
                       hasContradiction={liveContradictionAlerts.some((a) => a.statement_text === s.content)}
+                      overlapped={s.overlapped}
                       t={t}
                     />
                   ))}

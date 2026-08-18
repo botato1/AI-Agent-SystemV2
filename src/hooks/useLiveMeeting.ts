@@ -38,6 +38,11 @@ export interface LiveSegment {
   speaker_user_id: string | null;
   start_ms: number;
   end_ms: number;
+  // 문장 단위 실시간 세그먼트 도입 후 추가된 필드 - STT 엔진이 문장별 시각을 안 줘서 글자 수
+  // 비율로 나눈 추정치라, 자막 표시엔 무방해도 이 값으로 오디오를 되감으면 수백 ms 밀린다.
+  timeEstimated: boolean;
+  // 여러 사람이 동시에 말한 구간 - speaker_label을 신뢰할 수 없다는 신호.
+  overlapped: boolean;
 }
 
 export type ContradictionAlertSource = "document" | "decision";
@@ -90,6 +95,22 @@ const CHUNK_MS = 200;
 // STT 서버가 이 시간 안에 같은 세션으로 재접속하면 회의를 안 끊고 이어준다.
 const RECONNECT_WINDOW_MS = 20000;
 const RECONNECT_RETRY_INTERVAL_MS = 1500;
+
+// 브라우저가 전송 직전 PCM을 완전한 0으로 채워 보내는 문제(마이크 트랙 비활성화/장치 전환,
+// getUserMedia 스트림 끊김 등) 대응 - 이 정도 연속 무음 청크가 쌓이면 서버의 audio_gap 경고를
+// 기다리지 않고 클라이언트에서 먼저 진단 로그를 남기고 스트림 재획득을 시도한다.
+const SILENT_STREAK_ALERT_CHUNKS = Math.ceil(2000 / CHUNK_MS);
+// 재획득을 너무 자주 반복하면(예: 실제로 마이크가 없는 환경) 오히려 스트림이 계속 끊길 수
+// 있어 최소 간격을 둔다.
+const RECOVERY_COOLDOWN_MS = 8000;
+
+function isAllZeroPCM(buffer: ArrayBuffer): boolean {
+  const samples = new Int16Array(buffer);
+  for (let i = 0; i < samples.length; i++) {
+    if (samples[i] !== 0) return false;
+  }
+  return samples.length > 0;
+}
 
 const PCM_WORKLET_SOURCE = `
 class PCMProcessor extends AudioWorkletProcessor {
@@ -239,6 +260,12 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   // voice=1로 받는 다른 참가자 오디오 프레임 - 발신자 슬롯별 다음 재생 시각
   const voiceSlotTimelineRef = useRef<Map<number, number>>(new Map());
 
+  // 연속 무음(값이 정확히 0인 PCM) 청크 감지 + 스트림 재획득 관련 상태
+  const silentChunkStreakRef = useRef(0);
+  const lastRecoveryAttemptAtRef = useRef(0);
+  const isRecoveringAudioRef = useRef(false);
+  const visibilityHandlerRef = useRef<(() => void) | null>(null);
+
   // 재연결 관련 상태 — 전부 ref로 관리 (WS 이벤트 핸들러는 리렌더 없이도 최신 값을 읽어야 함)
   const isIntentionalCloseRef = useRef(false);
   const reconnectDeadlineRef = useRef<number | null>(null);
@@ -263,8 +290,49 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     micStreamRef.current = null;
 
+    if (visibilityHandlerRef.current) {
+      document.removeEventListener("visibilitychange", visibilityHandlerRef.current);
+      visibilityHandlerRef.current = null;
+    }
+
     audioContextRef.current?.close().catch(() => {});
     audioContextRef.current = null;
+  }
+
+  // 디버깅용 - 무음 감지/재획득이 실제로 왜 일어났는지 재현 시 바로 알 수 있게 트랙/컨텍스트
+  // 상태를 그대로 남긴다.
+  function logAudioDiagnostics(reason: string) {
+    const track = micStreamRef.current?.getAudioTracks()[0];
+    console.warn(`[audio-quality] ${reason}`, {
+      trackReadyState: track?.readyState ?? null,
+      trackMuted: track?.muted ?? null,
+      trackEnabled: track?.enabled ?? null,
+      audioContextState: audioContextRef.current?.state ?? null,
+      documentVisibility: document.visibilityState,
+    });
+  }
+
+  // 마이크 트랙 비활성화/장치 전환, getUserMedia 스트림 끊김 등으로 전송 중인 PCM이 계속
+  // 0으로 채워질 때 재시도 - ws 연결은 그대로 두고 오디오 캡처만 다시 잡는다. 너무 잦은
+  // 재시도를 막기 위해 쿨다운을 둔다.
+  async function recoverAudioStream(reason: string) {
+    logAudioDiagnostics(reason);
+
+    if (isRecoveringAudioRef.current) return;
+    if (Date.now() - lastRecoveryAttemptAtRef.current < RECOVERY_COOLDOWN_MS) return;
+    if (isViewerRef.current || !isSendingRef.current) return;
+    if (statusRef.current !== "recording" && statusRef.current !== "paused") return;
+
+    isRecoveringAudioRef.current = true;
+    lastRecoveryAttemptAtRef.current = Date.now();
+    try {
+      cleanupAudio();
+      await setupAudioCapture();
+    } catch (err) {
+      console.error("오디오 스트림 재획득 실패:", err);
+    } finally {
+      isRecoveringAudioRef.current = false;
+    }
   }
 
   // ws 인스턴스를 직접 클로저로 캡처하지 않고 wsRef.current를 통해 매번 참조한다 —
@@ -273,6 +341,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   async function setupAudioCapture() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStreamRef.current = stream;
+    silentChunkStreakRef.current = 0;
 
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
@@ -294,7 +363,31 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       if (isSendingRef.current && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(event.data);
       }
+
+      // 서버가 audio_gap 경고를 보낼 때까지(최대 2초+왕복 지연) 기다리지 않고, 전송 직전
+      // PCM 자체가 완전한 0인지 여기서 먼저 확인한다 - 실제 방 소리는 아무리 조용해도
+      // 잡음 바닥이 있어 0이 될 수 없으므로, 이는 트랙/컨텍스트 문제의 신호다.
+      if (isAllZeroPCM(event.data)) {
+        silentChunkStreakRef.current += 1;
+        if (silentChunkStreakRef.current === SILENT_STREAK_ALERT_CHUNKS) {
+          recoverAudioStream("연속 무음 PCM 감지 (클라이언트 감지)");
+        }
+      } else {
+        silentChunkStreakRef.current = 0;
+      }
     };
+
+    // 탭이 백그라운드로 가면 브라우저가 AudioContext를 suspend해서 워클릿 처리가 멈출 수
+    // 있다 - 탭이 다시 보이거나 AudioContext가 suspended로 바뀌는 즉시 resume을 시도한다.
+    function resumeIfSuspended() {
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+    }
+    audioContext.onstatechange = resumeIfSuspended;
+    visibilityHandlerRef.current = resumeIfSuspended;
+    document.addEventListener("visibilitychange", resumeIfSuspended);
 
     // 워클릿이 계속 process()를 돌게 하려면 오디오 그래프가 destination까지 연결돼 있어야 하는
     // 브라우저가 있어서, 소리는 안 나가되(gain=0) destination까지 연결해둔다.
@@ -335,6 +428,8 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
           speaker_user_id: s.speaker_user_id ?? null,
           start_ms: Math.round((s.start ?? 0) * 1000),
           end_ms: Math.round((s.end ?? 0) * 1000),
+          timeEstimated: s.time_estimated === true,
+          overlapped: s.overlapped === true,
         }));
         if (newSegments.length > 0) {
           setSegments((prev) => [...prev, ...newSegments]);
@@ -388,6 +483,12 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
           code: data.code ?? null,
         };
         setAudioQualityAlerts((prev) => [...prev, alert]);
+        // 서버가 audio_gap(2초 이상 완전 무음)을 감지했다는 건 클라이언트 쪽 감지가 놓쳤거나
+        // 아직 임계치에 못 미친 상황일 수 있으므로, 여기서도 동일한 재획득 경로를 탄다
+        // (쿨다운이 있어 클라이언트 감지와 겹쳐도 중복 재시도로 이어지지 않는다).
+        if (data.code === "audio_gap" && !isViewerRef.current) {
+          recoverAudioStream("서버 audio_gap 경고 수신");
+        }
       } else if (data.type === "session_end") {
         sessionEndResolverRef.current?.();
         sessionEndResolverRef.current = null;
@@ -599,6 +700,9 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
             speaker_user_id: s.speaker_user_id ?? null,
             start_ms: s.start_ms,
             end_ms: s.end_ms,
+            // 저장된 세그먼트는 정밀 재분석을 거친 확정 값이라 추정/중첩 플래그가 없다.
+            timeEstimated: false,
+            overlapped: false,
           }))
       );
     }

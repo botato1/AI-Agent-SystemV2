@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Language } from "../data/translations";
-import { ChevronRightIcon, ChevronUpIcon, ChevronDownIcon, MoonIcon, SunIcon, PlusIcon, PencilIcon, TrashIcon, CheckIcon, CloseIcon } from "./icons";
+import { ChevronRightIcon, MoonIcon, SunIcon, PlusIcon, PencilIcon, TrashIcon, CheckIcon, CloseIcon, GripIcon } from "./icons";
 import { Theme } from "../hooks/useTheme";
 import { Workspace } from "../types";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
@@ -20,14 +20,41 @@ function categoryLabel(t: any, category: Category): string {
   return category.is_default ? t.meeting_category_default_label : category.name;
 }
 
-function CategoryManagementSection({ workspaceId, t }: { workspaceId: string; t: any }) {
+function CategoryManagementSection({
+  categoriesState,
+  t,
+}: {
+  categoriesState: ReturnType<typeof useCategories>;
+  t: any;
+}) {
   const { categories, isLoading, createCategory, renameCategory, reorderCategory, deleteCategory } =
-    useCategories(workspaceId);
+    categoriesState;
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState("");
+
+  // 드래그로 순서 바꾸기 - 화살표 버튼(한 칸씩)보다 여러 칸을 한 번에 옮길 때 편하다.
+  // 네이티브 HTML5 drag events만 써서 별도 라이브러리 없이 처리한다.
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  function handleDrop(dropIndex: number) {
+    if (draggedIndex === null || draggedIndex === dropIndex) {
+      setDraggedIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    const reordered = [...categories];
+    const [moved] = reordered.splice(draggedIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+    reordered.forEach((cat, idx) => {
+      if (cat.display_order !== idx) reorderCategory(cat.id, idx);
+    });
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  }
 
   const addRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -71,16 +98,6 @@ function CategoryManagementSection({ workspaceId, t }: { workspaceId: string; t:
     if (ok) await deleteCategory(category.id);
   }
 
-  async function moveBy(index: number, direction: -1 | 1) {
-    const target = categories[index + direction];
-    const current = categories[index];
-    if (!target || !current) return;
-    await Promise.all([
-      reorderCategory(current.id, target.display_order),
-      reorderCategory(target.id, current.display_order),
-    ]);
-  }
-
   return (
     <div>
       <p className="mb-2 text-sm font-semibold text-recall-textMuted">{t.meeting_category_label}</p>
@@ -91,26 +108,28 @@ function CategoryManagementSection({ workspaceId, t }: { workspaceId: string; t:
           categories.map((cat, idx) => (
             <div
               key={cat.id}
-              className="flex items-center gap-2 border-b border-recall-border px-4 py-2.5 last:border-b-0"
+              draggable={editingId !== cat.id}
+              onDragStart={() => setDraggedIndex(idx)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (draggedIndex !== null) setDragOverIndex(idx);
+              }}
+              onDragLeave={() => setDragOverIndex((prev) => (prev === idx ? null : prev))}
+              onDrop={(e) => {
+                e.preventDefault();
+                handleDrop(idx);
+              }}
+              onDragEnd={() => {
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+              }}
+              className={`flex items-center gap-2 border-b border-recall-border px-4 py-2.5 last:border-b-0 ${
+                draggedIndex === idx ? "opacity-40" : ""
+              } ${dragOverIndex === idx && draggedIndex !== idx ? "bg-recall-accent/10" : ""}`}
             >
-              <div className="flex flex-col">
-                <button
-                  type="button"
-                  onClick={() => moveBy(idx, -1)}
-                  disabled={idx === 0}
-                  className="text-recall-textMuted hover:text-recall-text disabled:opacity-25"
-                >
-                  <ChevronUpIcon size={13} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => moveBy(idx, 1)}
-                  disabled={idx === categories.length - 1}
-                  className="text-recall-textMuted hover:text-recall-text disabled:opacity-25"
-                >
-                  <ChevronDownIcon size={13} />
-                </button>
-              </div>
+              <span className="cursor-grab text-recall-textMuted active:cursor-grabbing" title={t.settings_category_drag_hint}>
+                <GripIcon size={14} />
+              </span>
 
               {editingId === cat.id ? (
                 <>
@@ -217,6 +236,10 @@ interface SettingsProps {
   t: any;
   onLogout: () => void | Promise<void>;
   onDeleteAccount?: (password: string) => Promise<DeleteAccountResponse>;
+  // App.tsx가 들고 있는 인스턴스를 그대로 받아쓴다 - 여기서 별도로 useCategories를 새로
+  // 부르면 App.tsx(사이드바 카테고리 선택기)와 상태가 어긋나서, 여기서 만든 카테고리가
+  // 사이드바에 바로 안 뜨는 문제가 생긴다.
+  categoriesState: ReturnType<typeof useCategories>;
 }
 
 export default function Settings({
@@ -229,6 +252,7 @@ export default function Settings({
   t,
   onLogout,
   onDeleteAccount,
+  categoriesState,
 }: SettingsProps) {
   const [members, setMembers] = useState<WorkspaceMemberInfo[] | null>(null);
   const [isMembersOpen, setIsMembersOpen] = useState(false);
@@ -406,7 +430,7 @@ export default function Settings({
           </div>
 
           {/* 1-1. 카테고리 관리 구역 */}
-          {currentWorkspace?.id && <CategoryManagementSection workspaceId={currentWorkspace.id} t={t} />}
+          {currentWorkspace?.id && <CategoryManagementSection categoriesState={categoriesState} t={t} />}
 
           {/* 2. 알림 구역 */}
           <div>

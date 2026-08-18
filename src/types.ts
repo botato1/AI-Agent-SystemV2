@@ -1,9 +1,11 @@
 // src/types.ts
 
 // 카테고리 계층 없이 채팅방(채널) 하나하나가 사이드바에 바로 나열되는 구조로 변경
+// (category_id는 워크스페이스 전역 카테고리 선택기로 필터링하기 위한 것으로, 위 계층 구조와는 다르다)
 export interface Channel {
   id: string;
   name: string;
+  category_id?: string | null;
 }
 
 // 워크스페이스 - 사이드바 맨 위 이름, 여러 개 만들고 전환 가능
@@ -38,9 +40,10 @@ export interface Task {
   task: string;
   description?: string | null;
   assignee: string | null;
-  deadline: string | null; 
+  deadline: string | null;
   status: TaskStatus;
   priority: TaskPriority;
+  category_id?: string | null;
 }
 
 // 대시보드 - 모순 감지 로그
@@ -65,6 +68,7 @@ export interface AnalyzedDocument {
   keywords: string[] | null; // 분석 끝나면 채워짐
   fileType: string; // 원본 미리보기용 mime 타입
   fileUrl: string; // 임시 URL
+  category_id?: string | null;
 }
 
 export interface Workspace {

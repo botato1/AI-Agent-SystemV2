@@ -8,6 +8,7 @@ export interface Room {
   name: string;
   created_by?: string;
   created_at?: string;
+  category_id?: string | null;
 }
 
 export interface GetRoomListResponse {
@@ -51,7 +52,7 @@ export interface DeleteRoomResponse {
 /**
  * 1. 채팅방 목록 조회 API (GET /api/workspaces/{workspace_id}/rooms)
  */
-export async function getRoomListApi(workspaceId: string): Promise<GetRoomListResponse> {
+export async function getRoomListApi(workspaceId: string, categoryId?: string): Promise<GetRoomListResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
 
@@ -65,7 +66,8 @@ export async function getRoomListApi(workspaceId: string): Promise<GetRoomListRe
   }
 
   try {
-    const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/rooms`, {
+    const query = categoryId ? `?category_id=${categoryId}` : "";
+    const response = await authFetch(`${API_BASE_URL}/api/workspaces/${workspaceId}/rooms${query}`, {
       method: "GET",
     });
 
@@ -170,7 +172,11 @@ export async function getRoomApi(workspaceId: string, roomId: string): Promise<G
 /**
  * 3. 채팅방 생성 API (POST /api/workspaces/{workspace_id}/rooms)
  */
-export async function createRoomApi(workspaceId: string, name: string): Promise<CreateRoomResponse> {
+export async function createRoomApi(
+  workspaceId: string,
+  name: string,
+  categoryId?: string
+): Promise<CreateRoomResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
 
@@ -189,7 +195,7 @@ export async function createRoomApi(workspaceId: string, name: string): Promise<
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(categoryId ? { name, category_id: categoryId } : { name }),
     });
 
     const data = await response.json();
@@ -237,7 +243,7 @@ export async function createRoomApi(workspaceId: string, name: string): Promise<
 export async function updateRoomApi(
   workspaceId: string,
   roomId: string,
-  name: string
+  updates: { name?: string; category_id?: string }
 ): Promise<UpdateRoomResponse> {
   const API_BASE_URL = import.meta.env.VITE_API_URL || "";
   const token = localStorage.getItem("access_token");
@@ -259,7 +265,7 @@ export async function updateRoomApi(
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(updates),
       }
     );
 

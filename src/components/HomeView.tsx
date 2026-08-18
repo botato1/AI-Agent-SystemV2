@@ -14,6 +14,9 @@ import {
   deleteMeetingApi,
 } from "../services/meeting";
 import { PlaceholderKey, Task } from "../types";
+import { Category } from "../services/category";
+import { getCategoryColor } from "../utils/categoryColor";
+import CategoryBadge from "./CategoryBadge";
 import {
   MicIcon,
   WarningIcon,
@@ -47,6 +50,9 @@ interface HomeViewProps {
   onOpenMeeting: (meetingId: string) => void;
   onBeginScheduledMeeting: (meetingId: string) => void;
   onOpenDecision: (decisionId: string) => void;
+  // 홈은 카테고리로 필터링되지 않지만(전체 항상 표시), 최근 회의 카드에 어느 카테고리인지
+  // 색점 배지로 표시하기 위해 목록만 받는다.
+  categories: Category[];
   t: any;
 }
 
@@ -527,6 +533,7 @@ export default function HomeView({
   onOpenMeeting,
   onBeginScheduledMeeting,
   onOpenDecision,
+  categories,
   t,
 }: HomeViewProps) {
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
@@ -534,6 +541,10 @@ export default function HomeView({
   );
 
   const { meetings } = useRealMeetings(workspaceId);
+  // RecentMeetingItem(recentMeetings)엔 category_id가 없어서, 같은 회의 전체 목록(meetings, category_id
+  // 보유)과 id로 조인해서 배지에 쓸 카테고리를 찾는다 - 백엔드 응답 변경 없이 해결 가능.
+  const categoryIdByMeetingId = new Map(meetings.map((m) => [m.id, m.category_id]));
+  const categoryIndexById = new Map(categories.map((c, index) => [c.id, index]));
   const { recentMeetings, isLoading: isRecentLoading } = useRecentMeetings(workspaceId, 4);
   const { summary: dashboardSummary, reload: reloadDashboardSummary } = useDashboardSummary(workspaceId);
   const {
@@ -956,9 +967,22 @@ export default function HomeView({
                           </p>
                         )}
 
-                        <div className="flex items-center gap-1 text-xs text-recall-textMuted mt-1">
-                          <PersonIcon size={12} />
-                          <span>{t.home_recent_attendee_count(m.attendee_count)}</span>
+                        <div className="flex items-center gap-2 text-xs text-recall-textMuted mt-1">
+                          <span className="flex items-center gap-1">
+                            <PersonIcon size={12} />
+                            {t.home_recent_attendee_count(m.attendee_count)}
+                          </span>
+                          {(() => {
+                            const categoryId = categoryIdByMeetingId.get(m.id);
+                            const cat = categoryId ? categories.find((c) => c.id === categoryId) : null;
+                            if (!cat || cat.is_default) return null;
+                            return (
+                              <CategoryBadge
+                                name={cat.name}
+                                color={getCategoryColor(categoryIndexById.get(cat.id) ?? 0)}
+                              />
+                            );
+                          })()}
                         </div>
                       </button>
                     ))}

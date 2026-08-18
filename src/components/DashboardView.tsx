@@ -1,6 +1,7 @@
 // src/components/DashboardView.tsx
 import { useEffect, useRef, useState } from "react";
 import { Task, TaskPriority, TaskStatus } from "../types";
+import { Category } from "../services/category";
 import { WorkspaceDecision } from "../services/decision";
 import { useWorkspaceDecisions } from "../hooks/useWorkspaceDecisions";
 import { ChevronDownIcon } from "./icons";
@@ -23,6 +24,8 @@ interface DashboardViewProps {
   // 결정사항 카드에서 "관련 회의록 보기"를 눌렀을 때 App 레벨의 결정 미리보기 모달을 연다
   // (모순 카드의 "결정 참조"와 동일한 모달을 재사용 - 사유 + 원본 회의로 이동 버튼 포함).
   onOpenDecision: (decisionId: string) => void;
+  categories: Category[];
+  selectedCategoryId: string | null;
   t: any;
 }
 
@@ -205,9 +208,16 @@ export default function DashboardView({
   initialDecisionId,
   onInitialDecisionIdConsumed,
   onOpenDecision,
+  categories,
+  selectedCategoryId,
   t,
 }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("decisions");
+  // 사이드바 전역 카테고리 선택기 - null("전체")이면 전부, 아니면 그 카테고리 할 일만.
+  const visibleTasks = selectedCategoryId ? tasks.filter((t) => t.category_id === selectedCategoryId) : tasks;
+  function handleCreateTask(input: Omit<Task, "id">) {
+    onCreateTask(selectedCategoryId ? { ...input, category_id: selectedCategoryId } : input);
+  }
   const [createInitialStatus, setCreateInitialStatus] = useState<TaskStatus | null>(null);
   const [focusDecisionId, setFocusDecisionId] = useState<string | null>(null);
 
@@ -244,8 +254,9 @@ export default function DashboardView({
       <div className="flex-1 overflow-y-auto">
         {activeTab === "tasks" ? (
           <TaskBoard
-            taskList={tasks}
+            taskList={visibleTasks}
             workspaceId={workspaceId}
+            categories={categories}
             onOpenModal={(status) => setCreateInitialStatus(status || "todo")}
             onStatusChange={onStatusChange}
             onPriorityChange={onPriorityChange}
@@ -256,7 +267,7 @@ export default function DashboardView({
         ) : (
           <DecisionsTab
             workspaceId={workspaceId}
-            tasks={tasks}
+            tasks={visibleTasks}
             t={t}
             focusDecisionId={focusDecisionId}
             onOpenDecision={onOpenDecision}
@@ -269,7 +280,7 @@ export default function DashboardView({
           workspaceId={workspaceId}
           initialStatus={createInitialStatus}
           onClose={() => setCreateInitialStatus(null)}
-          onCreate={onCreateTask}
+          onCreate={handleCreateTask}
           t={t}
         />
       )}
