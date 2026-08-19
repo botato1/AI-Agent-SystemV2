@@ -2459,7 +2459,7 @@ export default function MeetingsPanel({
           {/* 미해결 안건 리마인더 - 예전엔 회의 시작 시 카드 팝업으로만 잠깐 떴다가 넘기면
               완전히 사라져서 회의 중간에 다시 확인할 방법이 없었다. 팝업이 떠 있는 동안엔
               여기 목록에도 같이 보여서, 회의 중에도 접었다 펼쳐서 다시 볼 수 있게 한다. */}
-          {agendaReminder && agendaReminder.items.length > 0 && (
+          {isViewingLive && agendaReminder && agendaReminder.items.length > 0 && (
             <div className="mb-3 space-y-1.5 border-b border-recall-border pb-3">
               <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-recall-textMuted">
                 {t.meeting_live_alert_agenda_title}

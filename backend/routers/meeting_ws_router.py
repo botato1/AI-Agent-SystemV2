@@ -396,6 +396,10 @@ async def _relay_stt_to_frontend(
                     print(f"[meeting_ws_router] 세그먼트 저장 실패: {repr(e)}")
                     continue
 
+                # 프론트가 이 id로 회의도움 패널의 결정 리마인더(ref_id)와 라이브 세그먼트를
+                # 매칭한다 - 안 채우면 실시간 중엔 계속 null이라 매칭이 영영 안 된다.
+                seg["id"] = str(segment_row.id)
+
                 statement_text = (segment_row.content or "").strip()
                 if statement_text:
                     _spawn_background_task(_process_segment_analysis(
