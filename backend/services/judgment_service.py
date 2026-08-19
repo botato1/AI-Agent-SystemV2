@@ -140,8 +140,38 @@ def _judge_single_statement(
         return None
 
     if popup["type"] in _SKIP_NOTIFICATION_POPUP_TYPES:
-        # decision 기반 근거있음/근거없음 변경(Case 2/3) - 실시간 WS 알림으로 바로
-        # push하고, 일반 Notification은 중복이라 생략한다.
+        # [수정 - 라이브 테스트 발견] Case 2/3이 실시간 WS push 하나에만 의존하고
+        # 있었는데, 여기까지 오는 데 topic_match+최대 3단계 LLM 호출이 걸려(수 초)
+        # 그 사이 WebSocket이 닫히면(회의 일시정지/종료 등) push 자체가
+        # RuntimeError("Cannot call 'send' once a close message has been sent.")로
+        # 실패하고 - 알림함 폴백도 없어서(원래 "중복이라 생략") 이 판단 결과가
+        # 어디에도 안 남고 완전히 유실되는 문제를 실측으로 확인함. Case 0과
+        # 동일하게 알림함에도 남겨서, 실시간 push가 실패해도 최소한 알림함에서는
+        # 확인 가능하게 한다.
+        #
+        # notifications.type CHECK 제약에 'reasoned_change'/'unreasoned_change'는
+        # 없어서(허용: contradiction_detected/contradiction_resolved/decision_
+        # reminder 등) 그대로 못 넣는다 - 의미상 가장 가까운 'contradiction_detected'로
+        # 매핑한다(프론트 NotificationBell.tsx가 이미 이 타입을 "회의 도움"으로
+        # 처리하고 있어 별도 프론트 수정 없이 바로 뜬다).
+        for member, _user in workspace_crud.list_members(db, workspace_id):
+            if not notification_crud.is_notification_enabled(db, workspace_id, member.user_id, "contradiction_detected"):
+                continue
+            notification_crud.create_notification(
+                db,
+                user_id=member.user_id,
+                workspace_id=workspace_id,
+                type="contradiction_detected",
+                title="결정 변경 감지",
+                message=popup["message"],
+                # [버그 수정 - 자체 검증 중 발견] meeting_ws_router.py._notify_
+                # contradiction_detected()의 기존 관례를 따라 ref_type을
+                # "contradiction"으로, ref_id를 이 판단이 만든 contradiction_id로
+                # 넣어야 한다. source_type/source_id(meeting_segment/발화 id)를
+                # 넣으면 알림 클릭 시 프론트가 존재하지 않는 대상을 찾게 됨.
+                ref_type="contradiction",
+                ref_id=uuid.UUID(popup["contradiction_id"]),
+            )
         return {
             "contradiction_id": popup["contradiction_id"],
             "message": popup["message"],
