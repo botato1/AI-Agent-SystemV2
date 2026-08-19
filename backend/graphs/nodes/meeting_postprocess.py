@@ -119,7 +119,7 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         #    처리한다 - 지수 리뷰 반영: 여기서 필터링하면 이미 extract() 내부에서 먼저
         #    죽은 뒤라 아무 소용이 없었음.
         #    잡담 세그먼트를 걸러서 임베딩하려면 임베딩(3번)보다 먼저 호출해야 한다.
-        extraction = llm_extractor.extract(indexed_transcript)
+        extraction = llm_extractor.extract(indexed_transcript, reference_date=meeting.started_at or meeting.created_at)
 
         # title_is_auto가 아직 develop에 없을 수 있어(PR #74 미병합) getattr로 방어 —
         # 없으면 기본값 False로 취급해 사용자가 직접 넣은 제목을 절대 덮어쓰지 않는다.
