@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import site
 import sys
 from pathlib import Path
@@ -37,8 +38,22 @@ if os.name == "nt":
 from doc_processor.core.pipeline import DocumentPipeline
 
 
+def _strip_markdown_table_syntax(text: str) -> str:
+    """파이프라인이 표를 마크다운(`| a | b |`, `\\(^{*}\\)` 위첨자)으로 뽑는데,
+    정답 텍스트는 순수 내용만 담고 있으므로 비교 전에 서식 기호를 걷어낸다.
+    """
+    # LaTeX 위첨자 \(^{*}\) -> *
+    text = re.sub(r"\\\(\^\{+([^{}]*)\}+\\\)", r"\1", text)
+    # 마크다운 표 구분선 행 (| --- | --- |) 통째로 제거
+    text = re.sub(r"^\s*\|[\s:|-]+\|\s*$", "", text, flags=re.MULTILINE)
+    # 남은 파이프(셀 구분자)는 공백으로
+    text = text.replace("|", " ")
+    return text
+
+
 def _normalize(text: str) -> str:
-    """공백/줄바꿈 차이를 무시하도록 정규화."""
+    """공백/줄바꿈/마크다운 표 서식 차이를 무시하도록 정규화."""
+    text = _strip_markdown_table_syntax(text)
     return " ".join(text.split())
 
 
@@ -64,22 +79,32 @@ def _levenshtein(a: list, b: list) -> int:
     return prev[m]
 
 
-def compute_cer(pred: str, gt: str) -> float:
-    """문자 오류율(Character Error Rate). gt가 빈 문자열이면 0.0."""
+def compute_cer_stats(pred: str, gt: str) -> tuple[float, int, int]:
+    """문자 오류율과 함께 편집거리·정답 길이도 반환 (호출부에서 재계산 없이 누적 통계에 재사용)."""
     pred_n, gt_n = _normalize(pred), _normalize(gt)
     if not gt_n:
-        return 0.0
+        return 0.0, 0, 0
     dist = _levenshtein(list(pred_n), list(gt_n))
-    return dist / len(gt_n)
+    return dist / len(gt_n), dist, len(gt_n)
+
+
+def compute_wer_stats(pred: str, gt: str) -> tuple[float, int, int]:
+    """단어 오류율과 함께 편집거리·정답 단어 수도 반환 (호출부에서 재계산 없이 누적 통계에 재사용)."""
+    pred_words, gt_words = _normalize(pred).split(), _normalize(gt).split()
+    if not gt_words:
+        return 0.0, 0, 0
+    dist = _levenshtein(pred_words, gt_words)
+    return dist / len(gt_words), dist, len(gt_words)
+
+
+def compute_cer(pred: str, gt: str) -> float:
+    """문자 오류율(Character Error Rate). gt가 빈 문자열이면 0.0."""
+    return compute_cer_stats(pred, gt)[0]
 
 
 def compute_wer(pred: str, gt: str) -> float:
     """단어 오류율(Word Error Rate). gt가 빈 문자열이면 0.0."""
-    pred_words, gt_words = _normalize(pred).split(), _normalize(gt).split()
-    if not gt_words:
-        return 0.0
-    dist = _levenshtein(pred_words, gt_words)
-    return dist / len(gt_words)
+    return compute_wer_stats(pred, gt)[0]
 
 
 def extract_all_text(doc_result) -> str:
@@ -121,17 +146,15 @@ def main() -> None:
         pred_text = extract_all_text(doc_result)
         gt_text = gt_path.read_text(encoding="utf-8")
 
-        cer = compute_cer(pred_text, gt_text)
-        wer = compute_wer(pred_text, gt_text)
+        cer, dist_c, gt_char_len = compute_cer_stats(pred_text, gt_text)
+        wer, dist_w, gt_word_len = compute_wer_stats(pred_text, gt_text)
 
         gt_n = _normalize(gt_text)
         pred_n = _normalize(pred_text)
-        dist_c = _levenshtein(list(pred_n), list(gt_n))
-        dist_w = _levenshtein(pred_n.split(), gt_n.split())
         total_dist_char += dist_c
-        total_len_char += max(len(gt_n), 1)
+        total_len_char += max(gt_char_len, 1)
         total_dist_word += dist_w
-        total_len_word += max(len(gt_n.split()), 1)
+        total_len_word += max(gt_word_len, 1)
 
         results.append({
             "file": pdf_path.name,
