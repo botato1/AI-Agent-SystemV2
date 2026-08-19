@@ -11,8 +11,14 @@ post-meeting은 회의 종료 후 비동기로 도는 작업이라 레이턴시 
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
+
+# decision_judgment.py의 KST 변환과 동일한 이유 - decided_at 등 DB에 저장된 시각이
+# UTC라, 그대로 보여주면 KST 새벽 시간대에 하루 전 날짜로 잘못 계산될 수 있다.
+KST = timezone(timedelta(hours=9))
+_WEEKDAY_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
 EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각 발화 앞에는 [번호] 형식의
 발화 번호가 붙어있다. 이 내용을 분석해서 아래 JSON 스키마에 맞춰 정확히 출력하라.
@@ -37,18 +43,20 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
 - 날짜·기간·수량 등 숫자 정보는 모든 필드(short_summary/full_summary/decision_text 등)에서
   일관되게 아라비아 숫자로 표기한다("10월 20일" O, "십월 이십일"/"시월 이십일" X). 같은 회의를
   가리키는 여러 필드끼리 표기가 서로 달라지지 않도록 주의한다.
+- [중요] 아래 스키마는 topics/action_items를 먼저 채우고, 그 다음에 full_summary/short_summary/
+  meeting_purpose/next_steps를 채우도록 순서를 정해뒀다. full_summary/short_summary 등에서
+  날짜·수치를 언급할 때는 절대로 다시 계산하거나 새로 추측하지 말고, 반드시 앞서 topics에
+  이미 쓴 그 값을 그대로 재사용한다(예: topics에서 "10월 21일"로 썼으면 요약에도 무조건
+  "10월 21일" - "10월 22일"처럼 비슷하지만 다른 숫자로 바꿔 쓰지 않는다).
+- 발화에 날짜가 "이번 주 금요일", "다음 달 초", "담주"처럼 상대적 표현으로만 언급된 경우:
+  {relative_date_rule}
 
 [회의 전체 발화]
 {transcript}
 
-[출력 JSON 스키마]
+[출력 JSON 스키마 - 아래 순서대로 채울 것]
 {{
   "title": "회의 제목으로 쓸 15자 내외의 짧은 문구",
-  "full_summary": "회의 전체를 상세히 요약한 텍스트",
-  "short_summary": "한두 문장으로 요약한 텍스트",
-  "meeting_purpose": "이 회의를 하는 목적/배경을 1~2문장으로 (예: 하반기 프로젝트 추진 현황을 공유하고 주요 이슈를 논의하기 위함)",
-  "next_steps": "회의에서 논의된 내용을 바탕으로 이후 진행할 향후 계획을 1~2문장으로. 다음 회의 일정이 명시적으로 언급되지 않았으면 이 문장에도 다음 회의 날짜를 지어내지 마라. 향후 계획을 언급할 내용이 전혀 없으면 빈 문자열로 둔다.",
-  "discussion_points": ["논의 포인트1", "논의 포인트2"],
   "chit_chat_segment_indexes": [1, 5, 12],
   "topics": [
     {{
@@ -66,7 +74,12 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
       "due_date": "YYYY-MM-DD 형식 기한 (없으면 null)",
       "description": "상세 설명"
     }}
-  ]
+  ],
+  "discussion_points": ["논의 포인트1", "논의 포인트2"],
+  "full_summary": "회의 전체를 상세히 요약한 텍스트 - 위 topics에 이미 쓴 날짜/수치를 그대로 재사용",
+  "short_summary": "한두 문장으로 요약한 텍스트 - 위 topics에 이미 쓴 날짜/수치를 그대로 재사용",
+  "meeting_purpose": "이 회의를 하는 목적/배경을 1~2문장으로 (예: 하반기 프로젝트 추진 현황을 공유하고 주요 이슈를 논의하기 위함)",
+  "next_steps": "회의에서 논의된 내용을 바탕으로 이후 진행할 향후 계획을 1~2문장으로. 다음 회의 일정이 명시적으로 언급되지 않았으면 이 문장에도 다음 회의 날짜를 지어내지 마라. 향후 계획을 언급할 내용이 전혀 없으면 빈 문자열로 둔다."
 }}
 """
 
@@ -84,9 +97,16 @@ def _extract_json_block(text: str) -> str:
     return text
 
 
-def extract(transcript: str) -> dict:
+def extract(transcript: str, meeting_date: datetime | None = None) -> dict:
     """
     전체 회의 텍스트를 받아 구조화된 결과를 반환한다.
+
+    [추가 - 라이브 테스트 발견] "이번 주 금요일" 같은 상대적 날짜 표현이 있을 때 LLM이
+    기준일을 몰라서 절대 날짜로 임의 환산(할루시네이션)하거나, 아예 환산을 포기해서
+    쓸모없는 요약이 되는 문제가 있었음. meeting_date(보통 Meeting.started_at)를 주면
+    프롬프트에 기준일을 명시해서 정확히 환산하게 하고, 안 주면(예: 옛 호출부가 아직
+    안 고쳐진 경우) 기존처럼 "지어내지 말고 원문 표현 그대로 쓰라"는 안전한 지침으로
+    자동 폴백한다 - 이 함수 자체는 새 인자 없이도 그대로 호출 가능해야 하므로 optional.
 
     Returns:
         {
@@ -96,7 +116,23 @@ def extract(transcript: str) -> dict:
         }
     실패 시 모든 값이 비어있는 안전한 기본값을 반환한다 (파이프라인 중단 방지).
     """
-    prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript=transcript)
+    if meeting_date is not None:
+        kst_date = meeting_date.astimezone(KST)
+        weekday = _WEEKDAY_KO[kst_date.weekday()]
+        date_str = f"{kst_date.year}년 {kst_date.month}월 {kst_date.day}일({weekday}요일)"
+        relative_date_rule = (
+            f"이 회의는 {date_str}에 진행됐다. 이 날짜를 기준으로 정확한 절대 날짜"
+            f"(예: \"10월 20일\")로 환산해서 적는다. 요일 계산은 신중하게 다시 확인한다."
+        )
+    else:
+        relative_date_rule = (
+            "회의 날짜 정보가 없으므로, 절대 날짜로 임의 환산해서 지어내지 말고 "
+            "발화에 나온 표현 그대로(\"이번 주 금요일\" 등) 사용한다."
+        )
+
+    prompt = EXTRACTION_PROMPT_TEMPLATE.format(
+        transcript=transcript, relative_date_rule=relative_date_rule,
+    )
 
     fallback = {
         "title": "",
