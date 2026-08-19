@@ -90,7 +90,7 @@ def run(
             db, meeting, uploaded_text=uploaded_text
         )
 
-        extracted = llm_extractor.extract(transcript)
+        extracted = llm_extractor.extract(transcript, reference_date=meeting.started_at or meeting.created_at)
 
         meeting_crud.upsert_summary(
             db,

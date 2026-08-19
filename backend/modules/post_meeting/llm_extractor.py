@@ -11,6 +11,7 @@ post-meeting은 회의 종료 후 비동기로 도는 작업이라 레이턴시 
 
 import json
 import re
+from datetime import datetime
 
 from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, _call_ollama
 
@@ -19,6 +20,9 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
 다른 설명이나 텍스트 없이 JSON만 출력하라.
 
 [중요 지침]
+- 이 회의가 열린 날짜는 {reference_date}이다. "다음 주 금요일까지", "이번 달 말까지" 같은
+  상대적 기한 표현은 반드시 이 날짜를 기준으로 절대 날짜(YYYY-MM-DD)로 환산한다. 임의로
+  다른 연도를 쓰지 않는다.
 - topics는 이 회의에서 실제로 논의된 주제만 포함한다.
 - status는 다음 세 값 중 하나만 쓴다:
   - "confirmed": 이 회의에서 명시적으로 합의/확정된 것
@@ -81,9 +85,14 @@ def _extract_json_block(text: str) -> str:
     return text
 
 
-def extract(transcript: str) -> dict:
+def extract(transcript: str, reference_date: datetime | None = None) -> dict:
     """
     전체 회의 텍스트를 받아 구조화된 결과를 반환한다.
+
+    Args:
+        reference_date: 회의가 열린 날짜 - action_items의 상대적 기한 표현("다음 주까지" 등)을
+            LLM이 절대 날짜로 환산할 기준점. 안 주면 현재 시각을 쓴다(주로 회의 시작 시각이
+            없는 문서 업로드 케이스).
 
     Returns:
         {
@@ -93,7 +102,8 @@ def extract(transcript: str) -> dict:
         }
     실패 시 모든 값이 비어있는 안전한 기본값을 반환한다 (파이프라인 중단 방지).
     """
-    prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript=transcript)
+    reference_date_str = (reference_date or datetime.now()).strftime("%Y-%m-%d")
+    prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript=transcript, reference_date=reference_date_str)
 
     fallback = {
         "title": "",
