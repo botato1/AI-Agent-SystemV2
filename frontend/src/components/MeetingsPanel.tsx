@@ -64,7 +64,7 @@ type LiveAlertQueueItem =
   | { kind: "contradiction"; id: string; alert: ContradictionAlert };
 
 const ACCEPTED_EXTENSIONS = ".mp3,.wav,.m4a,.webm";
-const LIVE_ACTIVE_STATUSES: LiveMeetingStatus[] = [
+export const LIVE_ACTIVE_STATUSES: LiveMeetingStatus[] = [
   "connecting",
   "recording",
   "paused",
