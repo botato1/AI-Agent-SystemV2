@@ -506,6 +506,13 @@ SPEAKER_EMBEDDING_MODEL = "pyannote/wespeaker-voxceleb-resnet34-LM"
 #    finetune/stt/reenroll_from_meeting.py로 기존 녹음에서 다시 뽑으면 된다.
 #    프로필을 다시 만들지 않고 이 값만 바꾸면 화자 인식이 통째로 망가진다.
 SPEAKER_EMBEDDING_CHECKPOINT = os.getenv("SPEAKER_EMBEDDING_CHECKPOINT", "").strip()
+
+# speechbrain 모델을 쓸 때 가중치를 풀어둘 곳.
+# 왜 따로 두는가: speechbrain은 HF 캐시가 아니라 savedir에 파일을 복사해두고 쓰는데,
+# NAS 공유 마운트는 심볼릭 링크와 권한 변경을 막아서 그쪽에 두면 경고가 쏟아진다.
+# 로컬 디스크에 두면 조용하고 빠르다.
+SPEECHBRAIN_CACHE_DIR = os.getenv(
+    "SPEECHBRAIN_CACHE_DIR", os.path.join(BASE_DIR, "speechbrain_models"))
 SPEAKER_SIMILARITY_THRESHOLD = 0.5   # 이 이상 유사하면 같은 화자로 판단. 모델 교체 후 재튜닝 필요할 수 있음
 
 # 이 유사도 미만이면 이름을 붙이지 않고 화자 미상(None)으로 둔다.

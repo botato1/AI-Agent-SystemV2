@@ -12,6 +12,7 @@ from ..core.config import (
     REALTIME_SAMPLE_RATE,
     SPEAKER_EMBEDDING_MODEL,
     SPEAKER_EMBEDDING_CHECKPOINT,
+    SPEECHBRAIN_CACHE_DIR,
     SPEAKER_SIMILARITY_THRESHOLD,
     SPEAKER_MIN_ASSIGN_SIMILARITY,
     SPEAKER_MIN_MARGIN,
@@ -24,16 +25,61 @@ from ..core.config import (
 _MIN_EMBED_SEC = 1.0
 
 
-def load_speaker_embedding_inference() -> Inference:
+class SpeechBrainEmbedding:
+    """speechbrain 화자 인코더를 pyannote Inference처럼 쓰게 감싼다.
+
+    왜 감싸는가: LiveSpeakerIdentifier는 `self._inference({"waveform": ..., "sample_rate": ...})`
+    하나만 호출한다. 그 규약만 맞추면 호출부(실시간·재분석·등록 API 전부)를 안 건드리고
+    백엔드를 갈아끼울 수 있다.
+
+    왜 speechbrain이 필요한가 (2026-08-18):
+      후보 네 개를 우리 회의 오디오로 비교한 결과(probe_embedding_models.py),
+      speechbrain의 ResNet-TDNN이 **교차 회의 EER 17.32% → 12.47%**로 가장 좋았다.
+      pyannote는 wespeaker 계열만 감싸므로 이 모델을 쓰려면 별도 로더가 필요하다.
+    """
+
+    def __init__(self, model_id: str):
+        # 지연 임포트 — speechbrain을 안 쓰는 배포에서는 설치조차 필요 없어야 한다
+        from speechbrain.inference.speaker import EncoderClassifier
+        savedir = os.path.join(SPEECHBRAIN_CACHE_DIR, model_id.replace("/", "_"))
+        os.makedirs(savedir, exist_ok=True)
+        self._enc = EncoderClassifier.from_hparams(
+            source=model_id, savedir=savedir, run_opts={"device": DEVICE})
+
+    def to(self, _device):
+        """pyannote Inference와 호출 규약을 맞추기 위한 no-op. 디바이스는 생성 시 정한다."""
+        return self
+
+    def __call__(self, waveform: dict):
+        # extract_embedding이 (1, samples) 텐서를 넘긴다 — speechbrain의 (batch, samples)와 같다
+        with torch.no_grad():
+            emb = self._enc.encode_batch(waveform["waveform"].to(DEVICE))
+        return emb.detach().cpu().numpy().reshape(-1)
+
+
+def load_speaker_embedding_inference():
     """
     화자 임베딩 모델은 로딩이 무겁기 때문에 앱 시작 시(lifespan) 딱 한 번만 로드하고,
-    회의(세션)마다 이 Inference 객체를 공유해서 재사용한다.
+    회의(세션)마다 이 객체를 공유해서 재사용한다.
     화자 프로필(_profiles)은 회의별로 달라야 하므로 LiveSpeakerIdentifier 쪽에서
     세션마다 새로 만든다 — 모델 따로, 상태 따로 분리한 이유.
+
+    백엔드는 **모델 ID로 판별한다** — "speechbrain/"으로 시작하면 speechbrain,
+    아니면 pyannote. 환경변수를 따로 두지 않는 이유는 ID에 이미 정보가 있고,
+    둘을 따로 두면 어긋날 수 있기 때문이다.
 
     주의: pyannote.audio 버전에 따라 Inference/Model API가 조금씩 달라질 수 있어
     실제 GPU 서버(faster-whisper/pyannote 설치된 환경)에서 한 번 동작 검증이 필요함.
     """
+    if SPEAKER_EMBEDDING_MODEL.startswith("speechbrain/"):
+        if SPEAKER_EMBEDDING_CHECKPOINT:
+            # 조용히 무시하면 "체크포인트를 줬는데 안 먹은" 상태를 아무도 모른다
+            raise RuntimeError(
+                "SPEAKER_EMBEDDING_CHECKPOINT는 pyannote 백엔드에서만 쓸 수 있다 "
+                f"(현재 모델: {SPEAKER_EMBEDDING_MODEL})")
+        logger.info(f"🧠 화자 임베딩 백엔드: speechbrain / {SPEAKER_EMBEDDING_MODEL}")
+        return SpeechBrainEmbedding(SPEAKER_EMBEDDING_MODEL)
+
     model = Model.from_pretrained(SPEAKER_EMBEDDING_MODEL, use_auth_token=HF_TOKEN)
 
     # 파인튜닝 가중치가 지정돼 있으면 얹는다. config의 SPEAKER_EMBEDDING_CHECKPOINT 주석 참고 —
