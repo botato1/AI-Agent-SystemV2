@@ -487,7 +487,24 @@ MAX_SPEAKERS = 6  # 팀 인원(6명)에 맞춤
 # 같은 화자가 매 청크(2~4초)마다 새 화자로 등록될 정도로 유사도가 불안정(0.33~0.57)했음.
 # → 우리가 이미 쓰고 있는 화자분리 파이프라인(pyannote/speaker-diarization-3.1)이 내부적으로
 #   쓰는 최신 임베딩 모델(wespeaker-voxceleb-resnet34-LM, ResNet 기반)로 교체해서 재실험.
-SPEAKER_EMBEDDING_MODEL = "pyannote/wespeaker-voxceleb-resnet34-LM"
+# ⚠️ 환경변수로 바꿀 수 있어야 한다. 2026-08-19에 speechbrain 백엔드를 붙이면서
+#    이 값을 리터럴로 두는 바람에, SPEAKER_EMBEDDING_MODEL=... 을 줘도 아무 일이
+#    일어나지 않았다(등록도 판정도 그대로 pyannote로 돌았다). 유사도 표가 한 자리도
+#    안 바뀐 것으로 뒤늦게 발견했다.
+#    ⚠️ 이 값을 바꾸면 기존 목소리 프로필이 전부 무효다 — 임베딩 공간이 달라진다.
+# 화자 분리 군집화의 난수 시드. 재현성을 위해 고정한다.
+#
+# 2026-08-19 실측: 같은 오디오·같은 설정으로 세 번 돌린 cpCER이
+#   56.60% / 62.68% / 70.80%  — 폭 14.2%p (회의 8b5f84b7)
+# 조건을 비교하려는데 잡음이 조건 차이보다 컸다. 그 회의의 A/B/C 비교
+# (54.23 / 64.71 / 62.68)는 이 잡음 띠 안이라 결론을 낼 수 없었다.
+#
+# 시드 고정은 정확도를 올리지 않는다. **같은 입력에 같은 출력**을 보장할 뿐이다.
+# 그게 없으면 어떤 비교도 성립하지 않는다.
+DIARIZATION_SEED = int(os.getenv("DIARIZATION_SEED", "42"))
+
+SPEAKER_EMBEDDING_MODEL = os.getenv(
+    "SPEAKER_EMBEDDING_MODEL", "pyannote/wespeaker-voxceleb-resnet34-LM").strip()
 
 # 한국어 회의 음성으로 파인튜닝한 가중치 경로. 비어 있으면 위 사전학습 모델 그대로 쓴다.
 #

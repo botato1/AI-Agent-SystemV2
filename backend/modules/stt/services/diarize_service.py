@@ -1,6 +1,10 @@
 import asyncio
+import random
+
+import numpy as np
+import torch
 from pyannote.audio import Pipeline
-from ..core.config import logger, MIN_SPEAKERS, MAX_SPEAKERS
+from ..core.config import logger, MIN_SPEAKERS, MAX_SPEAKERS, DIARIZATION_SEED
 
 
 def to_annotation(output):
@@ -49,6 +53,24 @@ async def run_diarization(
     max_spk = max(max_spk, min_spk)
 
     def _diarize():
+        # 화자 분리 직전에 난수를 고정한다.
+        #
+        # 왜 (2026-08-19): pyannote의 군집화가 무작위 초기화를 쓴다. 같은 오디오·같은
+        # 설정으로 세 번 돌렸더니 cpCER이 **56.60 / 62.68 / 70.80%로 14.2%p 흩어졌다**
+        # (회의 8b5f84b7). 조건을 비교하려는데 잡음이 조건 차이보다 커서, 그 회의의
+        # A/B/C 비교(54.23 / 64.71 / 62.68)가 통째로 무의미해졌다.
+        #
+        # 흔들린 것은 오배정(0~3건)이고 미상은 11~12로 안정적이었다. 이승주가 경계선
+        # (회의 내 자기 0.391 < 타인 0.597)에 있어서 그의 발화 2건이 어디로 붙느냐에
+        # 따라 결과가 크게 움직인 것이다. 경계에 걸린 회의일수록 잡음이 커진다.
+        #
+        # 시드를 고정한다고 판정이 맞아지지는 않는다. 다만 **같은 입력에 같은 출력**이
+        # 나와야 조건을 비교할 수 있다. 재현성은 정확도와 별개로 필요한 성질이다.
+        random.seed(DIARIZATION_SEED)
+        np.random.seed(DIARIZATION_SEED)
+        torch.manual_seed(DIARIZATION_SEED)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(DIARIZATION_SEED)
         return tracks_of(pipeline(audio_input, min_speakers=min_spk, max_speakers=max_spk))
 
     logger.info(f"🚀 화자 분리(pyannote) 분석 시작... (화자 수 {min_spk}~{max_spk}명 가정)")
