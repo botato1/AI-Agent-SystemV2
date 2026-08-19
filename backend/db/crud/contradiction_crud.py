@@ -16,6 +16,10 @@ from sqlalchemy import func, or_
 from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
 from backend.modules.llm.ollama_client import _call_ollama, OLLAMA_MODEL_LIGHT
 
+# regenerate_short_summary_after_change()가 meeting_summary_ready 알림을 보내는 데 필요.
+# 파일 상단에서 바로 import해도 순환참조 없음(meeting_crud.py는 이 파일을 안 씀).
+from backend.db.crud import notification_crud, workspace_crud
+
 
 def make_deduplication_key(
     source_type: str,
@@ -451,6 +455,26 @@ def regenerate_short_summary_after_change(contradiction_id: uuid.UUID) -> None:
         )
         if revised:
             meeting_crud.upsert_summary(db, new_decision.meeting_id, short_summary=revised)
+
+            # [수정 - 라이브 테스트 발견] 리뷰 반영으로 이 LLM 호출을 백그라운드로
+            # 뺀 뒤(응답은 이미 나간 뒤에 여기서 갱신됨), 프론트가 그 시점을 알
+            # 방법이 없어서 화면이 안 바뀌는 회귀가 생겼음. meeting_service.py가
+            # 이미 쓰는 것과 동일한 meeting_summary_ready 알림 - 프론트
+            # useRealMeetings.ts가 이 타입을 받으면 지금 보고 있는 회의면 요약을
+            # 다시 받아온다(그 "깜빡"의 정체).
+            meeting = meeting_crud.get_meeting(db, new_decision.meeting_id)
+            if meeting:
+                for member, _user in workspace_crud.list_members(db, meeting.workspace_id):
+                    if not notification_crud.is_notification_enabled(
+                        db, meeting.workspace_id, member.user_id, "meeting_summary_ready",
+                    ):
+                        continue
+                    notification_crud.create_notification(
+                        db, user_id=member.user_id, workspace_id=meeting.workspace_id,
+                        type="meeting_summary_ready", title="회의 요약 갱신됨",
+                        message=f"'{meeting.title}' 회의 요약이 변경사항을 반영해 갱신됐습니다.",
+                        ref_type="meeting", ref_id=meeting.id,
+                    )
     except Exception as e:
         print(f"[regenerate_short_summary_after_change] 처리 중 예외 발생(무시): {repr(e)}")
     finally:
