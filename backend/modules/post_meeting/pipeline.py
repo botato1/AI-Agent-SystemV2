@@ -90,7 +90,11 @@ def run(
             db, meeting, uploaded_text=uploaded_text
         )
 
-        extracted = llm_extractor.extract(transcript)
+        # [추가 - 라이브 테스트 발견] 상대적 날짜 표현("이번 주 금요일" 등)을 LLM이
+        # 정확히 절대 날짜로 환산할 수 있게 회의 날짜를 같이 넘긴다.
+        extracted = llm_extractor.extract(
+            transcript, meeting_date=meeting.started_at or meeting.created_at,
+        )
 
         meeting_crud.upsert_summary(
             db,

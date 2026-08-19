@@ -49,6 +49,7 @@ interface HomeViewProps {
   onNavigate: (key: PlaceholderKey) => void;
   onOpenMeeting: (meetingId: string) => void;
   onBeginScheduledMeeting: (meetingId: string) => void;
+  isMeetingLiveActive: boolean;
   onOpenDecision: (decisionId: string) => void;
   // 홈은 카테고리로 필터링되지 않지만(전체 항상 표시), 최근 회의 카드에 어느 카테고리인지
   // 색점 배지로 표시하기 위해 목록만 받는다.
@@ -532,6 +533,7 @@ export default function HomeView({
   onNavigate,
   onOpenMeeting,
   onBeginScheduledMeeting,
+  isMeetingLiveActive,
   onOpenDecision,
   categories,
   t,
@@ -664,6 +666,7 @@ export default function HomeView({
   }
 
   function handleBeginUpcoming(id: string) {
+    if (isMeetingLiveActive) return;
     setUpcoming((prev) => prev.filter((u) => u.id !== id));
     onBeginScheduledMeeting(id);
   }
@@ -814,8 +817,9 @@ export default function HomeView({
                           {isMeeting && (
                             <button
                               onClick={() => handleBeginUpcoming(item.data.id)}
-                              className="text-recall-textMuted hover:text-emerald-500 transition"
-                              title={t.home_upcoming_start_now}
+                              disabled={isMeetingLiveActive}
+                              className="text-recall-textMuted hover:text-emerald-500 transition disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-recall-textMuted"
+                              title={isMeetingLiveActive ? t.meeting_already_running : t.home_upcoming_start_now}
                             >
                               <PlayIcon size={12} />
                             </button>
