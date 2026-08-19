@@ -259,6 +259,32 @@ def _resolve_speaker_label(db: Session, meeting_id: uuid.UUID, raw_label: str | 
     mapping = (meeting.speaker_labels or {}) if meeting else {}
     return mapping.get(raw_label, raw_label)
 
+# 프론트(useLiveMeeting.ts RECONNECT_WINDOW_MS)의 재연결 유예시간과 맞춘 값 - 그보다
+# 짧으면 프론트가 아직 재연결 시도 중인데 백엔드가 먼저 회의를 끝내버린다.
+FINALIZE_GRACE_SECONDS = 25.0
+
+
+async def _finalize_after_grace(meeting_id: uuid.UUID) -> None:
+    """마지막 연결이 끊긴 뒤 바로 회의를 끝내지 않고, 프론트 재연결 유예시간만큼
+    기다렸다가 그래도 아무도 안 붙어있으면 그때 종료 처리한다.
+
+    [수정 - 라이브 테스트 발견] 이전엔 마지막 WS 연결이 끊기는 즉시(원인 불문 -
+    네트워크 순단, 백엔드 재시작, 브라우저 HMR 강제 새로고침 등) 회의를 processing으로
+    전이시켰다. 프론트는 20초간 재연결을 시도하는데, 백엔드가 그 사이 이미 회의를
+    끝내버려서 재연결에 성공해도 이미 끝난 회의라 다시 못 붙는 문제가 있었다
+    (사용자 입장에선 "종료 버튼을 안 눌렀는데 회의가 끝나버림").
+    """
+    await asyncio.sleep(FINALIZE_GRACE_SECONDS)
+    if _ACTIVE_CONNECTIONS.get(meeting_id, 0) > 0:
+        return  # 유예시간 안에 누군가(재연결 포함) 다시 붙음 - 종료 취소
+
+    db = SessionLocal()
+    try:
+        _finalize_meeting_if_recording(db, meeting_id)
+    finally:
+        db.close()
+
+
 def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording/paused 상태면 자동으로 마무리한다."""
     db.expire_all()  # REST pause/resume이 다른 세션에서 커밋한 최신 값을 확실히 읽기 위함
@@ -564,7 +590,7 @@ async def meeting_stream_ws(
         recording_file.close()
         await stt_client.close()
         if is_last:
-            _finalize_meeting_if_recording(db, meeting_id)
+            _spawn_background_task(_finalize_after_grace(meeting_id))
         try:
             await websocket.close()
         except Exception:
