@@ -87,3 +87,15 @@ def mark_read(db: Session, notification_id: uuid.UUID) -> None:
         row.is_read = True
         row.read_at = func.now()
         db.commit()
+
+def reminder_already_sent(db: Session, ref_type: str, ref_id: uuid.UUID, notif_type: str) -> bool:
+    return (
+        db.query(Notification)
+        .filter(
+            Notification.ref_type == ref_type,
+            Notification.ref_id == ref_id,
+            Notification.type == notif_type,
+        )
+        .first()
+        is not None
+    )

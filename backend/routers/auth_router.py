@@ -46,6 +46,7 @@ from backend.services.auth_service import (
     get_voice_profile_status,
     rename_voice_profile,
     remove_voice_profile,
+    delete_profile_image,
 )
 
 
@@ -124,6 +125,14 @@ async def update_profile_image_api(
 ):
     file_content = await file.read()
     return update_profile_image(db, access_token, file.filename, file_content)
+
+# 프로필 이미지 삭제 (기본 색상 아바타로 폴백)
+@router.delete("/profile/image", response_model=ProfileResponse)
+def delete_profile_image_api(
+    access_token: str = Depends(get_access_token),
+    db: Session = Depends(get_db),
+):
+    return delete_profile_image(db, access_token)
 
 # 등록용 문장 조회
 @router.get("/voice-profile/script")

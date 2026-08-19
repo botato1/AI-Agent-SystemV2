@@ -151,6 +151,26 @@ class CategorySchema(TimestampSchema, SoftDeleteSchema):
     )
     created_by: UUID
 
+class CategoryCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class CategoryUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    display_order: Optional[int] = Field(default=None, ge=0)
+
+
+class CategoryResponse(ORMBaseSchema):
+    id: UUID
+    workspace_id: UUID
+    name: str
+    is_default: bool
+    display_order: int
+
+
+class CategoryListResponse(BaseModel):
+    categories: list[CategoryResponse] = Field(default_factory=list)
+
 
 # =============================================================================
 # Re:Call: rooms
@@ -181,6 +201,7 @@ class RoomSchema(TimestampSchema, SoftDeleteSchema):
 class RoomResponse(ORMBaseSchema):
     id: UUID
     workspace_id: UUID
+    category_id: UUID
     name: str
     created_by: UUID
     created_at: datetime

@@ -91,9 +91,12 @@ class MeetingSummary(Base):
     id = uuid_pk()
     meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False, unique=True)
     file_id = Column(UUID(as_uuid=True), ForeignKey("workspace_files.id"), nullable=True)
+    meeting_purpose = Column(Text, nullable=True)
     full_summary = Column(Text, nullable=True)
     short_summary = Column(Text, nullable=True)
     discussion_points = Column(JSONB, nullable=True)
+    next_steps = Column(Text, nullable=True)
+    refined_at = Column(DateTime(timezone=True), nullable=True)  # 정밀 재분석 반영 시각 - 중복 웹훅 방지용
     full_transcript = Column(Text, nullable=True)
     filtered_transcript = Column(Text, nullable=True)  # 잡담 제외한 전체 내용 (가동현 프롬프트 작업 전까지 NULL)
     generation_status = Column(String(20), nullable=False, server_default="pending")
@@ -189,6 +192,7 @@ class MeetingAttendee(Base):
     id = uuid_pk()
     meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    is_initial = Column(Boolean, nullable=False, server_default="false")
     added_at = created_at_col()
 
     __table_args__ = (

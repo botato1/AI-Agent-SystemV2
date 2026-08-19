@@ -7,6 +7,8 @@ from backend.graphs.nodes.ai_chat_answer import (
     clamp_similarity_score,
     format_chat_history,
     build_answer_prompt,
+    _parse_cited_indices,
+    _has_valid_citation,
 )
 
 
@@ -196,3 +198,79 @@ def test_build_answer_prompt_includes_context_and_question():
 def test_build_answer_prompt_empty_context():
     prompt = build_answer_prompt([], None, "질문")
     assert "(근거 자료 없음)" in prompt
+
+
+def test_build_answer_prompt_numbers_context_items():
+    """근거마다 [1] [2] 번호가 붙어야 _parse_cited_indices()가 되읽을 수 있다."""
+    prompt = build_answer_prompt(["문서 A", "문서 B", "문서 C"], None, "질문")
+    assert "[1] 문서 A" in prompt
+    assert "[2] 문서 B" in prompt
+    assert "[3] 문서 C" in prompt
+
+
+def test_parse_cited_indices_extracts_numbers():
+    answer, indices = _parse_cited_indices("이렇게 답변합니다.\n[출처: 1,3]")
+    assert answer == "이렇게 답변합니다."
+    assert indices == {1, 3}
+
+
+def test_parse_cited_indices_handles_spaces_and_duplicates():
+    answer, indices = _parse_cited_indices("답변 내용\n[출처: 1, 1, 2]")
+    assert answer == "답변 내용"
+    assert indices == {1, 2}
+
+
+def test_parse_cited_indices_no_marker_falls_back_to_none():
+    """마커가 아예 없으면 원본 답변 그대로, indices는 None(=호출부가 전체 표시로 폴백)."""
+    answer, indices = _parse_cited_indices("그냥 평범한 답변입니다.")
+    assert answer == "그냥 평범한 답변입니다."
+    assert indices is None
+
+
+def test_parse_cited_indices_empty_marker_falls_back_to_none():
+    """마커는 있는데 숫자가 하나도 없으면(형식 깨짐) 폴백. 마커 텍스트는 그래도 지운다."""
+    answer, indices = _parse_cited_indices("답변입니다.\n[출처: ]")
+    assert answer == "답변입니다."
+    assert indices is None
+
+
+def test_parse_cited_indices_non_digit_falls_back_to_none():
+    answer, indices = _parse_cited_indices("답변입니다.\n[출처: a,b]")
+    assert answer == "답변입니다."
+    assert indices is None
+
+
+def test_parse_cited_indices_marker_not_at_end_is_ignored():
+    """마커가 맨 끝이 아니면(본문 중간에 우연히 나온 경우) 인용으로 취급하지 않는다."""
+    answer, indices = _parse_cited_indices("[출처: 1] 이런 식으로 시작하는 답변입니다.")
+    assert answer == "[출처: 1] 이런 식으로 시작하는 답변입니다."
+    assert indices is None
+
+
+def test_parse_cited_indices_trailing_whitespace_tolerated():
+    answer, indices = _parse_cited_indices("답변입니다.\n[출처: 2]   \n  ")
+    assert answer == "답변입니다."
+    assert indices == {2}
+
+
+def test_has_valid_citation_true_when_none():
+    """마커 자체가 없었으면(None) 필터링 없이 전체 표시를 유지해야 한다."""
+    assert _has_valid_citation(None, 3) is True
+
+
+def test_has_valid_citation_true_when_in_range():
+    assert _has_valid_citation({1, 3}, 3) is True
+
+
+def test_has_valid_citation_false_when_only_zero():
+    """모델이 0-based 실수로 [출처: 0]을 내놓은 경우 - 회귀 재현 케이스."""
+    assert _has_valid_citation({0}, 3) is False
+
+
+def test_has_valid_citation_false_when_out_of_range():
+    assert _has_valid_citation({99}, 3) is False
+
+
+def test_has_valid_citation_true_when_partially_in_range():
+    """일부만 범위 안이어도 유효한 인용이 있는 것으로 취급한다."""
+    assert _has_valid_citation({0, 2}, 3) is True

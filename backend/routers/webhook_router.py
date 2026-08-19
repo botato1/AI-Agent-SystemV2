@@ -6,7 +6,7 @@
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,7 @@ def _verify_webhook_secret(x_webhook_secret: str | None = Header(default=None)):
 @router.post("/stt-refine-webhook", status_code=status.HTTP_204_NO_CONTENT)
 def stt_refine_webhook(
     payload: SttRefineWebhookPayload,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = Depends(_verify_webhook_secret),
 ):
@@ -64,14 +65,16 @@ def stt_refine_webhook(
         try:
             refined_data = meeting_service.fetch_refined_transcript(payload.meeting_id)
             print(f"[webhook] 재분석 세그먼트 {len(refined_data.get('segments', []))}개 조회 완료")
+            # 요약 재생성은 LLM 호출이 걸리는 작업이라 웹훅 응답을 막지 않도록 백그라운드로 실행.
+            # meeting_postprocess_node는 재호출하지 않는다 - 함수 자체 docstring 참조.
+            background_tasks.add_task(
+                meeting_service.regenerate_summary_from_refined_transcript,
+                meeting_id=payload.session_id,
+                refined_data=refined_data,
+            )
         except Exception as e:
             print(f"[webhook] 재분석 결과 조회 실패: {repr(e)}")
-        # [결정 - 가동현] 웹훅 도착까지 후처리를 기다리지 않는다 - 재분석 완료 시점이
-        # 예측 불가능해서 UX가 나빠지고, 후처리 재실행 시 decision/task 중복 생성
-        # 방지 가드를 우회해야 해서 범위가 커짐. 재분석 결과는 로그로만 남기고
-        # 자동 반영하지 않는다 (수동 트리거는 후속 작업, 지금 스코프 아님).
     else:
         print(f"[webhook] 정밀 재분석 실패: meeting_id={meeting_id} - 이미 실시간 결과로 처리 완료됨")
-        # [결정 - 가동현] 실시간 처리를 그대로 유지하므로 별도 폴백 트리거 불필요
 
     return
