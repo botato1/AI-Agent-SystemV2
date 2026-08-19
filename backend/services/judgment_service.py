@@ -164,8 +164,13 @@ def _judge_single_statement(
                 type="contradiction_detected",
                 title="결정 변경 감지",
                 message=popup["message"],
-                ref_type=source_type,
-                ref_id=source_id,
+                # [버그 수정 - 자체 검증 중 발견] meeting_ws_router.py._notify_
+                # contradiction_detected()의 기존 관례를 따라 ref_type을
+                # "contradiction"으로, ref_id를 이 판단이 만든 contradiction_id로
+                # 넣어야 한다. source_type/source_id(meeting_segment/발화 id)를
+                # 넣으면 알림 클릭 시 프론트가 존재하지 않는 대상을 찾게 됨.
+                ref_type="contradiction",
+                ref_id=uuid.UUID(popup["contradiction_id"]),
             )
         return {
             "contradiction_id": popup["contradiction_id"],
