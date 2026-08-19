@@ -870,40 +870,25 @@ function decisionCaseDisplay(t: any, judgmentCase: "reasoned_change" | "unreason
   };
 }
 
-function actionLabel(t: any, action: string): string {
-  const map: Record<string, string> = {
-    change_acknowledged: t.contradiction_apply,
-    keep_reference: t.contradiction_keep,
-  };
-  return map[action] ?? action;
-}
-
 function LiveContradictionToast({
   alert,
   total,
-  onResolve,
   onDismiss,
+  onAcknowledge,
   onViewReference,
   onViewDecision,
-  onEditSegment,
   t,
 }: {
   alert: ContradictionAlert;
   total: number;
-  onResolve: (contradictionId: string, resolutionType: ContradictionResolutionType) => void;
   onDismiss: (contradictionId: string) => void;
+  onAcknowledge: (contradictionId: string) => void;
   onViewReference?: () => void;
   onViewDecision?: (decisionId: string) => void;
-  onEditSegment?: (segmentId: string, content: string) => Promise<boolean>;
   t: any;
 }) {
   const isDecision = alert.source === "decision";
   const isReminder = alert.judgmentCase === "decision_reminder";
-  // actions가 안 오면(문서 기반, 또는 아직 안 붙은 구버전 응답) 기본 두 액션을 보여준다 -
-  // 단, 리마인더(Case0)는 해결 대상이 아니라 애초에 액션이 없다.
-  const actions = isReminder
-    ? []
-    : alert.actions ?? (["keep_reference", "change_acknowledged"] as ContradictionAlertAction[]);
 
   // 리마인더는 해결할 때까지 기다릴 필요가 없으니, 확인 안 해도 몇 초 뒤 자동으로 큐에서 빠진다
   useEffect(() => {
@@ -911,71 +896,6 @@ function LiveContradictionToast({
     const timer = setTimeout(() => onDismiss(alert.contradiction_id), 6000);
     return () => clearTimeout(timer);
   }, [isReminder, alert.contradiction_id]);
-
-  // STT 오인식(예: "9월"을 "구월"로 인식)으로 뜬 모순은, 무시하기보다 원본 발화를 직접
-  // 고쳐서 근본 원인을 없애는 게 더 유용하다 - 세그먼트가 있을 때만 이 옵션을 보여준다.
-  const canEditSegment = !!onEditSegment && !!alert.meetingSegmentId;
-  const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState(alert.statement_text);
-  const [isSaving, setIsSaving] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-
-  async function handleSaveEdit() {
-    if (!onEditSegment || !alert.meetingSegmentId) return;
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-
-    setIsSaving(true);
-    setEditError(null);
-    const ok = await onEditSegment(alert.meetingSegmentId, trimmed);
-    setIsSaving(false);
-
-    if (ok) {
-      onDismiss(alert.contradiction_id);
-    } else {
-      setEditError(t.meeting_live_alert_edit_failed);
-    }
-  }
-
-  if (isEditing) {
-    return (
-      <div
-        className={`mb-2 rounded-xl border p-3 text-xs ${
-          isDecision ? "border-purple-500/30 bg-purple-500/5" : "border-recall-accent/30 bg-recall-accent/5"
-        }`}
-      >
-        <p className="mb-1.5 font-bold text-recall-text">{t.meeting_live_alert_edit_title}</p>
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={2}
-          className="mb-2 w-full rounded-lg border border-recall-border bg-recall-bgMain px-2.5 py-1.5 text-xs text-recall-text outline-none focus:border-recall-accent"
-        />
-        {editError && <p className="mb-2 text-[11px] text-recall-danger">{editError}</p>}
-        <div className="flex gap-1.5">
-          <button
-            onClick={() => {
-              setIsEditing(false);
-              setDraft(alert.statement_text);
-              setEditError(null);
-            }}
-            disabled={isSaving}
-            className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5 disabled:opacity-50"
-          >
-            {t.task_cancel}
-          </button>
-          <button
-            onClick={handleSaveEdit}
-            disabled={isSaving || !draft.trim()}
-            className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-          >
-            {isSaving ? t.meeting_export_saving : t.task_save}
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -1009,7 +929,7 @@ function LiveContradictionToast({
           )}
         </span>
         <button
-          onClick={() => onDismiss(alert.contradiction_id)}
+          onClick={() => (isReminder ? onDismiss : onAcknowledge)(alert.contradiction_id)}
           className="text-recall-textMuted hover:text-recall-text"
           aria-label={t.btn_close}
         >
@@ -1064,35 +984,15 @@ function LiveContradictionToast({
             </button>
           </>
         ) : (
-          <>
-            {canEditSegment && (
-              <button
-                onClick={() => setIsEditing(true)}
-                className="flex-1 rounded border border-recall-border px-2 py-1 text-[11px] text-recall-textMuted hover:bg-white/5"
-              >
-                {t.meeting_live_alert_edit_btn}
-              </button>
-            )}
-            {actions.map((action) => (
-              <button
-                key={action}
-                onClick={async () => {
-                  if (action === "change_acknowledged") {
-                    const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
-                    if (!ok) return;
-                  }
-                  onResolve(alert.contradiction_id, action);
-                }}
-                className={`flex-1 rounded px-2 py-1 text-[11px] font-medium ${
-                  action === "change_acknowledged"
-                    ? "bg-recall-accent text-white hover:opacity-90"
-                    : "border border-recall-border text-recall-text hover:bg-white/5"
-                }`}
-              >
-                {actionLabel(t, action)}
-              </button>
-            ))}
-          </>
+          // 실제 모순(Case2/3)은 회의 중엔 반영/유지를 바로 결정하지 못하게 한다 -
+          // 회의가 끝난 뒤 회의도움 목록에서 처리한다(meeting_live_contradiction_notice).
+          // 편집도 마찬가지로 "지금 바로 결정"에 해당하는 액션이라 여기선 뺀다.
+          <button
+            onClick={() => onAcknowledge(alert.contradiction_id)}
+            className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+          >
+            {t.meeting_live_alert_reminder_ack_btn}
+          </button>
         )}
       </div>
     </div>
@@ -1470,13 +1370,15 @@ export default function MeetingsPanel({
     (n) => n.ref_type === "meeting_segment" && n.ref_id && meetingSegmentIds.has(n.ref_id)
   );
 
-  async function handleLiveAlertResolve(contradictionId: string, resolutionType: ContradictionResolutionType) {
-    await resolve(contradictionId, resolutionType);
+  function handleLiveAlertDismiss(contradictionId: string) {
+    dismiss(contradictionId);
     onClearContradictionAlert(contradictionId);
   }
 
-  function handleLiveAlertDismiss(contradictionId: string) {
-    dismiss(contradictionId);
+  // 실제 모순(Case2/3)은 회의 중엔 "확인"만 - 반영/무시는 회의가 끝난 뒤 회의도움
+  // 목록에서만 결정하게 한다. 그래서 여기선 resolve/dismiss API를 안 부르고 팝업만
+  // 로컬에서 치운다 - 감지된 항목 자체는 회의도움 목록에 그대로 남는다.
+  function handleLiveAlertAcknowledge(contradictionId: string) {
     onClearContradictionAlert(contradictionId);
   }
 
@@ -1909,8 +1811,8 @@ export default function MeetingsPanel({
                   <LiveContradictionToast
                     alert={currentLiveAlert.alert}
                     total={liveAlertQueue.length}
-                    onResolve={handleLiveAlertResolve}
                     onDismiss={handleLiveAlertDismiss}
+                    onAcknowledge={handleLiveAlertAcknowledge}
                     onViewReference={
                       currentLiveAlert.alert.referenceFileId
                         ? () =>
@@ -1921,7 +1823,6 @@ export default function MeetingsPanel({
                         : undefined
                     }
                     onViewDecision={onOpenDecision}
-                    onEditSegment={onEditLiveSegment}
                     t={t}
                   />
                 )}
