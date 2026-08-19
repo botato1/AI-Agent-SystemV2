@@ -71,6 +71,22 @@ async def run_diarization(
         torch.manual_seed(DIARIZATION_SEED)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(DIARIZATION_SEED)
+
+        # ⛔ 2026-08-19: 시드 고정만으로는 재현이 안 됐다. 같은 세 번 실행에서
+        # cpCER이 62.68% / 70.80%로 여전히 갈렸다(회의 8b5f84b7). 난수 생성기는
+        # 고정됐어도 cuDNN/cuBLAS의 GPU 커널 자체가 스레드 스케줄링에 따라
+        # 부동소수점 결과가 미세하게 달라질 수 있다 — 특히 컨볼루션의 리덕션 순서.
+        # 경계선 케이스(이승주 자기 0.391 < 타인 0.597)는 그 미세한 차이가 판정을
+        # 뒤집을 만큼 증폭된다.
+        #
+        # cuDNN을 확정 모드로 강제한다. 속도는 느려질 수 있다 — 정확도가 아니라
+        # 재현성이 목적이므로 감수한다. warn_only=True인 이유: 확정 구현이 없는
+        # 연산을 만나면 예외 대신 경고만 내고 넘어간다. False로 하면 화자 분리
+        # 자체가 실패할 수 있다.
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=True)
+
         return tracks_of(pipeline(audio_input, min_speakers=min_spk, max_speakers=max_spk))
 
     logger.info(f"🚀 화자 분리(pyannote) 분석 시작... (화자 수 {min_spk}~{max_spk}명 가정)")
