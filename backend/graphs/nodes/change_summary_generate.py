@@ -7,17 +7,12 @@
 # 패턴 — 라우터 응답과 별개로 백그라운드에서 실행되고, 프론트는
 # GET .../change-summary로 폴링한다 (AI Chat 노드와 달리 동기 응답 아님).
 
-import os
 import uuid
-
-import httpx
 
 from backend.db.crud import contradiction_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.contradiction_resolution_state import ContradictionResolutionState
-
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+from backend.modules.llm.ollama_client import _call_ollama, OLLAMA_MODEL_LIGHT
 
 _SUMMARY_PROMPT = """당신은 팀 문서/기록의 변경사항을 정리하는 비서입니다.
 
@@ -44,17 +39,18 @@ def build_summary_prompt(original_text: str, accepted_text: str, base_summary: s
 
 
 def _call_llm_summary(prompt: str) -> str | None:
-    """Ollama에 일반 텍스트 요약 생성을 요청한다. 실패 시 None."""
+    """Ollama에 일반 텍스트 요약 생성을 요청한다. 실패 시 None.
+
+    [수정 - 승주 리포트] 독자적으로 OLLAMA_MODEL/httpx를 재선언해서 호출하던 것을
+    공용 _call_ollama()로 통일. 라이브 테스트 중 "기준문서 갱신 결과" 팝업에
+    중국어가 섞여 나온 원인 - 이 함수만 _call_ollama()의 중국어 감지 재시도
+    로직(최대 2회)을 안 타고 있었음. contradiction_crud.py와 동일한 이유로
+    통일(운영자가 OLLAMA_MODEL_LIGHT/HEAVY만 설정하면 이 함수만 레거시
+    OLLAMA_MODEL을 쓰게 되는 문제도 같이 해소됨)."""
     try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        summary = response.json().get("response", "").strip()
+        summary = _call_ollama(prompt, model=OLLAMA_MODEL_LIGHT).strip()
         return summary or None
-    except (httpx.HTTPError, ValueError, KeyError, AttributeError) as e:
+    except Exception as e:
         print(f"[change_summary_generate] LLM 호출 실패: {repr(e)}")
         return None
 
@@ -104,12 +100,12 @@ def change_summary_generate_node(state: ContradictionResolutionState) -> dict:
             db, contradiction_uuid,
             generated_summary=summary,
             generation_status="completed",
-            model_name=OLLAMA_MODEL,
+            model_name=OLLAMA_MODEL_LIGHT,
         )
         return {
             "generated_summary": summary,
             "generation_status": "completed",
-            "model_name": OLLAMA_MODEL,
+            "model_name": OLLAMA_MODEL_LIGHT,
             "change_summary_draft_id": str(updated.id),
         }
 
