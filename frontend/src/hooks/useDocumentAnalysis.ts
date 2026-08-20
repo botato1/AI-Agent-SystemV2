@@ -188,10 +188,17 @@ export function useDocumentAnalysis(workspaceId: string) {
 
       if (res.status === "success" && res.documentId) {
         pendingUploadIdsRef.current.delete(tempId);
-        setDocuments((prev) =>
-          prev.map((d) => (d.id === tempId ? { ...d, id: res.documentId as string } : d))
-        );
-        setActiveDocId((prev) => (prev === tempId ? (res.documentId as string) : prev));
+        const newId = res.documentId as string;
+        setDocuments((prev) => {
+          // 업로드 응답을 기다리는 동안 폴링/WS가 먼저 서버 문서를 받아와 이미 목록에
+          // 들어와 있을 수 있다 - 그 경우 placeholder를 같은 id로 또 붙이면(map) id가
+          // 중복된 두 항목이 같이 렌더링된다. 이미 있으면 placeholder만 제거한다.
+          if (prev.some((d) => d.id === newId)) {
+            return prev.filter((d) => d.id !== tempId);
+          }
+          return prev.map((d) => (d.id === tempId ? { ...d, id: newId } : d));
+        });
+        setActiveDocId((prev) => (prev === tempId ? newId : prev));
         await loadDocuments();
       } else {
         setDocuments((prev) => prev.map((d) => (d.id === tempId ? { ...d, status: "failed" } : d)));
