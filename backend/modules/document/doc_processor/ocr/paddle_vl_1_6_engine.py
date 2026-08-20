@@ -94,7 +94,9 @@ class PaddleVL16Engine:
             ).to(self._model.device)
 
             with torch.no_grad():
-                outputs = self._model.generate(**inputs, max_new_tokens=1024)
+                # do_sample=False: 기본 생성 설정(샘플링)이 실행마다 다른 결과를 낼 수 있어
+                # 결정적 생성으로 고정 (vl_engine.py와 동일한 이유)
+                outputs = self._model.generate(**inputs, max_new_tokens=1024, do_sample=False)
 
             # 입력 토큰 제외하고 새로 생성된 부분만 디코딩
             input_len = inputs["input_ids"].shape[1]
