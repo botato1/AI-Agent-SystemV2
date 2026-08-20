@@ -28,7 +28,7 @@ import {
 import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
 import { useNotifications } from "./useNotifications";
 
-const PENDING_STATUSES = new Set(["created", "processing"]);
+const PENDING_STATUSES = new Set(["created", "recording", "paused", "processing"]);
 
 // 업로드된 회의(STT 요약/결정사항) 실제 백엔드 연동
 export function useRealMeetings(workspaceId: string, selectedCategoryId?: string | null) {
