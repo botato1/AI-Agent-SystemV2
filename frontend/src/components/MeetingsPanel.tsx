@@ -1408,11 +1408,10 @@ export default function MeetingsPanel({
 
   function handleAgendaItemNext() {
     if (!agendaReminder) return;
-    if (agendaIndex + 1 < agendaReminder.items.length) {
-      setAgendaIndex(agendaIndex + 1);
-    } else {
-      onClearAgendaReminder();
-    }
+    // 마지막 항목에서 "다음"을 누르면 팝업 카드만 닫는다 (agendaIndex를 items.length로
+    // 넘겨서 currentAgendaItem이 null이 되게 함). 예전엔 agendaReminder 전체를 지워버려서,
+    // 아래 "미해결 안건" 목록(2363번째 줄 부근)에 남아있던 미해결 항목까지 같이 사라졌다.
+    setAgendaIndex(agendaIndex + 1);
   }
 
   function handleAgendaItemPrev() {
