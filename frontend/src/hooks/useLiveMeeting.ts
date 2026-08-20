@@ -7,6 +7,7 @@ import {
   startMeetingApi,
   joinMeetingApi,
   beginScheduledMeetingApi,
+  endMeetingApi,
   pauseMeetingApi,
   resumeMeetingApi,
   mapSpeakerNamesApi,
@@ -803,6 +804,15 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     isIntentionalCloseRef.current = true;
     reconnectDeadlineRef.current = null;
     clearReconnectTimer();
+
+    // [수정] 예전엔 REST로 회의 종료를 알리지 않고 WS 연결이 실제로 끊기는 시점에만
+    // 서버가 상태를 processing으로 바꿨다 - session_end 대기(최대 1분)에, 백엔드의
+    // 재연결 유예(25초)까지 겹쳐서 다른 참가자에게 "종료됨"이 반영되기까지 너무 오래
+    // 걸렸다. 여기서 즉시 /end를 호출해 상태부터 확정시키면, 그 뒤 WS가 늦게 닫혀도
+    // 백엔드는 이미 processing 상태라 아무 일도 안 하고 넘어간다.
+    if (meeting) {
+      await endMeetingApi(workspaceId, meeting.id);
+    }
 
     // session_end는 밀려 있는 자막이 많으면 최대 1분까지 걸릴 수 있다 - 그보다 짧게 잡으면
     // 서버가 마지막 자막을 다 보내기 전에 소켓을 닫아버려서 회의 후반부 스크립트가 화면에서

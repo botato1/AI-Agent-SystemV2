@@ -119,7 +119,12 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         #    처리한다 - 지수 리뷰 반영: 여기서 필터링하면 이미 extract() 내부에서 먼저
         #    죽은 뒤라 아무 소용이 없었음.
         #    잡담 세그먼트를 걸러서 임베딩하려면 임베딩(3번)보다 먼저 호출해야 한다.
-        extraction = llm_extractor.extract(indexed_transcript, reference_date=meeting.started_at or meeting.created_at)
+        # [추가 - 라이브 테스트 발견] "이번 주 금요일" 같은 상대적 날짜 표현을 LLM이
+        # 정확히 절대 날짜로 환산할 수 있게 회의 날짜를 같이 넘긴다 - started_at이
+        # 없는 경우(예: 문서 업로드형)는 created_at으로 대체.
+        extraction = llm_extractor.extract(
+            indexed_transcript, meeting_date=meeting.started_at or meeting.created_at,
+        )
 
         # title_is_auto가 아직 develop에 없을 수 있어(PR #74 미병합) getattr로 방어 —
         # 없으면 기본값 False로 취급해 사용자가 직접 넣은 제목을 절대 덮어쓰지 않는다.

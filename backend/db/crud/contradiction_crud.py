@@ -16,6 +16,10 @@ from sqlalchemy import func, or_
 from backend.db.modules import ChangeSummaryDraft, Contradiction, ContradictionResolution, MeetingSegment
 from backend.modules.llm.ollama_client import _call_ollama, OLLAMA_MODEL_LIGHT
 
+# regenerate_short_summary_after_change()가 meeting_summary_ready 알림을 보내는 데 필요.
+# 파일 상단에서 바로 import해도 순환참조 없음(meeting_crud.py는 이 파일을 안 씀).
+from backend.db.crud import notification_crud, workspace_crud
+
 
 def make_deduplication_key(
     source_type: str,
@@ -248,9 +252,13 @@ def get_change_summary_draft(db: Session, contradiction_id: uuid.UUID) -> Option
     )
 
 
-def _revise_short_summary(original_short_summary: str, old_text: str, new_text: str) -> Optional[str]:
-    """[추가 - 2026.08.18] "직접수정해서 반영" 시 회의 요약 카드의 한 줄 요약에서
-    이번에 바뀐 결정 관련 부분만 새 내용으로 고쳐 쓴다.
+def _revise_summary_field(original_text: str, old_text: str, new_text: str, field_label: str) -> Optional[str]:
+    """[추가 - 2026.08.18, 확장 - 라이브 테스트 발견] "직접수정해서 반영" 시 회의 요약
+    카드의 텍스트 필드(한 줄 요약, 또는 설명 문단)에서 이번에 바뀐 결정 관련
+    부분만 새 내용으로 고쳐 쓴다. field_label로 어느 필드인지 프롬프트에 명시해서
+    같은 함수를 short_summary/full_summary 양쪽에 재사용한다 - 결정사항만
+    바뀌고 한 줄 요약/설명 문단은 안 바뀌면 세 곳이 서로 다른 내용을 가리키게
+    되므로, 셋 다 같이 갱신돼야 한다는 팀 확인 반영.
 
     전체를 다시 요약하게 하면 상관없는 문장까지 손댈 위험이 있어서, 프롬프트로
     "그 부분만 고치고 나머지는 그대로 유지"를 강하게 제약한다. 그래도 LLM이라
@@ -259,14 +267,14 @@ def _revise_short_summary(original_short_summary: str, old_text: str, new_text: 
     원본을 그대로 둔다 (실패해도 위의 decision 전이 자체는 이미 커밋된 뒤라
     핵심 기능에는 영향 없음)."""
     prompt = (
-        "아래는 회의의 한 줄 요약 문장이다.\n\n"
-        f"[기존 한 줄 요약]\n{original_short_summary}\n\n"
+        f"아래는 회의의 {field_label}이다.\n\n"
+        f"[기존 {field_label}]\n{original_text}\n\n"
         f"[옛 결정 내용]\n{old_text}\n\n"
         f"[새로 확정된 내용]\n{new_text}\n\n"
-        "위 한 줄 요약에서 [옛 결정 내용]과 관련된 부분만 [새로 확정된 내용]을 "
+        f"위 {field_label}에서 [옛 결정 내용]과 관련된 부분만 [새로 확정된 내용]을 "
         "반영해서 자연스럽게 고쳐라. 관련 없는 나머지 문장·표현은 절대 바꾸지 말고 "
         "원문 그대로 유지하라. 개조식(~함/~임 등 명사형 종결) 문체를 유지하라. "
-        "다른 설명 없이 고쳐진 한 줄 요약 문장만 출력하라."
+        f"다른 설명 없이 고쳐진 {field_label}만 출력하라."
     )
     # [수정 - 리뷰 반영] 독자적으로 OLLAMA_MODEL/httpx를 재선언해서 호출하던 것을
     # 공용 _call_ollama()로 통일 - contradiction_detect.py/ai_chat_answer.py와
@@ -277,20 +285,42 @@ def _revise_short_summary(original_short_summary: str, old_text: str, new_text: 
     try:
         revised = _call_ollama(prompt, model=OLLAMA_MODEL_LIGHT, temperature=0).strip()
     except Exception as e:
-        print(f"[resolve_contradiction] 한 줄 요약 갱신 LLM 호출 실패: {repr(e)}")
+        print(f"[resolve_contradiction] {field_label} 갱신 LLM 호출 실패: {repr(e)}")
         return None
 
     if not revised:
         return None
 
-    orig_len = len(original_short_summary)
+    orig_len = len(original_text)
     if len(revised) < orig_len * 0.5 or len(revised) > orig_len * 2:
         print(
-            f"[resolve_contradiction] 한 줄 요약 갱신 결과가 원문과 길이 차이가 커서 무시함 "
+            f"[resolve_contradiction] {field_label} 갱신 결과가 원문과 길이 차이가 커서 무시함 "
             f"(원본 {orig_len}자 -> 결과 {len(revised)}자)"
         )
         return None
     return revised
+
+
+def _rewrite_as_formal_decision_text(statement: str) -> Optional[str]:
+    """[추가 - 리뷰 반영] "직접수정해서 반영" 시 만들어지는 새 decision의 decision_text가
+    발화 원문(구어체) 그대로 저장되던 문제 수정. post-meeting이 만드는 다른 decision들은
+    llm_extractor.py의 지침대로 개조식(~함/~임)으로 다듬어지는데, 이 경로만 다듬는 단계가
+    없어서 같은 화면 안에서 문구 톤이 서로 안 맞았음(라이브 테스트에서 발견).
+
+    실패 시 None을 반환해 호출부가 원문(statement)을 그대로 쓰게 한다(폴백)."""
+    prompt = (
+        "아래 발화를 회의록에 쓰는 결정사항 문구로 간결하게 다듬어라. "
+        "개조식(\"~함\", \"~임\", \"~됨\" 등으로 끝나는 명사형 종결)으로 쓰고, "
+        "\"~습니다\", \"~해요\" 같은 평서문/구어체는 쓰지 않는다. "
+        "원래 의미를 바꾸지 말고, 다른 설명 없이 다듬어진 문구만 출력하라.\n\n"
+        f"[발화]\n{statement}"
+    )
+    try:
+        rewritten = _call_ollama(prompt, model=OLLAMA_MODEL_LIGHT, temperature=0).strip()
+    except Exception as e:
+        print(f"[resolve_contradiction] decision_text 개조식 변환 실패(원문으로 폴백): {repr(e)}")
+        return None
+    return rewritten or None
 
 
 def resolve_contradiction(
@@ -301,7 +331,7 @@ def resolve_contradiction(
     new_decision_text: Optional[str] = None,
     new_decision_reason: Optional[str] = None,
     note: Optional[str] = None,
-) -> ContradictionResolution:
+) -> tuple[ContradictionResolution, Optional[str]]:
     """
     [수정 - 2026.07.16] decision 대비 모순("변경 인지함") 처리 시 실제로
     decisions 테이블을 전이시키는 로직 추가.
@@ -315,6 +345,13 @@ def resolve_contradiction(
     Case A(재결정)와 동일한 전이를 실시간으로 수행한다:
       기존 decision.status = 'superseded'
       새 decision 생성, status = 'active', supersedes_decision_id = 기존.id
+
+    [수정 - 리뷰 반영] 반환값을 (resolution, resolved_decision_text) 튜플로 변경.
+    new decision을 만들 때 실제로 저장한 decision_text(개조식으로 다듬어진 값, 또는
+    다듬기 실패 시 원문)를 호출부(라우터)가 알 수 있는 방법이 없어서,
+    create_change_summary_draft()에는 여전히 구어체 원문(statement_text_snapshot)이
+    들어가 결정사항 이력과 변경 요약 카드의 문구 톤이 서로 어긋나는 문제가 있었음.
+    new decision을 안 만든 경우(keep_reference 등)엔 두 번째 값이 None.
     """
     resolution = ContradictionResolution(
         contradiction_id=contradiction_id,
@@ -323,6 +360,8 @@ def resolve_contradiction(
         note=note,
     )
     db.add(resolution)
+
+    resolved_decision_text: Optional[str] = None
 
     contradiction = db.get(Contradiction, contradiction_id)
     if contradiction:
@@ -337,6 +376,16 @@ def resolve_contradiction(
 
             old_decision = db.get(Decision, contradiction.reference_decision_id)
             if old_decision and old_decision.status == "active":
+                # [수정 - 리뷰 반영] old_decision.status 변경(UPDATE) 전에 먼저
+                # decision_text를 확정한다. _rewrite_as_formal_decision_text()가
+                # 느린 LLM 호출인데, UPDATE를 먼저 걸어놓고 그 아래서 LLM을
+                # 기다리면 커밋 전까지 그 UPDATE의 행 잠금이 계속 열려있게 됨 -
+                # 여기서는 아직 SELECT만 실행된 상태라 잠금 위험 없이 대기 가능.
+                decision_text = new_decision_text or _rewrite_as_formal_decision_text(
+                    contradiction.statement_text_snapshot
+                ) or contradiction.statement_text_snapshot
+                resolved_decision_text = decision_text
+
                 old_decision.status = "superseded"
 
                 # [수정 - 라이브 테스트 발견] meeting_id를 old_decision.meeting_id(그
@@ -351,8 +400,9 @@ def resolve_contradiction(
                 new_decision = Decision(
                     workspace_id=old_decision.workspace_id,
                     meeting_id=contradiction.session_meeting_id or old_decision.meeting_id,
+                    source_segment_id=contradiction.meeting_segment_id,
                     title=old_decision.title,
-                    decision_text=new_decision_text or contradiction.statement_text_snapshot,
+                    decision_text=decision_text,
                     reason=new_decision_reason,
                     status="active",
                     supersedes_decision_id=old_decision.id,
@@ -362,7 +412,7 @@ def resolve_contradiction(
 
     db.commit()
     db.refresh(resolution)
-    return resolution
+    return resolution, resolved_decision_text
 
 
 def regenerate_short_summary_after_change(contradiction_id: uuid.UUID) -> None:
@@ -402,14 +452,52 @@ def regenerate_short_summary_after_change(contradiction_id: uuid.UUID) -> None:
             return
 
         summary_row = meeting_crud.get_meeting_summary(db, new_decision.meeting_id)
-        if not summary_row or not summary_row.short_summary:
+        if not summary_row:
             return
 
-        revised = _revise_short_summary(
-            summary_row.short_summary, old_decision.decision_text, new_decision.decision_text,
-        )
-        if revised:
-            meeting_crud.upsert_summary(db, new_decision.meeting_id, short_summary=revised)
+        # [수정 - 라이브 테스트 발견] 한 줄 요약만 패치하고 설명 문단(full_summary)은
+        # 그대로 둬서, 결정사항·한 줄 요약·설명 문단 세 곳이 같은 회의를 두고
+        # 서로 다른 내용을 가리키는 문제가 있었음 - 셋 다 같은 변경을 반영해야
+        # 한다는 팀 확인 반영. 필드 하나가 비어있어도(예: full_summary 미생성)
+        # 다른 필드 처리를 막지 않도록 각각 독립적으로 시도한다.
+        update_fields = {}
+        if summary_row.short_summary:
+            revised_short = _revise_summary_field(
+                summary_row.short_summary, old_decision.decision_text,
+                new_decision.decision_text, "한 줄 요약",
+            )
+            if revised_short:
+                update_fields["short_summary"] = revised_short
+        if summary_row.full_summary:
+            revised_full = _revise_summary_field(
+                summary_row.full_summary, old_decision.decision_text,
+                new_decision.decision_text, "설명 문단",
+            )
+            if revised_full:
+                update_fields["full_summary"] = revised_full
+
+        if update_fields:
+            meeting_crud.upsert_summary(db, new_decision.meeting_id, **update_fields)
+
+            # 리뷰 반영으로 이 LLM 호출을 백그라운드로 뺀 뒤(응답은 이미 나간
+            # 뒤에 여기서 갱신됨), 프론트가 그 시점을 알 방법이 없어서 화면이
+            # 안 바뀌는 회귀가 생겼음. meeting_service.py가 이미 쓰는 것과
+            # 동일한 meeting_summary_ready 알림 - 프론트 useRealMeetings.ts가
+            # 이 타입을 받으면 지금 보고 있는 회의면 요약을 다시 받아온다
+            # (그 "깜빡"의 정체).
+            meeting = meeting_crud.get_meeting(db, new_decision.meeting_id)
+            if meeting:
+                for member, _user in workspace_crud.list_members(db, meeting.workspace_id):
+                    if not notification_crud.is_notification_enabled(
+                        db, meeting.workspace_id, member.user_id, "meeting_summary_ready",
+                    ):
+                        continue
+                    notification_crud.create_notification(
+                        db, user_id=member.user_id, workspace_id=meeting.workspace_id,
+                        type="meeting_summary_ready", title="회의 요약 갱신됨",
+                        message=f"'{meeting.title}' 회의 요약이 변경사항을 반영해 갱신됐습니다.",
+                        ref_type="meeting", ref_id=meeting.id,
+                    )
     except Exception as e:
         print(f"[regenerate_short_summary_after_change] 처리 중 예외 발생(무시): {repr(e)}")
     finally:
