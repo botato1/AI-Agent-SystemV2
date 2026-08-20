@@ -1086,10 +1086,13 @@ def join_meeting_api(
     require_workspace_member(db, workspace_id, current_user_id)
     meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
 
-    if meeting.status != "recording":
+    # [수정 - 리뷰 반영] "recording"만 허용하면, 일시정지 상태에서 연결이 끊긴
+    # 사람이 재연결하려고 이 엔드포인트를 호출할 때 409로 막혀버린다. 프론트가
+    # 재연결 시 새 ws_ticket을 여기서 받아오도록 이미 고쳐놨으므로, paused도 허용한다.
+    if meeting.status not in ("recording", "paused"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="녹음 중인 회의가 아닙니다.",
+            detail="녹음 중이거나 일시정지된 회의가 아닙니다.",
         )
 
     # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가.
