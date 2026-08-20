@@ -171,6 +171,7 @@ def _judge_single_statement(
                 # 넣으면 알림 클릭 시 프론트가 존재하지 않는 대상을 찾게 됨.
                 ref_type="contradiction",
                 ref_id=uuid.UUID(popup["contradiction_id"]),
+                room_id=session_kwargs.get("session_room_id"),
             )
         return {
             "contradiction_id": popup["contradiction_id"],
@@ -191,6 +192,7 @@ def _judge_single_statement(
             message=popup["message"],
             ref_type=source_type,
             ref_id=source_id,
+            room_id=session_kwargs.get("session_room_id"),
         )
 
     if popup["type"] in _ALSO_PUSH_LIVE_POPUP_TYPES:
