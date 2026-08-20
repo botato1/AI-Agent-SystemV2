@@ -526,10 +526,14 @@ SPEAKER_EMBEDDING_CHECKPOINT = os.getenv("SPEAKER_EMBEDDING_CHECKPOINT", "").str
 
 # speechbrain 모델을 쓸 때 가중치를 풀어둘 곳.
 # 왜 따로 두는가: speechbrain은 HF 캐시가 아니라 savedir에 파일을 복사해두고 쓰는데,
-# NAS 공유 마운트는 심볼릭 링크와 권한 변경을 막아서 그쪽에 두면 경고가 쏟아진다.
-# 로컬 디스크에 두면 조용하고 빠르다.
+# NAS 공유 마운트는 심볼릭 링크(LocalStrategy.COPY로 우회했다)와 **권한 변경(chmod)도
+# 막는다** — COPY 전략의 shutil.copy()가 내용 복사 후 copymode()로 권한 비트를
+# 맞추려다 PermissionError로 죽는다(2026-08-20 실측, Errno 1).
+# 기본값을 BASE_DIR(NAS 안)로 뒀던 게 버그였다 — 위 주석의 원래 의도(로컬 디스크)와
+# 실제 값이 어긋나 있었다. /tmp는 로컬 디스크라 이 문제 자체가 안 생긴다
+# (probe_embedding_models.py가 처음부터 /tmp를 쓴 이유가 이것).
 SPEECHBRAIN_CACHE_DIR = os.getenv(
-    "SPEECHBRAIN_CACHE_DIR", os.path.join(BASE_DIR, "speechbrain_models"))
+    "SPEECHBRAIN_CACHE_DIR", "/tmp/speechbrain_models")
 SPEAKER_SIMILARITY_THRESHOLD = 0.5   # 이 이상 유사하면 같은 화자로 판단. 모델 교체 후 재튜닝 필요할 수 있음
 
 # 이 유사도 미만이면 이름을 붙이지 않고 화자 미상(None)으로 둔다.

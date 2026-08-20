@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -387,6 +388,18 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     logger.info(f"🔬 [{meeting_id}] 정밀 재분석 시작 (오디오 {duration_sec:.0f}초)")
     loop = asyncio.get_event_loop()
 
+    # 단계별 소요 시간 기록 — "재분석이 왜 느린가"를 추측 대신 로그로 답하기 위함
+    # (2026-08-20, 팀 제보: 1분 20초 회의가 처리에 1분 넘게 걸림). 매 회의마다
+    # 몇 줄 더 찍히는 것 외에 비용이 없으므로 상시 켜둔다.
+    stage_times: dict[str, float] = {}
+    _stage_start = time.monotonic()
+
+    def _mark(stage: str) -> None:
+        nonlocal _stage_start
+        now = time.monotonic()
+        stage_times[stage] = now - _stage_start
+        _stage_start = now
+
     # 1. 전체 화자분리 — 파일 경로 대신 메모리 오디오를 넘김 (서버 FFmpeg 부재로 파일 디코딩 불가)
     #
     # 사전 등록 프로필이 있으면 등록 인원이 곧 회의 참석자(닫힌 집합)이므로 화자 수 상한을
@@ -411,6 +424,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     # 겹침을 안 걷어내면 공용 마이크(오디오 하나)에서 같은 소리를 두 번 전사해
     # 회의록에 같은 말이 두 번 들어간다 (_resolve_overlapping_turns 참고).
     turns = _resolve_overlapping_turns(_merge_adjacent_turns(diarization_tracks))
+    _mark("화자분리")
 
     # 2. 등록 프로필이 있으면 **전사하기 전에** 화자 타임라인을 만들어 턴을 다시 나눈다.
     #
@@ -437,6 +451,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
                 audio, profiles, app_state.speaker_embedding_inference, sample_rate,
             )
             turns = split_turns_by_timeline(turns, timeline)
+    _mark("화자타임라인")
 
     logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 정리 후 {len(turns)}개, 턴별 전사 시작")
 
@@ -449,10 +464,12 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
         audio_of=lambda _turn: (audio, sample_rate),  # 공용 마이크는 회의 오디오 하나뿐
         initial_prompt=build_context_hint(enrolled_names),
     )
+    _mark("턴별전사")
 
     # 4. 익명 라벨(SPEAKER_00 등) → 실제 이름. 위에서 만든 타임라인을 그대로 쓴다.
     if timeline is not None:
         _assign_speakers_from_timeline(refined_segments, timeline)
+    _mark("이름배정")
 
     # 5. 겹쳐 말한 구간 처리.
     #    모델에 직접 묻는다. 화자분리 결과에서 역산하던 방식은 오탐이 많아 폐기했다 —
@@ -463,6 +480,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     overlap_spans = await loop.run_in_executor(
         None, lambda: find_overlap_spans_from_audio(audio, load_overlap_inference(), sample_rate),
     )
+    _mark("겹침탐지(모델 첫 로드 포함 가능)")
     if overlap_spans:
         # 5-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
         refined_segments = await _split_overlaps(
@@ -476,6 +494,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
         mark_overlapped_segments(
             [seg for seg in refined_segments if not seg.get("separated")], overlap_spans,
         )
+    _mark("겹침분리")
 
     # 6. LLM이 문맥으로 읽고 오인식 단어를 고친다.
     #    용어 목록은 "사람이 미리 겪은 단어"만 커버한다. 여기서는 문장의 뜻으로 유추한다.
@@ -485,6 +504,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
             None, correct_transcript, refined_segments,
             build_context_hint(enrolled_names),
         )
+    _mark("LLM교정" if REFINE_LLM_ENABLED else "LLM교정(꺼짐)")
 
     # 실시간 결과는 비교/디버깅용으로 보존하고 segments를 정밀본으로 교체
     meta["realtime_segments"] = meta.get("segments", [])
@@ -494,6 +514,9 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
+    total = sum(stage_times.values())
+    breakdown = " / ".join(f"{name} {sec:.1f}s" for name, sec in stage_times.items())
+    logger.info(f"⏱️ [{meeting_id}] 재분석 단계별 소요 (총 {total:.1f}s): {breakdown}")
     logger.info(f"✅ [{meeting_id}] 정밀 재분석 완료 (segments={len(refined_segments)})")
     return meta
 
