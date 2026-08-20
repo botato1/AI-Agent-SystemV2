@@ -111,6 +111,51 @@ class EnrolledSpeakerTimeline:
         return ", ".join(f"{k} {v:.0f}초" for k, v in sorted(totals.items(), key=lambda kv: -kv[1]))
 
 
+def _unit(v: np.ndarray) -> np.ndarray:
+    n = float(np.linalg.norm(v))
+    return v / n if n else v
+
+
+def _extract_windows(
+    audio: np.ndarray, identifier, sample_rate: int,
+) -> tuple[list[np.ndarray], list[tuple[float, float]]]:
+    """
+    오디오를 VAD 발화 구간 안에서 겹치는 창으로 훑어 (임베딩 목록, 시간 경계 목록)을 만든다.
+
+    build_speaker_timeline()과 build_speaker_timeline_clustered()가 창 추출 로직을
+    공유하기 위해 뺐다 — 판정 방식(창별 독립 vs 묶음)만 다르고 "어디를 훑는가"는
+    같아야 두 결과를 공정하게 비교할 수 있다.
+    """
+    win = int(SPEAKER_WINDOW_SEC * sample_rate)
+    hop = int(SPEAKER_WINDOW_HOP_SEC * sample_rate)
+    min_len = int(_MIN_WINDOW_SEC * sample_rate)
+
+    spans = get_speech_timestamps(
+        audio, VadOptions(min_silence_duration_ms=300), sampling_rate=sample_rate
+    )
+    embeddings: list[np.ndarray] = []
+    bounds: list[tuple[float, float]] = []
+
+    for span in spans:
+        span_start, span_end = span["start"], span["end"]
+        if span_end - span_start < min_len:
+            continue     # 창 하나도 못 채우는 짧은 조각 — 판정 포기(인접 구간이 덮는다)
+
+        offsets = (
+            list(range(span_start, span_end - win + 1, hop))
+            if span_end - span_start >= win else [span_start]
+        )
+        for off in offsets:
+            clip = audio[off: min(off + win, span_end)]
+            embeddings.append(_unit(identifier.extract_embedding(clip)))
+            # 창은 서로 겹치므로, 각 창의 판정을 '중심 주변 hop 길이'에만 귀속시켜
+            # 서로 겹치지 않는 타임라인을 만든다.
+            center = (off + min(off + win, span_end)) / 2
+            bounds.append(((center - hop / 2) / sample_rate, (center + hop / 2) / sample_rate))
+
+    return embeddings, bounds
+
+
 def build_speaker_timeline(
     audio: np.ndarray,
     profiles: dict[str, np.ndarray],
@@ -120,58 +165,166 @@ def build_speaker_timeline(
     """
     오디오 전체를 짧은 창으로 훑어 화자 타임라인을 만든다.
 
+    창 하나하나를 등록 프로필과 **독립적으로** 비교한다 — 이웃 3창 다수결
+    (_smooth)로 순간적인 흔들림만 보정한다. 창 하나가 경계선(margin이 얇은
+    지점)에 있으면 그 창 부근만 흔들리지만, 여러 창이 몰려서 같은 쪽으로
+    틀리면 다수결로도 못 되돌린다 — build_speaker_timeline_clustered()의
+    동기가 이것이다.
+
     발화 구간(VAD)만 훑는다 — 침묵을 판정할 이유가 없고, 침묵에도 순위 판정은
     누군가를 지목하기 때문에 미리 빼는 편이 안전하다.
     """
     from .speaker_id_service import LiveSpeakerIdentifier
 
     identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
-    win = int(SPEAKER_WINDOW_SEC * sample_rate)
-    hop = int(SPEAKER_WINDOW_HOP_SEC * sample_rate)
-    min_len = int(_MIN_WINDOW_SEC * sample_rate)
+    embeddings, bounds = _extract_windows(audio, identifier, sample_rate)
 
-    spans = get_speech_timestamps(
-        audio, VadOptions(min_silence_duration_ms=300), sampling_rate=sample_rate
-    )
-    slots: list[tuple[float, float, str | None]] = []
+    labels: list[str | None] = []
     dropped = 0
+    for emb in embeddings:
+        # 판정 규칙은 match_closed_set 한 곳에만 둔다 — 실시간 경로와 재분석이
+        # 다른 기준으로 판정하면, 실시간에서 보이던 이름이 회의록에서 바뀐다.
+        # margin 미달(잡음·겹침·화자 전환 경계)이나 바닥값 미달(명단 밖)이면 None.
+        name, _nearest, _score, _margin = identifier.match_closed_set(emb)
+        labels.append(name)
+        if name is None:
+            dropped += 1
 
-    for span in spans:
-        span_start, span_end = span["start"], span["end"]
-        if span_end - span_start < min_len:
-            continue     # 창 하나도 못 채우는 짧은 조각 — 판정 포기(인접 구간이 덮는다)
-
-        # 창 시작 위치들. 구간이 창보다 짧으면 구간 하나를 통째로 한 창으로 본다.
-        offsets = (
-            list(range(span_start, span_end - win + 1, hop))
-            if span_end - span_start >= win else [span_start]
-        )
-
-        labels, bounds = [], []
-        for off in offsets:
-            clip = audio[off: min(off + win, span_end)]
-            # 판정 규칙은 match_closed_set 한 곳에만 둔다 — 실시간 경로와 재분석이
-            # 다른 기준으로 판정하면, 실시간에서 보이던 이름이 회의록에서 바뀐다.
-            # margin 미달(잡음·겹침·화자 전환 경계)이나 바닥값 미달(명단 밖)이면 None.
-            name, _nearest, _score, _margin = identifier.match_closed_set(
-                identifier.extract_embedding(clip)
-            )
-            labels.append(name)
-            if name is None:
-                dropped += 1
-
-            # 창은 서로 겹치므로, 각 창의 판정을 '중심 주변 hop 길이'에만 귀속시켜
-            # 서로 겹치지 않는 타임라인을 만든다.
-            center = (off + min(off + win, span_end)) / 2
-            bounds.append((center - hop / 2, center + hop / 2))
-
-        for (slot_start, slot_end), name in zip(bounds, _smooth(labels, SPEAKER_SMOOTH_WIDTH)):
-            slots.append((slot_start / sample_rate, slot_end / sample_rate, name))
-
+    slots = [
+        (start, end, name)
+        for (start, end), name in zip(bounds, _smooth(labels, SPEAKER_SMOOTH_WIDTH))
+    ]
     slots.sort(key=lambda s: s[0])
     timeline = EnrolledSpeakerTimeline(slots)
     logger.info(
         f"🕐 화자 타임라인: 창 {len(slots)}개 (판정 실패 {dropped}개) — {timeline.summary()}"
+    )
+    return timeline
+
+
+def _cluster_windows(
+    embeddings: list[np.ndarray], max_clusters: int, merge_floor: float,
+) -> list[int]:
+    """
+    회의 안의 창 임베딩들을 그리디 병합으로 묶는다. 반환은 창마다의 클러스터 번호.
+
+    왜 k(클러스터 수)를 등록 인원수로 고정하지 않는가: 등록은 됐지만 한 마디도
+    안 한 참석자가 있을 수 있다(회의 후 재분석 흔한 케이스). k를 강제로 맞추면
+    실제로는 두 사람인데 셋으로 억지로 쪼갤 수 있다. 대신 **상한**(max_clusters
+    = 등록 인원수)만 걸고, 남은 클러스터가 상한 이하로 줄어든 뒤에는 유사도가
+    merge_floor보다 낮으면 더 합치지 않고 멈춘다 — 실제로 다른 목소리를
+    억지로 합치는 것을 막는다.
+
+    ⚠️ O(n^2) 쌍 비교를 병합마다 반복해 최악 O(n^3)이다. 창이 수백 개 수준
+    (회의 30분~1시간)이면 몇 초~수십 초 안에 끝난다고 예상되나 **실측 안 됨**
+    — 느리면 최근접 쌍 캐시로 최적화할 것.
+    """
+    n = len(embeddings)
+    if n == 0:
+        return []
+    clusters: list[list[int]] = [[i] for i in range(n)]
+    centroids: list[np.ndarray] = [e.copy() for e in embeddings]
+
+    while len(clusters) > 1:
+        best_sim, bi, bj = -2.0, -1, -1
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                s = float(np.dot(centroids[i], centroids[j]))
+                if s > best_sim:
+                    best_sim, bi, bj = s, i, j
+        if len(clusters) <= max_clusters and best_sim < merge_floor:
+            break
+        merged_idx = clusters[bi] + clusters[bj]
+        merged_centroid = _unit(np.mean([embeddings[k] for k in merged_idx], axis=0))
+        clusters[bi] = merged_idx
+        centroids[bi] = merged_centroid
+        del clusters[bj]
+        del centroids[bj]
+
+    labels = [0] * n
+    for cluster_id, members in enumerate(clusters):
+        for idx in members:
+            labels[idx] = cluster_id
+    return labels
+
+
+# 클러스터를 병합할 최소 유사도. build_speaker_timeline의 SPEAKER_MIN_MARGIN(0.05)과는
+# 다른 종류의 값이다 — 이건 "같은 사람인가"를 묻고, margin은 "등록자 중 누구인가"를 묻는다.
+# 값 자체는 실측 없이 정한 초안이다 — probe_clustered_timeline.py(예정)로 검증 전에는
+# 배포 기본값을 켜지 않는다(아래 SPEAKER_TIMELINE_CLUSTERED 참고).
+_CLUSTER_MERGE_FLOOR = float(os.getenv("SPEAKER_CLUSTER_MERGE_FLOOR", "0.55"))
+
+# 묶음 단위 판정(이 함수)을 실제로 쓸지. 기본값 꺼짐 — cpCER로 검증 전까지는
+# build_speaker_timeline(창별 독립 판정)이 그대로 배포 경로다.
+# 근거: NEXT.md #3 — "회의 내 프로필 판정 정확도 86~100% vs 등록 프로필 82~95%",
+# 나쁜 발화 하나가 결과를 뒤집는 문제(8b5f84b7의 이승주 2발화, EXPERIMENTS.md).
+SPEAKER_TIMELINE_CLUSTERED = os.getenv(
+    "SPEAKER_TIMELINE_CLUSTERED", "0").strip().lower() not in ("0", "false", "no")
+
+
+def build_speaker_timeline_clustered(
+    audio: np.ndarray,
+    profiles: dict[str, np.ndarray],
+    inference,
+    sample_rate: int = REALTIME_SAMPLE_RATE,
+) -> EnrolledSpeakerTimeline:
+    """
+    build_speaker_timeline()의 대안 — 창을 독립적으로 판정하지 않고, 회의 안에서
+    비슷한 목소리끼리 먼저 묶은 뒤(_cluster_windows) **묶음 전체의 평균 임베딩으로
+    딱 한 번** 등록 프로필과 대조한다. 묶음에 속한 모든 창이 그 판정을 그대로 받는다.
+
+    왜 (NEXT.md #3): 지금 방식(build_speaker_timeline)은 창 하나하나가 독립적으로
+    등록 프로필과 경쟁하므로, 경계선에 있는 사람(자기 프로필과의 유사도가 낮은 사람)은
+    창마다 판정이 흔들릴 수 있다 — 실측(2026-08-19, 8b5f84b7)에서 이승주의 발화 2건이
+    어디로 붙느냐에 따라 cpCER이 56.60~70.80%로 14.2%p 흔들렸다. 묶음으로 먼저 뭉치면
+    그 사람의 다른 발화 다수가 함께 평균에 들어가므로, 개별 창 하나의 노이즈가
+    전체 판정을 못 뒤집는다.
+
+    같은 이유로 명단 밖 오수락도 줄어들 것으로 기대한다 — 명단 밖 사람의 여러 발화가
+    함께 묶이면 평균 임베딩이 등록자 누구와도 안 닮을 가능성이 개별 창보다 높다.
+    **다만 이건 가설이다 — cpCER과 명단 밖 오수락을 실제로 재기 전에는 채택하지 않는다**
+    (EXPERIMENTS.md의 "하지 말 것": EER만 보고 채택 금지, 반드시 우리 회의로 확인).
+
+    ⚠️ 클러스터링이 실제 화자 수보다 적게 묶으면(다른 두 사람이 한 묶음이 되면) 그
+    묶음 전체가 한 이름으로 뭉개진다 — 창별 판정보다 이 실패 모드가 새로 생긴다.
+    _CLUSTER_MERGE_FLOOR가 너무 낮으면 이게 잦아진다. 반대로 너무 높으면 원래
+    문제(창별 흔들림)가 그대로 남는다 — 이 값 자체도 스윕이 필요하다.
+    """
+    from .speaker_id_service import LiveSpeakerIdentifier
+
+    identifier = LiveSpeakerIdentifier(inference, initial_profiles=profiles)
+    embeddings, bounds = _extract_windows(audio, identifier, sample_rate)
+    if not embeddings:
+        return EnrolledSpeakerTimeline([])
+
+    cluster_ids = _cluster_windows(
+        embeddings, max_clusters=max(1, len(profiles)), merge_floor=_CLUSTER_MERGE_FLOOR,
+    )
+    n_clusters = len(set(cluster_ids))
+
+    # 클러스터마다 평균 임베딩으로 딱 한 번 판정
+    members_by_cluster: dict[int, list[int]] = {}
+    for idx, cid in enumerate(cluster_ids):
+        members_by_cluster.setdefault(cid, []).append(idx)
+
+    cluster_name: dict[int, str | None] = {}
+    dropped_clusters = 0
+    for cid, members in members_by_cluster.items():
+        centroid = _unit(np.mean([embeddings[i] for i in members], axis=0))
+        name, _nearest, _score, _margin = identifier.match_closed_set(centroid)
+        cluster_name[cid] = name
+        if name is None:
+            dropped_clusters += 1
+
+    slots = [
+        (start, end, cluster_name[cid])
+        for (start, end), cid in zip(bounds, cluster_ids)
+    ]
+    slots.sort(key=lambda s: s[0])
+    timeline = EnrolledSpeakerTimeline(slots)
+    logger.info(
+        f"🕐 화자 타임라인(묶음): 창 {len(slots)}개 → 묶음 {n_clusters}개 "
+        f"(판정 실패 묶음 {dropped_clusters}/{n_clusters}) — {timeline.summary()}"
     )
     return timeline
 

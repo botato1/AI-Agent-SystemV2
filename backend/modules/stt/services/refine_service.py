@@ -26,7 +26,10 @@ from .overlap_detect import (
 )
 from .overlap_model import load_overlap_inference
 from .refine_webhook import notify_refine_done
-from .speaker_timeline import build_speaker_timeline, split_turns_by_timeline
+from .speaker_timeline import (
+    build_speaker_timeline, build_speaker_timeline_clustered,
+    split_turns_by_timeline, SPEAKER_TIMELINE_CLUSTERED,
+)
 from .speech_separation import active_channels, separate_sources
 from .transcript_correction import correct_transcript
 
@@ -422,8 +425,15 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
         profile_data = np.load(profiles_path)
         profiles = {name: profile_data[name] for name in profile_data.files}
         if profiles:
+            # SPEAKER_TIMELINE_CLUSTERED=1이면 묶음 단위 판정(실험적, 기본 꺼짐 —
+            # speaker_timeline.build_speaker_timeline_clustered 문서 참고). cpCER로
+            # 검증 전까지는 창별 독립 판정(build_speaker_timeline)이 배포 경로다.
+            timeline_fn = (
+                build_speaker_timeline_clustered if SPEAKER_TIMELINE_CLUSTERED
+                else build_speaker_timeline
+            )
             timeline = await loop.run_in_executor(
-                None, build_speaker_timeline,
+                None, timeline_fn,
                 audio, profiles, app_state.speaker_embedding_inference, sample_rate,
             )
             turns = split_turns_by_timeline(turns, timeline)
