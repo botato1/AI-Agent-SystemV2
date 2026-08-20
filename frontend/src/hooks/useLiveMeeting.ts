@@ -535,9 +535,24 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       reconnectTimerRef.current = setTimeout(connect, RECONNECT_RETRY_INTERVAL_MS);
     }
 
-    function connect() {
+    async function connect() {
       const isReconnectAttempt = reconnectDeadlineRef.current !== null;
-      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, meetingData.ws_ticket);
+
+      // ws_ticket은 1회용이라, 최초 연결에서 이미 소모된 티켓을 재연결 때 그대로 재사용하면
+      // 서버가 항상 거절한다(4401) - "재연결 중..."에서 영원히 못 벗어나던 원인이었다.
+      // 재연결 때는 /join으로 새 티켓을 받아서 붙는다. 백엔드가 원래 녹음 담당자(started_by)는
+      // view_only=False로 재발급해주므로, 호스트가 재연결해도 마이크 전송 권한이 유지된다.
+      let ticket = meetingData.ws_ticket;
+      if (isReconnectAttempt) {
+        const joinRes = await joinMeetingApi(workspaceId, meetingData.id);
+        if (joinRes.status !== "success" || !joinRes.wsTicket) {
+          scheduleReconnect();
+          return;
+        }
+        ticket = joinRes.wsTicket;
+      }
+
+      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, ticket);
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
 
