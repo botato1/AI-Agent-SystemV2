@@ -29,6 +29,10 @@ export interface Contradiction {
   // 채워지고, 그 외엔 null이다.
   meeting_id?: string | null;
   room_message_id?: string | null;
+  // source_type이 "room_message"일 때 그 발언이 속한 채팅방 id. 채팅방의 "회의 도움" 패널이
+  // 자기 방 소속인지 가리는 데 쓴다 - room_message_id로 현재 로드된 메시지 목록과 조인하는
+  // 방식은 메시지 목록이 최근 N개로 페이지네이션돼 있어 오래된 발언의 모순은 영영 못 찾았다.
+  session_room_id?: string | null;
   reference_type: ContradictionReferenceType;
   // reference_type이 "decision"이 아닐 때만 채워진다(문서/코드 참조) - 이 경우 문서 미리보기에 쓴다.
   reference_file_id: string;

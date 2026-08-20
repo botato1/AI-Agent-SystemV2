@@ -16,15 +16,6 @@ export interface ChatMessage {
   createdAt: string;
 }
 
-// Case0(결정 리마인더) - contradiction_alert(Case2/3)와 달리 해결 대상이 아니라
-// 가벼운 확인용 토스트로만 보여준다.
-export interface DecisionReminderToast {
-  id: string;
-  statementText: string;
-  displayMessage: string | null;
-  decisionId: string | null;
-}
-
 export interface DocItem {
   id: string;
   name: string;
@@ -58,12 +49,14 @@ export function useChannelRuntime(
   memberNameById: Record<string, string>
 ) {
   const [roomMessages, setRoomMessages] = useState<RoomMessage[]>([]);
-  const [decisionReminders, setDecisionReminders] = useState<DecisionReminderToast[]>([]);
+  // 모순 감지(contradiction_alert)는 실제 내용을 이 훅에서 들고 있지 않고, 새 이벤트가
+  // 왔다는 것만 카운터로 알려서 MainArea가 워크스페이스 모순 목록을 즉시 재조회하게 한다 -
+  // 목록 자체는 useContradictions가 이미 8초 폴링으로 관리하고 있어 중복 상태를 안 만든다.
+  const [contradictionSignal, setContradictionSignal] = useState(0);
 
   // 채널 전환 시 실제 메시지 히스토리 조회
   useEffect(() => {
     async function loadMessages() {
-      setDecisionReminders([]);
       if (!workspaceId || !channelId) {
         setRoomMessages([]);
         return;
@@ -108,16 +101,8 @@ export function useChannelRuntime(
                 ? prev
                 : sortByCreatedAt([...prev, incoming])
             );
-          } else if (payload.type === "decision_reminder") {
-            const toast: DecisionReminderToast = {
-              id: payload.decision_id ? `reminder-${payload.decision_id}` : `reminder-${crypto.randomUUID()}`,
-              statementText: payload.statement_text || "",
-              displayMessage: payload.display_message || null,
-              decisionId: payload.decision_id || null,
-            };
-            setDecisionReminders((prev) =>
-              prev.some((r) => r.id === toast.id) ? prev : [...prev, toast]
-            );
+          } else if (payload.type === "contradiction_alert") {
+            setContradictionSignal((n) => n + 1);
           }
         } catch (error) {
           console.error("chat stream message parse error:", error);
@@ -185,15 +170,10 @@ export function useChannelRuntime(
     }
   }
 
-  function dismissDecisionReminder(id: string) {
-    setDecisionReminders((prev) => prev.filter((r) => r.id !== id));
-  }
-
   return {
     chatMessages,
     sendChatMessage,
     deleteMessage,
-    decisionReminders,
-    dismissDecisionReminder,
+    contradictionSignal,
   };
 }
