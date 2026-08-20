@@ -42,8 +42,17 @@ class MeetingRecord:
                          비정상 종료 시 audio.wav 헤더가 깨질 수 있는 건 알려진 한계).
     """
 
-    def __init__(self, session_id: str, speaker_mode: str, mixed_audio: bool = False):
+    def __init__(
+        self, session_id: str, speaker_mode: str, mixed_audio: bool = False,
+        expected_speakers: int | None = None,
+    ):
         """
+        expected_speakers: 자동감지(열린 집합) 모드에서 "오늘 몇 명이 말할지" 힌트.
+        등록된 목소리가 없는 회의(교수님 계정 하나로 여러 명이 참여하는 경우 등)는
+        화자 상한을 config.MAX_SPEAKERS(팀 인원에 맞춘 값)로 쓰는데, 실제 인원이
+        다르면 상한을 넘는 순간부터 조용히 엉뚱한 화자로 배정된다. 회의 후 재분석
+        (refine_service)도 이 값을 화자분리 상한으로 그대로 쓴다.
+
         mixed_audio=True: "각자 PC" 모드용 — 여러 참가자가 각자 보내는 오디오를
         "회의 시작 시각 기준 절대 위치"에 맞춰 메모리에서 합산(믹싱)하다가, 회의
         종료 시 한 번에 파일로 씀. 공용 마이크 모드(mixed_audio=False, 기본값)처럼
@@ -71,6 +80,7 @@ class MeetingRecord:
             # 개별 트랙으로 재전사할 때 쓴다 (없으면 재전사를 건너뜀 — 옛 회의 호환).
             "speaker_tracks": {},
             "segments": [],
+            "expected_speakers": expected_speakers,
         }
 
         # 참가자가 회의 시작 후 몇 초에 합류했는지 계산하는 기준 시각(단조 시계 —

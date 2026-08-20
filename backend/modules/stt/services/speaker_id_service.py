@@ -133,6 +133,7 @@ class LiveSpeakerIdentifier:
         inference: Inference,
         similarity_threshold: float = SPEAKER_SIMILARITY_THRESHOLD,
         initial_profiles: dict[str, np.ndarray] | None = None,
+        max_speakers: int | None = None,
     ):
         """
         initial_profiles를 넘기면 "사전 등록(enrollment) 모드"로 동작함:
@@ -143,11 +144,17 @@ class LiveSpeakerIdentifier:
 
         initial_profiles가 없으면(사전 등록 안 하고 바로 시작한 경우) 기존처럼
         열린 집합 방식(유사도 낮으면 새 화자 생성)으로 폴백.
+
+        max_speakers: 열린 집합에서 새 화자를 몇 명까지 만들지. 안 주면
+        config.MAX_SPEAKERS(팀 인원 6명 기준값)로 폴백한다 — 등록 안 된 사람이
+        여러 명 들어오는 회의(예: 한 계정으로 여러 명 참여)는 실제 인원이 다를 수
+        있으므로 호출부(웹소켓 엔드포인트)가 회의별로 넘겨줄 수 있게 열어둔다.
         """
         self.similarity_threshold = similarity_threshold
         self._inference = inference
         self._profiles: dict[str, np.ndarray] = dict(initial_profiles) if initial_profiles else {}
         self._closed_set = bool(initial_profiles)
+        self._max_speakers = max_speakers if max_speakers else MAX_SPEAKERS
         self._next_speaker_num = 1
 
     @property
@@ -346,9 +353,9 @@ class LiveSpeakerIdentifier:
         # 가장 가까운 기존 화자에 배정 — 상한이 없으면 판정이 한 번 흔들릴 때마다
         # 화자가 계속 늘어나 회의록이 유령 화자로 뒤덮인다(실측에서 SPEAKER_4까지 생김).
         # 이 경우 프로필은 갱신하지 않는다(확신이 없는 배정이라 지문을 오염시키면 안 됨).
-        if len(self._profiles) >= MAX_SPEAKERS:
+        if len(self._profiles) >= self._max_speakers:
             logger.info(
-                f"🗣️ 화자 매칭(상한 {MAX_SPEAKERS}명 도달, 최근접 배정): "
+                f"🗣️ 화자 매칭(상한 {self._max_speakers}명 도달, 최근접 배정): "
                 f"{best_label} (유사도 {best_score:.2f})"
             )
             return best_label

@@ -390,13 +390,19 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     # 그 인원으로 좁혀준다 — 범위가 좁을수록 클러스터링이 흔들릴 여지가 줄어든다.
     # 하한(MIN_SPEAKERS)까지 인원수로 올리지는 않는다: 등록만 하고 한 마디도 안 한 참석자가
     # 있으면 없는 화자를 억지로 만들어내게 되기 때문.
+    #
+    # 등록 프로필이 없으면(자동감지 회의) 회의 시작 시 받은 expected_speakers 힌트를 대신
+    # 쓴다 — 없으면 run_diarization이 config.MAX_SPEAKERS(팀 인원 기준값)로 폴백한다.
     profiles_path = os.path.join(meeting_dir, "profiles.npz")
     enrolled_count = len(np.load(profiles_path).files) if os.path.isfile(profiles_path) else 0
+    expected_speakers = meta.get("expected_speakers")
     waveform = {"waveform": torch.from_numpy(audio.reshape(1, -1)), "sample_rate": sample_rate}
     diarization_tracks = await run_diarization(
         app_state.diarize_pipeline,
         waveform,
-        max_speakers=enrolled_count if enrolled_count >= MIN_SPEAKERS else None,
+        max_speakers=(
+            enrolled_count if enrolled_count >= MIN_SPEAKERS else expected_speakers
+        ),
     )
     # 같은 화자의 인접 턴을 합치고 → 서로 겹치는 턴을 걷어낸다.
     # 겹침을 안 걷어내면 공용 마이크(오디오 하나)에서 같은 소리를 두 번 전사해

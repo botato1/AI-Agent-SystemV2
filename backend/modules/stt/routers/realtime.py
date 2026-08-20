@@ -366,7 +366,7 @@ async def _run_session(
 @router.websocket("/ws/stt/{session_id}")
 async def realtime_stt_ws(
     websocket: WebSocket, session_id: str, attendees: str = None,
-    participant_name: str = None, voice: int = 0,
+    participant_name: str = None, voice: int = 0, expected_speakers: int = None,
 ):
     """
     실시간 회의용 STT 엔드포인트.
@@ -386,7 +386,10 @@ async def realtime_stt_ws(
       최초 1회 등록해둔 목소리를 매 회의 재등록 없이 재사용)
     - 세션 등록 (/api/enroll — 전역 프로필이 없는 게스트용, 이번 회의 한정)
     둘 다 있으면 합쳐서 닫힌 집합을 구성 (같은 이름 충돌 시 세션 등록이 우선).
-    둘 다 없으면 자동감지(열린 집합) 폴백.
+    둘 다 없으면 자동감지(열린 집합) 폴백 — 이때 expected_speakers로 오늘 몇 명이
+    말할지 힌트를 줄 수 있다(한 계정으로 여러 명이 목소리 등록 없이 참여하는 경우).
+    안 주면 config.MAX_SPEAKERS(팀 인원 6명 기준값)로 동작하므로, 실제 인원이 이보다
+    많으면 초과 인원이 조용히 기존 화자에 잘못 배정된다.
 
     ② 각자 PC — participant_name 쿼리 파라미터로 자기 이름을 넣어 접속.
     같은 session_id로 여러 명이 각자 접속하면 하나의 공유 회의록으로 병합됨.
@@ -467,7 +470,10 @@ async def realtime_stt_ws(
         initial_profiles = merged_profiles or None
 
         if not is_reconnect:
-            recorder = MeetingRecord(session_id, "enrolled" if initial_profiles else "auto")
+            recorder = MeetingRecord(
+                session_id, "enrolled" if initial_profiles else "auto",
+                expected_speakers=None if initial_profiles else expected_speakers,
+            )
             websocket.app.state.active_recorders[session_id] = recorder
             if initial_profiles:
                 # 회의 후 정밀 재분석(C-4)이 익명 화자 라벨을 실제 이름으로 매핑할 때 필요
@@ -476,6 +482,7 @@ async def realtime_stt_ws(
         speaker_identifier = LiveSpeakerIdentifier(
             websocket.app.state.speaker_embedding_inference,
             initial_profiles=initial_profiles,
+            max_speakers=None if initial_profiles else expected_speakers,
         )
         # 스트리밍(비믹싱) 모드는 끊긴 동안의 공백이 오디오 자체엔 없으므로, 벽시계
         # 시간이 아니라 "지금까지 실제로 기록된 오디오 길이"를 기준으로 이어붙임
