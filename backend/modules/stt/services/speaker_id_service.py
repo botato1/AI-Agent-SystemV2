@@ -41,10 +41,17 @@ class SpeechBrainEmbedding:
     def __init__(self, model_id: str):
         # 지연 임포트 — speechbrain을 안 쓰는 배포에서는 설치조차 필요 없어야 한다
         from speechbrain.inference.speaker import EncoderClassifier
+        from speechbrain.utils.fetching import LocalStrategy
         savedir = os.path.join(SPEECHBRAIN_CACHE_DIR, model_id.replace("/", "_"))
         os.makedirs(savedir, exist_ok=True)
+        # speechbrain 기본값(SYMLINK)은 HF 캐시 → savedir로 심볼릭 링크를 건다.
+        # NAS 마운트가 심링크를 지원하지 않아 OSError(Errno 95)로 죽는다
+        # (reference_nas_env_gotchas의 ④와 같은 부류지만, 이건 huggingface_hub가
+        # 아니라 speechbrain 자체의 연결 로직이라 HF_HUB_DISABLE_SYMLINKS로는 안 잡힌다).
+        # COPY로 바꾸면 실제로 파일을 복사해서 링크 자체를 안 만든다.
         self._enc = EncoderClassifier.from_hparams(
-            source=model_id, savedir=savedir, run_opts={"device": DEVICE})
+            source=model_id, savedir=savedir, run_opts={"device": DEVICE},
+            local_strategy=LocalStrategy.COPY)
 
     def to(self, _device):
         """pyannote Inference와 호출 규약을 맞추기 위한 no-op. 디바이스는 생성 시 정한다."""
