@@ -488,7 +488,7 @@ class DocumentPipeline:
                 continue
 
             # 테두리 없는 표라 pdfplumber는 못 잡았지만, 이미 정규 텍스트로
-            # 70% 이상 덮여있으면 VL 재구성이 불필요한 중복이므로 스킵
+            # 60% 이상 덮여있으면 VL 재구성이 불필요한 중복이므로 스킵
             if block.figure_type == "table_image" and self._overlaps_extracted_text(nb, content.text):
                 print(f"  [SKIP] 이미 텍스트로 추출된 영역(테두리 없는 표) → VL 스킵 (bbox={nb})")
                 continue
