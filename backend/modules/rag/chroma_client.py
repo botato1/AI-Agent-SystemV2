@@ -34,6 +34,14 @@ if str(BASE_DIR) not in sys.path:
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
+# [수정 - 2026.08.20, 지수 리뷰] 임베딩 요청 URL이 localhost로 하드코딩돼 있었는데,
+# 82서버 배포판은 docker 네트워크 안에서 ollama 서비스명으로 접속해야 해서(localhost로는
+# 안 닿음) 서버에서 직접 코드를 패치해 쓰고 있었음 - git엔 이 패치가 없어서 재배포
+# (docker compose build)할 때마다 통째로 날아가고 있었다. ollama_client.py의
+# OLLAMA_BASE_URL(env var, 기본값 localhost:11434) 패턴을 그대로 재사용해 env로
+# 제어되게 통일한다.
+from backend.modules.llm.ollama_client import OLLAMA_BASE_URL
+
 CHROMA_DIR = os.getenv("CHROMA_DIR", os.path.join(BASE_DIR, "storage", "chroma"))
 BM25_DIR = os.path.join(BASE_DIR, "storage", "bm25")
 os.makedirs(BM25_DIR, exist_ok=True)
@@ -92,7 +100,7 @@ def _build_where(conditions: dict) -> dict:
 # ── 컬렉션 ────────────────────────────────────────────────────
 def get_or_create_collection(collection_name: str):
     ollama_ef = OllamaEmbeddingFunction(
-        url="http://localhost:11434/api/embeddings",
+        url=f"{OLLAMA_BASE_URL}/api/embeddings",
         model_name="bge-m3"
     )
     return chroma_client.get_or_create_collection(
