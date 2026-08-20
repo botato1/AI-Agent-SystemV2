@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>실시간 STT 테스트</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 18px; }
+  h3 { margin-top: 28px; }
+  #status { font-weight: bold; margin-bottom: 12px; }
+  #status.connected { color: #16a34a; }
+  #status.disconnected { color: #dc2626; }
+  button { padding: 8px 16px; font-size: 14px; margin-right: 8px; cursor: pointer; }
+  #transcript { border: 1px solid #ccc; border-radius: 8px; padding: 16px; min-height: 200px; line-height: 1.8; white-space: pre-wrap; }
+  .final { color: #111; }
+  .final.low-conf { color: #b45309; text-decoration: underline wavy; }
+  .tentative { color: #999; font-style: italic; }
+  .speaker-tag { font-size: 11px; color: #2563eb; font-weight: bold; margin-right: 4px; }
+  #log { margin-top: 16px; font-size: 12px; color: #666; max-height: 150px; overflow-y: auto; }
+  input { padding: 6px; font-size: 13px; }
+  #wsUrl, #serverUrl { width: 320px; }
+  #enrollRows { margin: 10px 0; }
+  .enroll-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .enroll-row input[type="text"] { width: 140px; }
+  .enroll-status { font-size: 12px; color: #666; min-width: 160px; }
+  .enroll-status.done { color: #16a34a; }
+  .enroll-fallback { display: none; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: #b45309; }
+  .enroll-fallback input[type="text"] { width: 120px; }
+  .rename-toggle-btn { font-size: 11px; padding: 4px 8px; }
+  .rename-box { align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; }
+  .rename-box input[type="text"] { width: 120px; }
+  fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+  legend { font-weight: bold; font-size: 13px; padding: 0 4px; }
+  .mode-disabled { opacity: 0.4; pointer-events: none; }
+</style>
+</head>
+<body>
+  <h1>🎙️ 실시간 STT 파이프라인 테스트</h1>
+
+  <fieldset>
+    <legend>연결 설정</legend>
+    <div><label>서버 주소 (http/https): </label><input id="serverUrl" value="http://localhost:8001" /></div>
+    <div style="margin-top:6px;"><label>세션 ID: </label><input id="sessionId" value="test-session-1" /></div>
+    <div style="margin-top:6px;">
+      <label>각자 PC 모드 - 내 이름: </label><input id="participantName" placeholder="비워두면 공용 마이크 모드" />
+      <label style="margin-left:12px"><input type="checkbox" id="voiceCall" /> 통화 켜기(서로 목소리 듣기)</label>
+      <span id="voiceHint" style="color:#b45309;font-size:12px;margin-left:6px"></span>
+      <span style="font-size:12px;color:#888;">(입력하면 화자식별 없이 이 이름으로 바로 라벨링됨. 같은 세션 ID로 여러 명이 각자 접속하면 하나의 회의로 병합)</span>
+    </div>
+  </fieldset>
+
+  <fieldset id="sharedMicSection">
+    <legend>👤 전역 목소리 프로필 — 최초 1회 등록하면 매 회의에서 재사용</legend>
+    <div id="enrollScript" style="font-size:13px;background:#f5f5f4;border-radius:8px;padding:10px 12px;margin-bottom:8px;line-height:1.6;">
+      (서버에서 등록 문장을 불러오는 중...)
+    </div>
+    <div style="margin-bottom:8px;">
+      <button id="reloadScriptBtn" type="button" style="font-size:12px;padding:4px 10px;">🔄 등록 문장 다시 불러오기 (서버 주소 바꾼 후 눌러주세요)</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="registerProfileBtn" type="button">🎙️ 위 문장을 읽으며 내 목소리 등록</button>
+      <span id="profileStatus" class="enroll-status">미등록</span>
+      <button id="profileRenameToggleBtn" type="button" class="rename-toggle-btn" style="display:none;">✏️ 이름 수정</button>
+    </div>
+    <div id="profileFallback" class="enroll-fallback">
+      이름 인식 실패 (인식된 말: <span id="profileDetected"></span>)
+      <input type="text" id="profileManualName" placeholder="이름 직접 입력" />
+      <button type="button" id="profileManualBtn">이 이름으로 등록</button>
+    </div>
+    <div id="profileRenameBox" class="rename-box" style="display:none;">
+      <input type="text" id="profileRenameInput" placeholder="올바른 이름 입력" />
+      <button type="button" id="profileRenameConfirmBtn">수정 완료</button>
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <button id="loadProfilesBtn" type="button">참석자 목록 불러오기</button>
+    </div>
+    <div id="attendeeChecks" style="font-size:13px;margin-top:6px;"></div>
+    <div id="attendeeSelectedSummary" style="font-size:12px;color:#2563eb;margin-top:4px;">선택된 참석자: (없음)</div>
+    <div style="font-size:12px;color:#888;margin-top:4px;">
+      오늘 회의 참석자를 체크한 뒤 시작하면, 매번 목소리 등록 없이 체크한 사람들로 화자를 인식함.
+      아무도 체크 안 하면 아래(세션 등록) 또는 자동감지로 동작.
+    </div>
+  </fieldset>
+
+  <details style="margin-bottom:16px;" id="guestEnrollSection">
+    <summary style="cursor:pointer;font-size:13px;color:#555;">① 이번 회의 한정 화자 등록 (전역 프로필이 없는 게스트용, 펼쳐서 사용)</summary>
+    <fieldset style="border-top:none;border-top-left-radius:0;border-top-right-radius:0;">
+      <div>
+        <label>참석 인원수: </label>
+        <input id="speakerCount" type="number" min="1" max="10" value="2" style="width:60px;" />
+        <button id="buildEnrollRowsBtn">인원 입력칸 만들기</button>
+        <button id="clearEnrollBtn">등록 초기화</button>
+      </div>
+      <div id="enrollRows"></div>
+      <div style="font-size:12px;color:#888;">
+        각자 버튼 누르고 <b>"안녕하세요 OOO입니다"</b>라고 말하면, 이름이 자동으로 인식되어 등록됨
+        (말이 끝나면 자동으로 녹음 종료). 이름 인식이 실패하면 직접 입력할 수 있는 칸이 나타남.
+        등록 안 하고 바로 시작하면 자동감지(열린 집합) 모드로 동작 —
+        이때도 위 "참석 인원수"가 화자 상한 힌트로 그대로 전달됨.
+        <b>확실치 않으면 실제보다 넉넉하게(+1) 입력할 것</b> — 적게 잡으면
+        서로 다른 두 사람이 한 이름으로 강제로 뭉쳐지는데(사후 복구 불가),
+        많이 잡으면 같은 사람이 여러 이름으로 쪼개질 뿐이라 나중에 병합
+        가능합니다. 과소 입력이 훨씬 위험합니다(2026-08-20 실측 확인).
+      </div>
+    </fieldset>
+  </details>
+
+  <div id="status" class="disconnected">연결 안 됨</div>
+  <button id="startBtn">🔴 ② 시작 (마이크 켜기)</button>
+  <button id="stopBtn" disabled>⏹️ 종료</button>
+
+  <h3>실시간 전사 결과</h3>
+  <div id="transcript"></div>
+
+  <h3>이벤트 로그</h3>
+  <div id="log"></div>
+
+<script>
+const REALTIME_SAMPLE_RATE = 16000; // 백엔드 config.REALTIME_SAMPLE_RATE 와 반드시 일치해야 함
+const ENROLL_DURATION_SEC = 5;
+
+let audioContext, mediaStream, sourceNode, processorNode, ws;
+let tentativeSpan = null;
+
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const logEl = document.getElementById("log");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const serverUrlInput = document.getElementById("serverUrl");
+const sessionIdInput = document.getElementById("sessionId");
+const participantNameInput = document.getElementById("participantName");
+const speakerCountInput = document.getElementById("speakerCount");
+const enrollRowsEl = document.getElementById("enrollRows");
+const sharedMicSectionEl = document.getElementById("sharedMicSection");
+const guestEnrollSectionEl = document.getElementById("guestEnrollSection");
+const voiceCallInput = document.getElementById("voiceCall");
+const voiceHintEl = document.getElementById("voiceHint");
+
+// 두 모드(각자 PC / 공용 마이크)는 섞어 쓸 수 없어(백엔드가 회의 하나를 하나의
+// 모드로만 처리함) — 각자 PC 모드용 이름을 입력하면 공용 마이크 모드 UI를 잠가서
+// 실수로 두 방식이 섞이는 걸 방지
+function updateModeExclusivity() {
+  const groupMode = participantNameInput.value.trim().length > 0;
+  sharedMicSectionEl.classList.toggle("mode-disabled", groupMode);
+  guestEnrollSectionEl.classList.toggle("mode-disabled", groupMode);
+  participantNameInput.disabled = [...document.querySelectorAll(".attendee-cb:checked")].length > 0;
+
+  // 통화는 각자 PC 모드에서만 의미가 있다 — 공용 마이크 모드는 한 공간에 모여 있어
+  // 서로 목소리를 되돌려주면 하울링만 생긴다(서버도 이 경우 voice를 무시함)
+  voiceCallInput.disabled = !groupMode;
+  if (!groupMode) voiceCallInput.checked = false;
+  voiceHintEl.textContent = !groupMode
+    ? "각자 PC 모드에서만 사용할 수 있어요"
+    : (voiceCallInput.checked ? "헤드폰을 꼭 써주세요 (스피커로 들으면 하울링이 생겨요)" : "");
+}
+participantNameInput.addEventListener("input", updateModeExclusivity);
+voiceCallInput.addEventListener("change", updateModeExclusivity);
+updateModeExclusivity();
+
+function log(msg) {
+  const line = document.createElement("div");
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.prepend(line);
+}
+
+function setStatus(connected) {
+  statusEl.textContent = connected ? "연결됨" : "연결 안 됨";
+  statusEl.className = connected ? "connected" : "disconnected";
+}
+
+function httpBase() {
+  return serverUrlInput.value.replace(/\/$/, "");
+}
+
+function wsUrl() {
+  const participantName = participantNameInput.value.trim();
+  let query;
+  if (participantName) {
+    // 각자 PC 모드 — 화자식별 없이 이 이름으로 바로 라벨링됨. attendees와는 같이 안 씀
+    // (백엔드가 participant_name이 있으면 attendees 로직 자체를 안 탐)
+    query = `?participant_name=${encodeURIComponent(participantName)}`;
+    // 통화(오디오 릴레이)는 옵트인 — 켜면 이 연결이 바이너리 프레임도 받게 된다
+    if (voiceCallInput.checked) query += "&voice=1";
+  } else {
+    // 공용 마이크 모드 — 전역 프로필 참석자가 체크돼 있으면 attendees 파라미터로 전달
+    const checked = [...document.querySelectorAll(".attendee-cb:checked")].map((c) => c.value);
+    query = checked.length ? `?attendees=${encodeURIComponent(checked.join(","))}` : "";
+    // 아무도 등록/체크 안 했으면 자동감지(열린 집합) 모드로 빠지는데, 이때 "참석
+    // 인원수" 입력값을 화자 상한 힌트로 같이 보낸다 — 안 보내면 서버가 팀 인원(6명)
+    // 기준값을 써서, 실제 인원이 다르면 초과분이 조용히 잘못 배정된다.
+    if (!checked.length) {
+      const count = parseInt(speakerCountInput.value, 10);
+      if (count > 0) {
+        query += (query ? "&" : "?") + `expected_speakers=${count}`;
+      }
+    }
+  }
+  return httpBase().replace(/^http/, "ws") + `/api/ws/stt/${encodeURIComponent(sessionIdInput.value)}` + query;
+}
+
+// ──────────────────────────────────────────
+// 통화 재생부 (오디오 릴레이 수신)
+//
+// 서버는 [1바이트 발신자 슬롯][PCM16LE] 형태의 바이너리 프레임을 보낸다.
+// 발신자별로 재생 타임라인을 따로 관리하는 게 핵심 — 여러 사람 프레임이 섞여
+// 도착하는데 한 타임라인에 이어붙이면 서로 밀어내면서 소리가 뭉개진다.
+// 각 발신자의 다음 재생 시각에 예약해두면 Web Audio가 알아서 믹싱해준다.
+// ──────────────────────────────────────────
+const VOICE_JITTER_SEC = 0.12;  // 네트워크 흔들림 흡수용 여유. 작을수록 지연이 짧지만 끊김이 잦아짐
+const VOICE_MAX_LEAD_SEC = 0.6; // 이보다 많이 밀리면 밀린 만큼 버리고 현재로 당김(클럭 드리프트/일시적 폭주 대응)
+let voiceCtx = null;
+const voiceNextAt = new Map();  // 발신자 슬롯 → 다음 프레임을 재생할 시각
+
+function ensureVoiceContext() {
+  // 서버 오디오가 16kHz라 컨텍스트도 16kHz로 맞춘다 — 리샘플링을 브라우저에 맡기면
+  // 프레임 경계마다 미세한 아티팩트가 생길 수 있어서.
+  if (!voiceCtx) voiceCtx = new AudioContext({ sampleRate: REALTIME_SAMPLE_RATE });
+  if (voiceCtx.state === "suspended") voiceCtx.resume();
+  return voiceCtx;
+}
+
+function playVoiceFrame(arrayBuffer) {
+  const ctx = ensureVoiceContext();
+  const bytes = new Uint8Array(arrayBuffer);
+  if (bytes.length < 3) return;             // 헤더(1) + 최소 샘플 1개(2)
+  const slot = bytes[0];
+  const pcm = new DataView(arrayBuffer, 1); // 헤더 뒤부터가 오디오
+  const sampleCount = Math.floor((arrayBuffer.byteLength - 1) / 2);
+
+  const buf = ctx.createBuffer(1, sampleCount, REALTIME_SAMPLE_RATE);
+  const channel = buf.getChannelData(0);
+  for (let i = 0; i < sampleCount; i++) channel[i] = pcm.getInt16(i * 2, true) / 0x8000;
+
+  const now = ctx.currentTime;
+  let startAt = voiceNextAt.get(slot) ?? 0;
+  if (startAt < now + VOICE_JITTER_SEC) {
+    // 처음이거나 버퍼가 말라붙은 경우 — 지터 여유를 두고 다시 시작
+    startAt = now + VOICE_JITTER_SEC;
+  } else if (startAt > now + VOICE_MAX_LEAD_SEC) {
+    // 너무 앞서 예약돼 있음(지연 누적) — 밀린 분을 버리고 현재로 당겨서 대화가 밀리지 않게
+    startAt = now + VOICE_JITTER_SEC;
+  }
+
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start(startAt);
+  voiceNextAt.set(slot, startAt + buf.duration);
+}
+
+function resetVoicePlayback() {
+  voiceNextAt.clear();
+  if (voiceCtx) {
+    voiceCtx.close().catch(() => {});
+    voiceCtx = null;
+  }
+}
+
+// 브라우저 오디오(보통 44.1k/48kHz Float32) → 서버가 기대하는 16kHz PCM16LE로 변환
+function downsampleTo16k(float32Array, inputSampleRate) {
+  if (inputSampleRate === REALTIME_SAMPLE_RATE) return float32Array;
+  const ratio = inputSampleRate / REALTIME_SAMPLE_RATE;
+  const outLength = Math.floor(float32Array.length / ratio);
+  const result = new Float32Array(outLength);
+  for (let i = 0; i < outLength; i++) {
+    result[i] = float32Array[Math.floor(i * ratio)];
+  }
+  return result;
+}
+
+function float32ToPCM16LE(float32Array) {
+  const buffer = new ArrayBuffer(float32Array.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); // little-endian
+  }
+  return buffer;
+}
+
+// ── 👤 전역 목소리 프로필 (최초 1회 등록, 매 회의 재사용) ──────────
+const profileStatus = document.getElementById("profileStatus");
+const profileFallback = document.getElementById("profileFallback");
+const profileDetected = document.getElementById("profileDetected");
+const attendeeChecksEl = document.getElementById("attendeeChecks");
+let lastProfilePcm16 = null;
+let currentProfileName = null;  // 이름 수정(rename) 시 old_name으로 필요
+
+// 등록 문장은 세션 등록("안녕하세요 OOO입니다" 한 마디)보다 길어서(10~12초),
+// 문장 중간의 쉼표 호흡에 자동 종료가 걸리지 않게 침묵 판정을 길게, 최대 시간도 넉넉하게
+const PROFILE_MAX_SEC = 25;
+const PROFILE_SILENCE_MS = 1500;
+
+async function loadEnrollScript() {
+  const res = await fetch(`${httpBase()}/api/profiles/script`);
+  const data = await res.json();
+  document.getElementById("enrollScript").textContent =
+    "📖 읽을 문장: " + data.script.replace("OOO", "(본인 이름)");
+}
+
+async function registerGlobalProfile(manualName) {
+  const btn = document.getElementById("registerProfileBtn");
+  btn.disabled = true;
+  profileFallback.style.display = "none";
+
+  if (!manualName) {
+    profileStatus.textContent = "🔴 듣는 중... 위 문장을 끝까지 읽어주세요";
+    const merged = await recordUntilSilence(PROFILE_MAX_SEC, PROFILE_SILENCE_MS);
+    lastProfilePcm16 = float32ToPCM16LE(merged);
+    profileStatus.textContent = "인식 중...";
+  } else {
+    profileStatus.textContent = "업로드 중...";
+  }
+
+  const nameParam = manualName ? `?speaker_name=${encodeURIComponent(manualName)}` : "";
+  const res = await fetch(`${httpBase()}/api/profiles${nameParam}`, {
+    method: "POST",
+    body: lastProfilePcm16,
+    headers: { "Content-Type": "application/octet-stream" },
+  });
+  const data = await res.json();
+
+  if (data.status === "success") {
+    profileStatus.textContent = `✅ "${data.speaker_name}" 영구 등록됨 (인식된 말: "${data.detected_text}")`;
+    profileStatus.className = "enroll-status done";
+    currentProfileName = data.speaker_name;
+    // 발음이 비슷한 이름(예: 이준오→이준호)은 인식 "성공"으로 나와도 틀릴 수 있어
+    // 등록 성공 여부와 무관하게 항상 수정 버튼을 노출
+    document.getElementById("profileRenameToggleBtn").style.display = "inline-block";
+    log(`👤 전역 프로필 등록: ${data.speaker_name}`);
+    renderAttendeeChecks(data.registered_names);
+  } else if (data.name_extraction_failed) {
+    profileStatus.textContent = "❌ 이름 인식 실패";
+    profileDetected.textContent = data.detected_text || "(인식 안 됨)";
+    profileFallback.style.display = "flex";
+    log(`⚠️ 전역 프로필 이름 인식 실패: "${data.detected_text}"`);
+  } else {
+    profileStatus.textContent = "❌ 등록 실패";
+    log(`❌ 전역 프로필 등록 실패: ${data.message}`);
+  }
+  btn.disabled = false;
+}
+
+function updateAttendeeSelectedSummary() {
+  const checked = [...attendeeChecksEl.querySelectorAll(".attendee-cb:checked")].map((c) => c.value);
+  document.getElementById("attendeeSelectedSummary").textContent =
+    "선택된 참석자: " + (checked.length ? checked.join(", ") : "(없음)");
+  updateModeExclusivity();
+}
+
+function renderAttendeeChecks(names) {
+  attendeeChecksEl.innerHTML = "";
+  if (!names.length) {
+    attendeeChecksEl.textContent = "(등록된 사람 없음)";
+    updateAttendeeSelectedSummary();
+    return;
+  }
+  names.forEach((name) => {
+    const row = document.createElement("div");
+    row.style.marginBottom = "4px";
+    row.innerHTML = `
+      <label style="margin-right:6px;"><input type="checkbox" class="attendee-cb" value="${name}" /> ${name}</label>
+      <button type="button" class="rename-toggle-btn attendee-rename-btn" data-name="${name}">✏️ 수정</button>
+      <button type="button" class="rename-toggle-btn attendee-delete-btn" data-name="${name}">🗑️ 삭제</button>
+    `;
+    attendeeChecksEl.appendChild(row);
+  });
+  attendeeChecksEl.querySelectorAll(".attendee-cb").forEach((cb) => {
+    cb.addEventListener("change", updateAttendeeSelectedSummary);
+  });
+  attendeeChecksEl.querySelectorAll(".attendee-rename-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const oldName = btn.dataset.name;
+      const newName = prompt(`"${oldName}"의 새 이름을 입력하세요:`, oldName);
+      if (!newName || !newName.trim() || newName === oldName) return;
+      const url = `${httpBase()}/api/profiles/${encodeURIComponent(oldName)}/rename?new_name=${encodeURIComponent(newName.trim())}`;
+      const res = await fetch(url, { method: "PATCH" });
+      const data = await res.json();
+      if (data.status === "success") {
+        log(`✏️ 전역 프로필 이름 수정 완료: ${oldName} → ${data.speaker_name}`);
+        renderAttendeeChecks(data.registered_names);
+      } else {
+        log(`❌ 전역 프로필 이름 수정 실패: ${data.message}`);
+      }
+    });
+  });
+  attendeeChecksEl.querySelectorAll(".attendee-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`"${name}" 프로필을 삭제할까요? (되돌릴 수 없음)`)) return;
+      const res = await fetch(`${httpBase()}/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.status === "success") {
+        log(`🗑️ 전역 프로필 삭제 완료: ${name}`);
+        renderAttendeeChecks(data.registered_names);
+      } else {
+        log(`❌ 전역 프로필 삭제 실패: ${data.message}`);
+      }
+    });
+  });
+  updateAttendeeSelectedSummary();
+}
+
+async function loadGlobalProfiles() {
+  const res = await fetch(`${httpBase()}/api/profiles`);
+  const data = await res.json();
+  renderAttendeeChecks(data.names || []);
+  log(`👤 전역 프로필 ${data.names.length}명 불러옴`);
+}
+
+document.getElementById("registerProfileBtn").onclick = () =>
+  registerGlobalProfile(null).catch((e) => log("전역 등록 실패: " + e.message));
+document.getElementById("profileManualBtn").onclick = () =>
+  registerGlobalProfile(document.getElementById("profileManualName").value).catch((e) => log("전역 등록 실패: " + e.message));
+document.getElementById("loadProfilesBtn").onclick = () =>
+  loadGlobalProfiles().catch((e) => log("목록 불러오기 실패: " + e.message));
+
+document.getElementById("profileRenameToggleBtn").onclick = () => {
+  const box = document.getElementById("profileRenameBox");
+  document.getElementById("profileRenameInput").value = currentProfileName || "";
+  box.style.display = box.style.display === "none" ? "flex" : "none";
+};
+
+document.getElementById("profileRenameConfirmBtn").onclick = async () => {
+  const newName = document.getElementById("profileRenameInput").value.trim();
+  if (!newName || !currentProfileName) return;
+  const url = `${httpBase()}/api/profiles/${encodeURIComponent(currentProfileName)}/rename?new_name=${encodeURIComponent(newName)}`;
+  const res = await fetch(url, { method: "PATCH" });
+  const data = await res.json();
+  if (data.status === "success") {
+    currentProfileName = data.speaker_name;
+    profileStatus.textContent = `✅ "${data.speaker_name}" 영구 등록됨 (수정됨)`;
+    profileStatus.className = "enroll-status done";
+    document.getElementById("profileRenameBox").style.display = "none";
+    renderAttendeeChecks(data.registered_names);
+    log(`✏️ 전역 프로필 이름 수정 완료: ${data.speaker_name}`);
+  } else {
+    log(`❌ 전역 프로필 이름 수정 실패: ${data.message}`);
+  }
+};
+
+// 페이지 열리면 등록 문장과 기존 프로필 목록을 자동으로 불러옴
+loadEnrollScript().catch(() => {
+  document.getElementById("enrollScript").textContent = "(서버 연결 후 새로고침하면 등록 문장이 표시됩니다)";
+});
+loadGlobalProfiles().catch(() => {});
+
+// 서버 주소를 바꾼 뒤 새로고침 없이 바로 다시 불러올 수 있게
+document.getElementById("reloadScriptBtn").onclick = () => {
+  document.getElementById("enrollScript").textContent = "(불러오는 중...)";
+  loadEnrollScript().catch(() => {
+    document.getElementById("enrollScript").textContent = "(불러오기 실패 — 서버 주소를 확인해주세요)";
+  });
+  loadGlobalProfiles().catch(() => {});
+};
+
+// ── ① 화자 사전 등록 (말하면 자동으로 이름 인식) ──────────────
+const ENROLL_MAX_SEC = 8;          // 이 이상 말해도 강제 종료
+const ENROLL_SILENCE_MS = 800;     // 말 시작 후 이만큼 조용하면 자동 종료
+const ENROLL_SPEECH_RMS = 0.02;    // 이 이상 소리 크기여야 "말하는 중"으로 판단
+
+document.getElementById("buildEnrollRowsBtn").onclick = () => {
+  const n = parseInt(speakerCountInput.value, 10) || 1;
+  enrollRowsEl.innerHTML = "";
+  for (let i = 1; i <= n; i++) {
+    const row = document.createElement("div");
+    row.className = "enroll-row";
+    row.style.flexDirection = "column";
+    row.style.alignItems = "flex-start";
+    row.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button type="button" class="record-btn">🎙️ ${i}번째 분 — "안녕하세요 OOO입니다" 녹음</button>
+        <span class="enroll-status">미등록</span>
+        <button type="button" class="rename-toggle-btn" style="display:none;">✏️ 이름 수정</button>
+      </div>
+      <div class="enroll-fallback">
+        이름 인식 실패 (인식된 말: <span class="detected-text"></span>)
+        <input type="text" placeholder="이름 직접 입력" />
+        <button type="button" class="manual-confirm-btn">이 이름으로 등록</button>
+      </div>
+      <div class="rename-box" style="display:none;">
+        <input type="text" placeholder="올바른 이름 입력" />
+        <button type="button" class="rename-confirm-btn">수정 완료</button>
+      </div>
+    `;
+    const recordBtn = row.querySelector(".record-btn");
+    const statusSpan = row.querySelector(".enroll-status");
+    const fallbackDiv = row.querySelector(".enroll-fallback");
+    const detectedTextSpan = row.querySelector(".detected-text");
+    const manualInput = row.querySelector('.enroll-fallback input[type="text"]');
+    const manualConfirmBtn = row.querySelector(".manual-confirm-btn");
+    const renameToggleBtn = row.querySelector(".rename-toggle-btn");
+    const renameBox = row.querySelector(".rename-box");
+    const renameInput = row.querySelector('.rename-box input[type="text"]');
+    const renameConfirmBtn = row.querySelector(".rename-confirm-btn");
+    const lastPcm16 = { value: null };  // 이름 인식 실패 시, 수동 재시도에서 같은 오디오 재사용
+    const currentName = { value: null };  // rename 시 old_name으로 필요 (발음이 비슷해 오인식됐어도 성공으로 등록될 수 있음)
+
+    recordBtn.onclick = () => recordAndEnroll(null, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, false, currentName, renameToggleBtn);
+    manualConfirmBtn.onclick = () => recordAndEnroll(manualInput.value, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, true, currentName, renameToggleBtn);
+
+    renameToggleBtn.onclick = () => {
+      renameInput.value = currentName.value || "";
+      renameBox.style.display = renameBox.style.display === "none" ? "flex" : "none";
+    };
+    renameConfirmBtn.onclick = async () => {
+      const newName = renameInput.value.trim();
+      if (!newName || !currentName.value) return;
+      const sessionId = encodeURIComponent(sessionIdInput.value);
+      const url = `${httpBase()}/api/enroll/${sessionId}/rename?old_name=${encodeURIComponent(currentName.value)}&new_name=${encodeURIComponent(newName)}`;
+      const res = await fetch(url, { method: "PATCH" });
+      const data = await res.json();
+      if (data.status === "success") {
+        currentName.value = data.speaker_name;
+        statusSpan.textContent = `✅ "${data.speaker_name}" 등록됨 (수정됨)`;
+        statusSpan.className = "enroll-status done";
+        renameBox.style.display = "none";
+        log(`✏️ 이름 수정 완료: ${data.speaker_name}`);
+      } else {
+        log(`❌ 이름 수정 실패: ${data.message}`);
+      }
+    };
+
+    enrollRowsEl.appendChild(row);
+  }
+};
+
+document.getElementById("clearEnrollBtn").onclick = async () => {
+  await fetch(`${httpBase()}/api/enroll/${encodeURIComponent(sessionIdInput.value)}`, { method: "DELETE" });
+  document.querySelectorAll(".enroll-status").forEach((el) => {
+    el.textContent = "미등록";
+    el.className = "enroll-status";
+  });
+  document.querySelectorAll(".enroll-fallback").forEach((el) => (el.style.display = "none"));
+  document.querySelectorAll(".rename-toggle-btn").forEach((el) => (el.style.display = "none"));
+  document.querySelectorAll(".rename-box").forEach((el) => (el.style.display = "none"));
+  log("화자 등록 초기화됨");
+};
+
+// 말이 시작되고 나서 일정 시간 조용해지면 자동으로 녹음을 멈추는 간단한 클라이언트 측 침묵 감지.
+// maxSec/silenceMs를 조절해 짧은 한 마디(세션 등록)와 긴 문단(전역 프로필) 둘 다 지원.
+function recordUntilSilence(maxSec = ENROLL_MAX_SEC, silenceMs = ENROLL_SILENCE_MS) {
+  return new Promise(async (resolve, reject) => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+
+    let hasSpokenYet = false;
+    let silentSinceMs = 0;
+    let elapsedMs = 0;
+    let finished = false;
+
+    const finish = async () => {
+      if (finished) return;  // onaudioprocess가 disconnect 직전에 한 번 더 발화할 수 있어 중복 방지
+      finished = true;
+      processor.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach((t) => t.stop());
+      await ctx.close();
+
+      const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+      const merged = new Float32Array(totalLength);
+      let offset = 0;
+      for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+      resolve(merged);
+    };
+
+    processor.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      const downsampled = downsampleTo16k(input, ctx.sampleRate);
+      chunks.push(new Float32Array(downsampled));
+
+      // RMS(음량 크기) 계산해서 "말하는 중"인지 "조용한지" 판단
+      let sumSquares = 0;
+      for (let i = 0; i < input.length; i++) sumSquares += input[i] * input[i];
+      const rms = Math.sqrt(sumSquares / input.length);
+      const chunkMs = (input.length / ctx.sampleRate) * 1000;
+      elapsedMs += chunkMs;
+
+      if (rms >= ENROLL_SPEECH_RMS) {
+        hasSpokenYet = true;
+        silentSinceMs = 0;
+      } else if (hasSpokenYet) {
+        silentSinceMs += chunkMs;
+      }
+
+      if ((hasSpokenYet && silentSinceMs >= silenceMs) || elapsedMs >= maxSec * 1000) {
+        finish();
+      }
+    };
+
+    source.connect(processor);
+    processor.connect(ctx.destination);
+  });
+}
+
+async function recordAndEnroll(manualName, statusSpan, recordBtn, fallbackDiv, detectedTextSpan, lastPcm16, isManualRetry = false, currentName = { value: null }, renameToggleBtn = null) {
+  recordBtn.disabled = true;
+  fallbackDiv.style.display = "none";
+  statusSpan.textContent = isManualRetry ? "업로드 중..." : "🔴 듣는 중... (말하면 자동으로 인식돼요)";
+
+  if (!isManualRetry) {
+    const merged = await recordUntilSilence();
+    lastPcm16.value = float32ToPCM16LE(merged);
+    statusSpan.textContent = "인식 중...";
+  }
+  // 수동 재시도(isManualRetry=true)는 재녹음 없이, 직전에 녹음해둔 오디오를 그대로 재사용
+  const pcm16 = lastPcm16.value;
+
+  const sessionId = encodeURIComponent(sessionIdInput.value);
+  const nameParam = manualName ? `?speaker_name=${encodeURIComponent(manualName)}` : "";
+  const url = `${httpBase()}/api/enroll/${sessionId}${nameParam}`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    body: pcm16,
+    headers: { "Content-Type": "application/octet-stream" },
+  });
+  const data = await res.json();
+
+  if (data.status === "success") {
+    statusSpan.textContent = `✅ "${data.speaker_name}" 등록됨 (인식된 말: "${data.detected_text}", 총 ${data.registered_count}명)`;
+    statusSpan.className = "enroll-status done";
+    currentName.value = data.speaker_name;
+    // 이름은 뽑혔지만 발음이 비슷해 틀리게 인식됐을 수 있어 (예: "이준오"→"이준호"),
+    // 등록 성공 여부와 무관하게 항상 수정 가능하게 노출
+    if (renameToggleBtn) renameToggleBtn.style.display = "inline-block";
+    log(`📇 화자 등록 성공: ${data.speaker_name}`);
+  } else {
+    // 이름 자동 인식 실패 → 수동 입력 폴백 UI 표시
+    statusSpan.textContent = "❌ 이름 인식 실패";
+    detectedTextSpan.textContent = data.detected_text || "(인식 안 됨)";
+    fallbackDiv.style.display = "flex";
+    log(`⚠️ 이름 자동 인식 실패: "${data.detected_text}"`);
+  }
+  recordBtn.disabled = false;
+}
+
+// ── ② 실시간 전사 ──────────────────────────────────────
+function renderPartial(data) {
+  if (!tentativeSpan) {
+    tentativeSpan = document.createElement("span");
+    tentativeSpan.className = "tentative";
+    transcriptEl.appendChild(tentativeSpan);
+  }
+  // partial의 speaker는 '지금 말하는 사람'의 추정값 — 확정본이 오면 덮어써진다.
+  // 물음표를 붙여 확정 화자 태그(speaker-tag)와 눈으로 구분되게 한다.
+  const who = data.speaker ? `[${data.speaker}?] ` : "";
+  tentativeSpan.textContent = " " + who + data.confirmed_text + " " + data.tentative_text + "...";
+}
+
+function renderFinal(data) {
+  // data.remote=true면 같은 회의의 다른 참가자가 말한 내용(서버가 중계해준 것).
+  // 내 잠정 텍스트는 내가 말할 때만 지운다 — 남의 발언이 들어왔다고 내가 말하던
+  // 잠정 텍스트를 지워버리면 화면이 튄다.
+  if (!data.remote && tentativeSpan) {
+    tentativeSpan.remove();
+    tentativeSpan = null;
+  }
+  const segments = data.final.segments;
+  segments.forEach((seg) => {
+    if (data.speaker) {
+      const tag = document.createElement("span");
+      tag.className = "speaker-tag";
+      tag.textContent = data.speaker;
+      transcriptEl.appendChild(tag);
+    }
+    const span = document.createElement("span");
+    span.className = "final" + (seg.confident ? "" : " low-conf");
+    span.textContent = seg.text + " ";
+    span.title = `avg_logprob=${seg.avg_logprob.toFixed(2)}, no_speech_prob=${seg.no_speech_prob.toFixed(2)}`;
+    transcriptEl.appendChild(span);
+  });
+  transcriptEl.appendChild(document.createElement("br"));
+  log(
+    data.remote
+      ? `👥 다른 참가자 발언 수신 (speaker=${data.speaker}, offset=${data.chunk_offset_sec}s)`
+      : `✅ final 청크 수신 (offset=${data.chunk_offset_sec}s, latency=${data.latency_sec}s, speaker=${data.speaker})`
+  );
+}
+
+async function start() {
+  ws = new WebSocket(wsUrl());
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => { setStatus(true); log("WebSocket 연결됨"); };
+  ws.onclose = () => { setStatus(false); log("WebSocket 연결 종료"); };
+  ws.onerror = (e) => { log("WebSocket 에러: " + JSON.stringify(e)); };
+  ws.onmessage = (event) => {
+    // 통화를 켜면 서버가 바이너리(상대방 목소리)도 보낸다 — JSON.parse에 넘기면 깨지므로 먼저 분기
+    if (event.data instanceof ArrayBuffer) {
+      playVoiceFrame(event.data);
+      return;
+    }
+    const data = JSON.parse(event.data);
+    if (data.type === "partial") renderPartial(data);
+    else if (data.type === "final") renderFinal(data);
+    else if (data.type === "voice_ready") {
+      log(`🔊 통화 참여됨 (내 슬롯=${data.slot}, 현재 ${data.participants}명) — 하울링 방지를 위해 헤드폰을 써주세요`);
+    }
+    else if (data.type === "session_end") {
+      log("✅ 서버가 잔여 버퍼 처리 완료 — 세션 정상 종료");
+      ws.close();
+    }
+  };
+
+  // 여기서부터는 실패 시 반드시 소켓을 닫아야 한다.
+  // WebSocket은 이미 열려서 서버 통화방에 참여된 상태인데, 마이크 권한 거부 등으로
+  // 준비가 중단되면 소켓이 그대로 남아 "좀비 참가자"가 된다 — 재시도할 때마다 방
+  // 인원이 늘고 슬롯이 소진된다(실측: 재시도 후 "현재 2명"인데 슬롯은 계속 0).
+  try {
+    // 통화를 켰으면 재생 컨텍스트를 여기서(=사용자 클릭 핸들러 안에서) 만든다.
+    // 첫 수신 프레임에서 늦게 만들면 사용자 제스처 밖이라 브라우저가 suspended로 둘 수 있음.
+    if (voiceCallInput.checked) ensureVoiceContext();
+
+    // 통화 시 스피커 소리가 마이크로 되돌아가는 걸 줄이려면 에코 제거를 명시해야 한다
+    // (기본값에 의존하지 않음). 다만 브라우저 에코 제거는 WebRTC 재생 경로 기준이라
+    // Web Audio로 튼 소리에는 잘 안 걸린다 — 헤드폰 안내가 여전히 필요.
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("이 페이지가 https가 아니라 마이크를 쓸 수 없습니다. 주소창을 https 주소로 열어주세요.");
+    }
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    audioContext = new AudioContext();
+    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+
+    // ScriptProcessorNode는 deprecated지만, 별도 빌드 과정 없이 빠르게 검증하기엔 충분함
+    processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+    processorNode.onaudioprocess = (e) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const input = e.inputBuffer.getChannelData(0);
+      const downsampled = downsampleTo16k(input, audioContext.sampleRate);
+      const pcm16 = float32ToPCM16LE(downsampled);
+      ws.send(pcm16);
+    };
+
+    sourceNode.connect(processorNode);
+    // ScriptProcessor는 목적지에 연결돼야 onaudioprocess가 발화한다. 출력 버퍼에는
+    // 아무것도 쓰지 않으므로(기본 무음) 마이크 소리가 스피커로 새지는 않는다.
+    processorNode.connect(audioContext.destination);
+
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    log(`녹음 시작 (브라우저 샘플레이트: ${audioContext.sampleRate}Hz → 16kHz로 다운샘플링)`);
+  } catch (err) {
+    releaseAudioResources();
+    if (ws) {
+      try { ws.close(); } catch (_) { /* 이미 닫혔으면 무시 */ }
+      ws = null;
+    }
+    throw err;  // 호출부(startBtn.onclick)가 사용자에게 실패를 알림
+  }
+}
+
+// 마이크·오디오 자원 해제 (소켓은 건드리지 않음).
+// 정상 종료(stop)와 시작 실패(start의 catch) 양쪽에서 같은 정리를 해야 해서 분리했다.
+function releaseAudioResources() {
+  if (processorNode) { processorNode.disconnect(); processorNode = null; }
+  if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+  if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
+  resetVoicePlayback();  // 통화 재생 컨텍스트와 발신자별 타임라인 정리
+}
+
+function stop() {
+  releaseAudioResources();
+
+  // 바로 끊지 않고 "end"를 보내서 서버가 잔여 버퍼(마지막 발언)를 처리하게 함.
+  // 서버가 session_end로 응답하면 onmessage에서 소켓을 닫는다.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send("end");
+    log("녹음 종료 — 서버의 잔여 버퍼 처리 대기 중...");
+  } else if (ws) {
+    ws.close();
+  }
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+startBtn.onclick = () => start().catch((e) => log("시작 실패: " + e.message));
+stopBtn.onclick = stop;
+</script>
+</body>
+</html>

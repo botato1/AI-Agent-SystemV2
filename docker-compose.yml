@@ -89,6 +89,28 @@ services:
       - /mnt/nas_2026_spring/dobby/shared/data/chroma:/data
     restart: always
 
+  # STT 서버
+  stt:
+    build:
+      context: .
+      dockerfile: Dockerfile.stt
+    container_name: ai-agent-stt
+    ports:
+      - "8002:8001"
+    env_file:
+      - .env
+    volumes:
+      - /mnt/nas_2026_spring/dobby/shared/data/uploads/voice:/app/stt/uploads
+      - /mnt/nas_2026_spring/dobby/shared/data/models/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: always
+
   # Ollama LLM
   ollama:
     image: ollama/ollama:latest

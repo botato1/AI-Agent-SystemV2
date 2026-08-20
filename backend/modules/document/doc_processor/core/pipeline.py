@@ -295,6 +295,47 @@ class DocumentPipeline:
         return False
 
     @staticmethod
+    def _overlaps_extracted_text(
+        fig_bbox: tuple[float, float, float, float],
+        text_blocks: list,
+        threshold: float = 0.6,
+        bins: int = 40,
+    ) -> bool:
+        """figure bbox 세로 구간의 threshold 이상이 이미 추출된 텍스트로 덮이면 True.
+
+        디지털 PDF에서 테두리 없는(격자선 없는) 표는 pdfplumber가 표로 인식하지
+        못해 _overlaps_plumber_table로 걸러지지 않는다. 이 경우 YOLO가 table_image로
+        잡아 VL OCR을 또 돌리면, 이미 content.text에 정확히 뽑힌 내용이 content.tables에
+        VL 재구성 결과로 중복 추가된다 (예: 표지/목차형 표, 명단표).
+
+        면적(area) 기준으로 재면 다열(multi-column) 표처럼 텍스트 박스가 좁고
+        여백이 넓은 레이아웃에서 실제로는 전체 내용이 다 뽑혔는데도 커버리지가
+        낮게 나와 스킵을 못 한다. 대신 bbox를 세로로 잘게 나눠 각 구간에 텍스트가
+        하나라도 걸치는지(행 단위 커버리지)를 보면 열 배치와 무관하게 안정적으로
+        판단할 수 있다.
+        """
+        fx0, fy0, fx1, fy1 = fig_bbox
+        height = fy1 - fy0
+        if height <= 0:
+            return False
+        bin_h = height / bins
+        covered_bins = [False] * bins
+        for tb in text_blocks:
+            if not tb.text.strip():
+                continue
+            tx0, ty0, tx1, ty1 = tb.bbox
+            if tx1 <= fx0 or tx0 >= fx1:
+                continue
+            y0c, y1c = max(ty0, fy0), min(ty1, fy1)
+            if y1c <= y0c:
+                continue
+            start_bin = max(0, int((y0c - fy0) / bin_h))
+            end_bin = min(bins, int((y1c - fy0) / bin_h) + 1)
+            for i in range(start_bin, end_bin):
+                covered_bins[i] = True
+        return (sum(covered_bins) / bins) >= threshold
+
+    @staticmethod
     def _is_contained(
         fig_bbox: tuple[float, float, float, float],
         accepted: list[tuple[float, float, float, float]],
@@ -444,6 +485,12 @@ class DocumentPipeline:
             # pdfplumber가 이미 잡은 실제 표 영역과 50% 이상 겹치면 스킵
             if self._overlaps_plumber_table(nb, content.tables):
                 print(f"  [SKIP] pdfplumber 표와 중복 영역 → VL 스킵 (bbox={nb})")
+                continue
+
+            # 테두리 없는 표라 pdfplumber는 못 잡았지만, 이미 정규 텍스트로
+            # 60% 이상 덮여있으면 VL 재구성이 불필요한 중복이므로 스킵
+            if block.figure_type == "table_image" and self._overlaps_extracted_text(nb, content.text):
+                print(f"  [SKIP] 이미 텍스트로 추출된 영역(테두리 없는 표) → VL 스킵 (bbox={nb})")
                 continue
 
             cropped = crop_layout_rect(page_image, nb, dpi=self.dpi)
