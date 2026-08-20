@@ -47,7 +47,16 @@ from backend.modules.rag import chroma_client
 # ollama_client.OLLAMA_MODEL_LIGHT를 그대로 안 쓰는 이유: 그건 의도분류/일반답변
 # 등 다른 기능도 같이 쓰는 공용 상수라, 판단 전용 모델을 거기 넣으면 다른 기능까지
 # 좁은 판단용 모델로 넘어가게 됨 - 판단 파이프라인 전용 상수를 따로 둔다.
-JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v7")
+#
+# [수정 - 2026.08.20] v7 -> v12로 기본값 변경. topic_match 홀드아웃에서 v12가
+# v15보다 안정적이라 실사용 모델로 v12 확정(end-to-end 종합 점수는 v15가 더
+# 높지만, topic_match가 판단 파이프라인의 첫 관문이라 실사용 리스크를 우선
+# 낮춤 - 상세 경위는 memory:project_recall_v2_next_roadmap 참조). .env의
+# OLLAMA_MODEL_JUDGMENT가 항상 우선하지만, 이 기본값 자체도 "옛날 모델(v7)"로
+# 조용히 폴백되는 걸 막기 위해 실사용 모델로 맞춰둔다.
+# TODO: v12 양자화(v12-q4) blob 등록 마무리되면 기본값을 v12-q4로 다시 교체할 것
+# (BF16 대비 정확도 손실 없이 토큰 생성 속도 약 2배 이상 빨라짐, v7-q4에서 검증됨).
+JUDGMENT_MODEL = os.getenv("OLLAMA_MODEL_JUDGMENT", "re-call-model1-unified-v12")
 
 # [수정 - 2026.08.03] threshold=0.3은 실회의록 스모크테스트(data/test_meetings/)에서
 # 결정 개수가 적은 워크스페이스일 때 "넵 알겠습니다" 같은 무관한 발화까지 거의 항상
