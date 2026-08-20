@@ -51,6 +51,16 @@ _MIN_PARTIAL_SPEAKER_SAMPLES = REALTIME_SAMPLE_RATE
 # 임베딩 하한(1초)보다 넉넉히 잡는다 — 딱 1초짜리 오디오로는 판정이 흔들린다.
 _MIN_SPLIT_TURN_SAMPLES = int(1.5 * REALTIME_SAMPLE_RATE)
 
+# 화자 전환으로 턴을 나눠 따로 전사할 때 앞쪽으로 더 들려주는 여유.
+#
+# 왜 필요한가 (2026-08-20, 팀 제보): 화자 전환 지점을 정확히 잘라 넘기면 다음
+# 화자의 말머리 발음 일부가 손실된다 — refine_service.TURN_PAD_SEC(0.3)과
+# 정확히 같은 원인이다. 그쪽은 이미 패딩으로 해결했는데 실시간 경로엔 없었다
+# ("개발 진행 상황 보니까..."가 "개발."(화자미상) + "진행 상황..."(이승주)로 쪼개짐).
+# 화자 판정에는 쓰지 않는다 — 앞을 늘리면 이전 화자 목소리가 섞여 지문이 오염된다.
+TURN_PAD_SEC = 0.3
+TURN_PAD_KEEP_RATIO = 0.5
+
 # "판정했는데 등록된 누구와도 안 닮음"을 나타내는 내부 표식.
 #
 # None과 반드시 구분해야 한다. None은 "구간이 짧아 판정 자체가 불가"라는 뜻이고
@@ -419,19 +429,30 @@ class RealtimeSTTSession:
         # 내부 표식은 밖으로 내보내지 않는다 — 호출부는 None(미상)으로 받는다
         turns = [(a, b, None if c == _UNKNOWN_SPEAKER else c) for a, b, c in turns]
 
-        # 너무 짧은 턴은 앞 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
+        # 너무 짧은 턴은 이웃 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
         # 라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
         # 때문에 긴 발화를 쪼개는 건 얻는 것보다 잃는 게 크다.
+        #
+        # 기본은 앞 턴에 흡수. 첫 턴이 짧으면 흡수할 앞이 없으므로 대신 **다음 턴에**
+        # 흡수시킨다 (2026-08-20, 팀 제보) — 안 그러면 화자 전환 직후 첫 몇 글자가
+        # 통째로 별도 턴이 되어 미상으로 방치된다("개발."만 분리돼 화자미상, "진행
+        # 상황..."만 이승주로 붙은 사례). 턴은 서로 붙어 있어(경계 사이 간격 없음)
+        # 자연스러운 침묵으로 나뉜 게 아니라 강제로 잘린 조각이므로 흡수가 맞다.
         merged: list[tuple[int, int, str | None]] = []
-        for start, end, label in turns:
+        i = 0
+        while i < len(turns):
+            start, end, label = turns[i]
             too_short = (end - start) < _MIN_SPLIT_TURN_SAMPLES
             if too_short and merged:
                 prev_start, _, prev_label = merged[-1]
                 merged[-1] = (prev_start, end, prev_label)
-            elif too_short and not merged:
-                merged.append((start, end, label))   # 첫 턴은 흡수할 앞이 없다
+            elif too_short and not merged and i + 1 < len(turns):
+                _, next_end, next_label = turns[i + 1]
+                merged.append((start, next_end, next_label))
+                i += 1   # 다음 턴은 이미 흡수했으므로 건너뛴다
             else:
                 merged.append((start, end, label))
+            i += 1
         return merged
 
     def _scan_speaker_changes(self, audio: np.ndarray) -> list[tuple[int, int, str | None]]:
@@ -498,15 +519,28 @@ class RealtimeSTTSession:
         )
 
         async def _one_turn(start: int, end: int, provisional: str | None):
-            piece = audio[start:end]
-            offset = start / REALTIME_SAMPLE_RATE
-            # 턴 전체 오디오로 다시 판정한다 — 구간 단위보다 오디오가 많아 더 정확하고,
-            # 여기서만 프로필을 갱신해 잘못된 배정이 지문을 오염시킬 여지를 줄인다.
+            # 전사에는 턴 앞쪽으로 여유를 더 들려준다(TURN_PAD_SEC) — 화자 전환
+            # 지점을 정확히 잘라 넘기면 다음 화자의 말머리 발음이 손실된다.
+            # 화자 판정은 여유 없이 턴 본체(원래 start:end)만 본다 — 앞을 늘리면
+            # 이전 화자 목소리가 섞여 지문이 오염된다.
+            pad_samples = int(TURN_PAD_SEC * REALTIME_SAMPLE_RATE)
+            clip_start = max(0, start - pad_samples)
+            piece = audio[clip_start:end]
+            offset = clip_start / REALTIME_SAMPLE_RATE
+            core_from = (start - clip_start) / REALTIME_SAMPLE_RATE
+            core_to = (end - clip_start) / REALTIME_SAMPLE_RATE
+
             seg_task = loop.run_in_executor(
                 None, self._transcribe, final_model, piece, PRECISE_BEAM_SIZE, self.initial_prompt
             )
-            spk_task = loop.run_in_executor(None, self.speaker_identifier.identify, piece)
+            spk_task = loop.run_in_executor(None, self.speaker_identifier.identify, audio[start:end])
             segments, speaker = await asyncio.gather(seg_task, spk_task)
+            # 여유 구간에만 걸친 조각은 이전 턴(다른 화자)의 말일 수 있으므로 버린다.
+            segments = [
+                seg for seg in segments
+                if (min(seg["end"], core_to) - max(seg["start"], core_from))
+                >= (seg["end"] - seg["start"]) * TURN_PAD_KEEP_RATIO
+            ]
             for seg in segments:
                 # 턴 안에서의 시각을 청크 기준으로 되돌린다 (청크→회의 기준 보정은 호출부가 담당)
                 seg["start"] = round(seg["start"] + offset, 2)
