@@ -1,0 +1,54 @@
+import json
+import os
+from typing import Any, AsyncIterator, Optional
+from urllib.parse import quote
+
+import websockets
+
+STT_STREAM_BASE_URL = os.getenv("STT_STREAM_BASE_URL", "ws://61.81.98.82:8002")
+
+class SttStreamClient:
+    def __init__(
+        self,
+        session_id: str,
+        participant_name: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
+        voice: bool = False,
+    ):
+        self.session_id = session_id
+        self.participant_name = participant_name
+        self.attendees = attendees
+        self.voice = voice
+        self._ws: Optional[Any] = None
+
+    async def connect(self) -> None:
+        url = f"{STT_STREAM_BASE_URL}/api/ws/stt/{self.session_id}"
+        params = []
+        if self.participant_name:
+            params.append(f"participant_name={quote(self.participant_name)}")
+        if self.attendees:
+            params.append(f"attendees={quote(','.join(self.attendees))}")
+        if self.voice:
+            params.append("voice=1")
+        if params:
+            url += "?" + "&".join(params)
+        self._ws = await websockets.connect(url, max_size=None)
+
+    async def send_audio(self, chunk: bytes) -> None:
+        await self._ws.send(chunk)
+
+    async def send_end(self) -> None:
+        await self._ws.send("end")
+
+    async def receive(self) -> AsyncIterator[dict | bytes]:
+        """JSON 텍스트 프레임은 dict로, 통화(voice) 바이너리 프레임은 bytes 그대로 넘긴다."""
+        async for raw_message in self._ws:
+            if isinstance(raw_message, (bytes, bytearray)):
+                yield raw_message
+            else:
+                yield json.loads(raw_message)
+
+    async def close(self) -> None:
+        if self._ws is not None:
+            await self._ws.close()
+            self._ws = None

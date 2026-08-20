@@ -1,0 +1,71 @@
+venv/
+.venv/
+__pycache__/
+.env
+*.pyc
+.DS_Store
+node_modules/
+**/node_modules/
+
+# 테스트 파일
+test_file/
+test/
+
+# 데이터 파일
+data/raw/
+data/processed/
+data/knowledge/
+data/uploads/
+backend/modules/document/dataset/
+
+# 자동 생성 저장소
+storage/
+
+# 모델 결과물
+models/
+
+# 패키지 캐시 파일
+0.0.27.post2
+2.4.0
+2.3.0
+26.1.2
+3.0.0
+unsloth_compiled_cache/
+
+# RAG/finetune requirement파일
+requirements_finetune.txt
+requirements_rag.txt
+
+# 가상환경 (추가)
+venv-rag/
+venv-finetune/
+
+# DB 파일
+*.db
+*.sqlite
+
+# 환경변수 추가 패턴
+.env.*
+
+# 파인튜닝 체크포인트
+checkpoint-*/
+*.gguf
+*.safetensors
+
+# 모델 캐시
+.cache/
+
+# 프론트엔드 빌드 산출물
+.vite/
+dist/
+build/
+*.log
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local dev config
+.claude/

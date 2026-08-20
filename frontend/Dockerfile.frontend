@@ -1,0 +1,20 @@
+# 프론트엔드(Vite/React)를 빌드해서 nginx로 정적 서빙한다.
+# 빌드 시점에 백엔드 주소(VITE_API_URL)를 --build-arg로 주입 - .env 값과 동일하게 기본값을 맞춰둠.
+FROM node:20-alpine AS build
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+ARG VITE_API_URL=http://61.81.98.82:8000
+ENV VITE_API_URL=$VITE_API_URL
+
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
