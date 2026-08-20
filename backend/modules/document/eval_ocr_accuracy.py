@@ -51,9 +51,20 @@ def _strip_markdown_table_syntax(text: str) -> str:
     return text
 
 
+def _strip_toc_leader_dots(text: str) -> str:
+    """목차(차례)의 점선 리더("항목 ·············4")를 제거한다.
+
+    정답 텍스트는 사람이 옮겨 적으면서 점선을 빼고 "항목 4"로만 적는데,
+    파이프라인은 PDF에 실제로 박혀있는 점선 문자를 그대로 추출하므로
+    비교 전에 걷어내지 않으면 목차 페이지에서만 CER이 인위적으로 부풀려진다.
+    """
+    return re.sub(r"[·.]{2,}", " ", text)
+
+
 def _normalize(text: str) -> str:
-    """공백/줄바꿈/마크다운 표 서식 차이를 무시하도록 정규화."""
+    """공백/줄바꿈/마크다운 표 서식·목차 점선 차이를 무시하도록 정규화."""
     text = _strip_markdown_table_syntax(text)
+    text = _strip_toc_leader_dots(text)
     return " ".join(text.split())
 
 
