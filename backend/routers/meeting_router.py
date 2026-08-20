@@ -1092,9 +1092,15 @@ def join_meeting_api(
             detail="녹음 중인 회의가 아닙니다.",
         )
 
-    # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가. 그 외(single_device,
-    # 한 대의 PC) 모드는 오디오는 이미 호스트 연결이 담당하므로 보기 전용으로만 참가시킨다.
-    view_only = meeting.recording_mode != "individual"
+    # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가.
+    # single_device(한 대의 PC) 모드는 원래 녹음을 시작한 사람(started_by)만
+    # 오디오 스트리밍 권한(view_only=False)을 가진다 - 연결이 끊겨서 이 엔드포인트로
+    # 재연결하는 경우에도 그 사람이어야 녹음이 계속 유지된다. 그 외 사람은 보기 전용.
+    if meeting.recording_mode == "individual":
+        view_only = False
+    else:
+        view_only = uuid.UUID(current_user_id) != meeting.started_by
+
     ws_ticket = create_ws_ticket(current_user_id, str(meeting_id), view_only=view_only)
     return MeetingJoinResponse(ws_ticket=ws_ticket)
 
