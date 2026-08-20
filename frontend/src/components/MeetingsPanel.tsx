@@ -1013,7 +1013,10 @@ function LiveAgendaCard({
   position: number;
   total: number;
   onPrev?: () => void;
-  onNext: () => void;
+  // 마지막 미해결 항목은 넘길 데도 없고, 넘기면 그대로 안건 카드가 닫혀 놓치기 쉬우니
+  // "다음" 버튼 자체를 안 보여준다(undefined) - 실제로 해결되면(다음 회의에서 결정 완료
+  // 처리) 리마인더 자체가 더 이상 안 뜬다.
+  onNext?: () => void;
   t: any;
 }) {
   return (
@@ -1047,12 +1050,14 @@ function LiveAgendaCard({
             {t.meeting_live_alert_prev_btn}
           </button>
         )}
-        <button
-          onClick={onNext}
-          className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
-        >
-          {t.meeting_live_alert_next_btn}
-        </button>
+        {onNext && (
+          <button
+            onClick={onNext}
+            className="flex-1 rounded bg-recall-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+          >
+            {t.meeting_live_alert_next_btn}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1406,11 +1411,11 @@ export default function MeetingsPanel({
   ];
   const currentLiveAlert = liveAlertQueue[0] ?? null;
 
+  // 마지막 미해결 항목에서는 LiveAgendaCard에 "다음" 버튼 자체가 안 넘어가므로
+  // (onNext={agendaIndex + 1 < items.length ? ... : undefined}) 이 함수는 항상 다음
+  // 항목이 있을 때만 호출된다.
   function handleAgendaItemNext() {
     if (!agendaReminder) return;
-    // 마지막 항목에서 "다음"을 누르면 팝업 카드만 닫는다 (agendaIndex를 items.length로
-    // 넘겨서 currentAgendaItem이 null이 되게 함). 예전엔 agendaReminder 전체를 지워버려서,
-    // 아래 "미해결 안건" 목록(2363번째 줄 부근)에 남아있던 미해결 항목까지 같이 사라졌다.
     setAgendaIndex(agendaIndex + 1);
   }
 
@@ -1803,7 +1808,9 @@ export default function MeetingsPanel({
                     position={agendaIndex + 1}
                     total={agendaReminder?.items.length ?? 1}
                     onPrev={agendaIndex > 0 ? handleAgendaItemPrev : undefined}
-                    onNext={handleAgendaItemNext}
+                    onNext={
+                      agendaIndex + 1 < (agendaReminder?.items.length ?? 0) ? handleAgendaItemNext : undefined
+                    }
                     t={t}
                   />
                 ) : (
