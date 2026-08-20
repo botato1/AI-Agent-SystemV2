@@ -307,7 +307,15 @@ def _call_ollama(
         # 오버헤드를 없앤다. 실시간 판단 파이프라인처럼 발화 하나당 여러 번 순차
         # 호출하는 경우, 이게 없으면 매 호출이 로드→추론→언로드를 반복해 체감
         # 지연이 크게 늘어난다.
-        body = {"model": model, "prompt": p, "stream": False, "keep_alive": "30m"}
+        #
+        # [추가 - 2026.08.20] think: false - qwen3 계열(OLLAMA_MODEL_HEAVY)이 기본적으로
+        # 답변 전에 긴 chain-of-thought "생각"을 먼저 생성하는데, 이 응답의 thinking
+        # 필드는 어차피 아래서 안 읽고 버려진다(response 필드만 사용). 실측 결과
+        # "1+1은?" 같은 사소한 프롬프트에도 thinking 있으면 31.5초, 끄면 0.99초로
+        # 32배 차이 - 회의 후처리(llm_extractor.extract())가 발화량과 무관하게
+        # 항상 느렸던 원인이 이것으로 확인됨. qwen2.5 기반 모델(LIGHT/판단모델)엔
+        # 이 개념 자체가 없어 무시되는 필드라 전역으로 꺼도 안전하다.
+        body = {"model": model, "prompt": p, "stream": False, "keep_alive": "30m", "think": False}
         if response_format is not None:
             body["format"] = response_format
         if temperature is not None:
