@@ -82,19 +82,39 @@ def restart(model: str) -> bool:
     return False
 
 
-def build_profiles(specs: list[tuple[str, str]], exclude: str) -> dict[str, np.ndarray]:
+def _load_inference_for(model: str):
+    """
+    지정한 모델 ID로 임베딩 추론 객체를 직접 만든다.
+
+    ⚠️ load_speaker_embedding_inference()를 안 쓰는 이유(2026-08-20 버그로 발견):
+    그 함수는 config.SPEAKER_EMBEDDING_MODEL(모듈 임포트 시점에 딱 한 번 env var를
+    읽어 고정된 값)을 본다. restart()가 서버 subprocess에 환경변수를 넘겨도
+    **이 스크립트 자신의 프로세스 환경은 안 바뀌므로** 그 함수를 쓰면 항상 기본값
+    (pyannote)으로 프로필을 만들게 된다 — 실제로 이 버그 때문에 speechbrain 비교가
+    화자대가 94~102%로 완전히 깨졌었다(전사만 멀쩡, DI-cpCER 정상 — 그게 단서였다).
+    모델을 인자로 직접 받아 서버와 반드시 같은 모델을 쓰도록 강제한다.
+    """
+    if model.startswith("speechbrain/"):
+        from stt.services.speaker_id_service import SpeechBrainEmbedding
+        return SpeechBrainEmbedding(model)
+    import torch
+    from pyannote.audio import Model, Inference
+    from stt.core.config import HF_TOKEN, DEVICE
+    pt_model = Model.from_pretrained(model, use_auth_token=HF_TOKEN)
+    inference = Inference(pt_model, window="whole")
+    if DEVICE == "cuda":
+        inference.to(torch.device("cuda"))
+    return inference
+
+
+def build_profiles(specs: list[tuple[str, str]], exclude: str, model: str) -> dict[str, np.ndarray]:
     """exclude를 뺀 나머지 회의들로 전역 프로필을 만든다 (enroll_multi_meeting과 같은 방식).
 
-    임베딩 추출은 서버가 지금 로딩해 둔 모델을 그대로 써야 하므로, 로컬 프로세스가
-    아니라 **서버에 이미 로딩된 모델**을 재사용하려면 서버 프로세스 안에서 돌아야
-    맞다. 다만 이 스크립트는 서버 밖에서 도는 별도 프로세스라 모델을 새로 로드한다
-    — restart() 직후 호출하므로 같은 SPEAKER_EMBEDDING_MODEL 환경변수가 적용된
-    상태에서 로드되어 서버와 동일한 모델을 쓰게 된다.
+    model은 이번 반복에서 서버에 띄운 것과 반드시 같은 모델 ID여야 한다 —
+    _load_inference_for() 문서 참고.
     """
-    from stt.services.speaker_id_service import (
-        LiveSpeakerIdentifier, load_speaker_embedding_inference,
-    )
-    identifier = LiveSpeakerIdentifier(load_speaker_embedding_inference())
+    from stt.services.speaker_id_service import LiveSpeakerIdentifier
+    identifier = LiveSpeakerIdentifier(_load_inference_for(model))
 
     per_meeting: dict[str, dict[str, np.ndarray]] = {}
     for meeting, script in specs:
@@ -159,7 +179,7 @@ def main():
         results[model] = {}
         for meeting, script in score_specs:
             print(f"\n  [{meeting[:38]}] 하나 빼기로 프로필 재생성...")
-            profiles = build_profiles(all_specs, exclude=meeting)
+            profiles = build_profiles(all_specs, exclude=meeting, model=model)
             if not profiles:
                 print("    ⚠️ 프로필 생성 실패 — 건너뜀"); continue
             print(f"    등록: {', '.join(sorted(profiles))}")
