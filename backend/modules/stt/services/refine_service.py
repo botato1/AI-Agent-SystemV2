@@ -29,7 +29,7 @@ from .overlap_model import load_overlap_inference
 from .refine_webhook import notify_refine_done
 from .speaker_timeline import (
     build_speaker_timeline, build_speaker_timeline_clustered,
-    split_turns_by_timeline, SPEAKER_TIMELINE_CLUSTERED,
+    split_turns_by_timeline, SPEAKER_TIMELINE_CLUSTERED, assign_unassigned_ids,
 )
 from .speech_separation import active_channels, separate_sources
 from .transcript_correction import correct_transcript
@@ -495,6 +495,15 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
             [seg for seg in refined_segments if not seg.get("separated")], overlap_spans,
         )
     _mark("겹침분리")
+
+    # 5-c. 이름을 못 붙인(미상) 세그먼트에도 구분용 raw id를 준다(2026-08-21, 팀원
+    # 요청) — 등록된 진짜 화자 판정(위 1~4단계)이 전부 끝난 뒤의 순수 후처리다.
+    # assign_unassigned_ids 문서 참고: 턴 분할 로직에는 영향을 주지 않는다.
+    if enrolled_count:
+        assign_unassigned_ids(
+            refined_segments, audio, sample_rate, app_state.speaker_embedding_inference,
+        )
+    _mark("미상id배정")
 
     # 6. LLM이 문맥으로 읽고 오인식 단어를 고친다.
     #    용어 목록은 "사람이 미리 겪은 단어"만 커버한다. 여기서는 문장의 뜻으로 유추한다.
