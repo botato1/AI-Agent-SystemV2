@@ -21,13 +21,12 @@ from backend.schemas.worktree_schema import (
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/worktrees", tags=["Worktrees"])
 
-# TODO: NAS 연결되면 이 경로/저장 로직을 NAS 저장으로 교체 (다른 업로드 로직과 동일한 임시 조치)
-WORKTREE_STORAGE_DIR = Path("data/uploads/worktree_files")
+WORKTREE_STORAGE_DIR = Path("storage/uploads/worktree_files")
 
 CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".rb", ".php", ".swift", ".kt"}
 CONFIG_EXTENSIONS = {".json", ".yaml", ".yml", ".toml", ".ini", ".env", ".xml"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-DOCUMENT_EXTENSIONS = {".pdf", ".hwpx", ".doc", ".docx", ".md", ".txt"}
+DOCUMENT_EXTENSIONS = {".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".md", ".txt"}
 
 
 def _infer_file_kind(filename: str) -> str:
@@ -134,10 +133,12 @@ async def upload_worktree(
             failed_count += 1
             print(f"[worktree_router] 파일 저장 실패: {f.filename} / {repr(e)}")
 
-    if failed_count == 0:
+    if completed_count == 0:
+        final_status = "failed"  # 업로드 자체가 전부 실패 - 분석할 파일도 없음
+    elif analyzable_file_ids:
+        final_status = "processing"  # 문서/이미지 분석이 아직 안 끝났으므로 완료 아님
+    elif failed_count == 0:
         final_status = "completed"
-    elif completed_count == 0:
-        final_status = "failed"
     else:
         final_status = "partially_completed"
 
@@ -195,3 +196,86 @@ def get_worktree_files(
     return WorktreeFileListResponse(
         files=[WorktreeFileResponse.model_validate(f) for f in files]
     )
+
+# 워크트리 삭제 (내부 파일 전체 정리 후 워크트리 자체 삭제)
+@router.delete("/{worktree_id}")
+def delete_worktree_api(
+    workspace_id: uuid.UUID,
+    worktree_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_worktree_or_404(db, worktree_id, workspace_id)
+
+    files = file_crud.list_files_by_worktree(db, worktree_id)
+    deleted_count = 0
+    failed_count = 0
+
+    for f in files:
+        try:
+            result = document_service.delete_processed_document(db, f.id)
+            if result.get("status") == "success":
+                deleted_count += 1
+            else:
+                failed_count += 1
+                print(f"[worktree_router] 워크트리 파일 삭제 실패: file_id={f.id} / {result.get('error')}")
+        except Exception as e:
+            db.rollback()
+            failed_count += 1
+            print(f"[worktree_router] 워크트리 파일 삭제 중 예외: file_id={f.id} / {repr(e)}")
+
+    file_crud.delete_worktree(db, worktree_id)
+
+    return {
+        "status": "success",
+        "worktree_id": str(worktree_id),
+        "deleted_file_count": deleted_count,
+        "failed_file_count": failed_count,
+        "message": "워크트리가 삭제되었습니다.",
+    }
+
+# 워크트리 내 개별 파일 삭제
+@router.delete("/{worktree_id}/files/{file_id}")
+def delete_worktree_file_api(
+    workspace_id: uuid.UUID,
+    worktree_id: uuid.UUID,
+    file_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    worktree = _get_worktree_or_404(db, worktree_id, workspace_id)
+
+    workspace_file = file_crud.get_file(db, file_id)
+    if not workspace_file or workspace_file.worktree_id != worktree_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="워크트리 내 파일을 찾을 수 없습니다.",
+        )
+
+    try:
+        result = document_service.delete_processed_document(db, file_id)
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="삭제할 파일을 찾을 수 없습니다.",
+        )
+    except Exception as e:
+        print(f"[worktree_router] 워크트리 파일 삭제 실패: {repr(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="파일 삭제 중 오류가 발생했습니다.",
+        )
+
+    updated_worktree = file_crud.update_worktree_counts(
+        db, worktree_id,
+        total_file_count=max(0, worktree.total_file_count - 1),
+        completed_file_count=max(0, worktree.completed_file_count - 1),
+    )
+
+    return {
+        "status": result.get("status", "success"),
+        "file_id": str(file_id),
+        "worktree": WorktreeSchema.model_validate(updated_worktree),
+    }

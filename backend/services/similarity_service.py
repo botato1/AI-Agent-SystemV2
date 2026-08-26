@@ -10,7 +10,7 @@ from backend.db.crud import file_crud, similarity_crud
 from backend.db.session import SessionLocal
 from backend.modules.rag.chroma_client import DOCUMENT_COLLECTION, get_or_create_collection
 
-MIN_STORAGE_SCORE = 0.3  # 이 미만은 저장도 안 함 (테이블 비대화 방지)
+MIN_STORAGE_SCORE = 0.6  # 이 미만은 저장도 안 함 (테이블 비대화 방지)
 
 
 # TODO: chroma_client.py로 이관 필요 (승주 확인 후). 지금은 승주가 당장
@@ -24,8 +24,8 @@ def _get_document_embedding(document_id: str, workspace_id: str) -> list[float] 
         where={"$and": [{"document_id": document_id}, {"workspace_id": workspace_id}]},
         include=["embeddings"],
     )
-    embeddings = result.get("embeddings") or []
-    if not embeddings:
+    embeddings = result.get("embeddings")
+    if embeddings is None or len(embeddings) == 0:
         return None
     dim = len(embeddings[0])
     return [sum(vec[i] for vec in embeddings) / len(embeddings) for i in range(dim)]
@@ -37,7 +37,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     norm_b = sum(y * y for y in b) ** 0.5
     if norm_a == 0 or norm_b == 0:
         return 0.0
-    return dot / (norm_a * norm_b)
+    return float(dot / (norm_a * norm_b))
 
 
 def compute_similarities_for_document(

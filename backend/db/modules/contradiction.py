@@ -42,6 +42,10 @@ class Contradiction(Base):
     reference_text_snapshot = Column(Text, nullable=False)
     reference_location = Column(JSONB, nullable=True)
     reason = Column(Text, nullable=True)
+    # [추가] decision_judgment.py Case 2/3(근거 명확/불명확) 구분 저장용.
+    # reference_type='decision'인 행에서만 채워짐 - 세션 내 dedup을 case별로
+    # 따로 걸기 위해 필요 (같은 decision이어도 case가 다르면 별도로 1회씩 팝업 가능).
+    judgment_case = Column(String(20), nullable=True)
     confidence_score = Column(Numeric(5, 4), nullable=False)
     severity = Column(String(20), nullable=False, server_default="medium")
     deduplication_key = Column(String(64), nullable=False)
@@ -52,7 +56,7 @@ class Contradiction(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "source_type IN ('meeting_segment','room_message')",
+            "source_type IN ('meeting_segment','room_message','meeting_summary')",
             name="chk_contradictions_source_type",
         ),
         CheckConstraint(
@@ -61,13 +65,19 @@ class Contradiction(Base):
         ),
         CheckConstraint("severity IN ('low','medium','high')", name="chk_contradictions_severity"),
         CheckConstraint(
+            "judgment_case IS NULL OR judgment_case IN ('reasoned_change','unreasoned_change')",
+            name="chk_contradictions_judgment_case",
+        ),
+        CheckConstraint(
             "status IN ('unresolved','resolved','dismissed')", name="chk_contradictions_status"
         ),
         CheckConstraint(
             "(source_type = 'meeting_segment' AND meeting_segment_id IS NOT NULL "
             "AND room_message_id IS NULL) OR "
             "(source_type = 'room_message' AND room_message_id IS NOT NULL "
-            "AND meeting_segment_id IS NULL)",
+            "AND meeting_segment_id IS NULL) OR "
+            "(source_type = 'meeting_summary' AND meeting_segment_id IS NULL "
+            "AND room_message_id IS NULL)",
             name="chk_contradictions_source_exclusive",
         ),
         CheckConstraint(

@@ -50,6 +50,7 @@ class SignupRequest(BaseModel):
         max_length=50,
         description="화면에 표시할 이름",
     )
+    invite_token: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -79,19 +80,10 @@ class LogoutRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    display_name: Optional[str] = Field(
-        default=None,
-        description="변경할 표시 이름",
-    )
-    current_password: Optional[str] = Field(
-        default=None,
-        description="현재 비밀번호",
-    )
-    new_password: Optional[str] = Field(
-        default=None,
-        description="새 비밀번호",
-    )
-
+    display_name: Optional[str] = Field(default=None, description="변경할 표시 이름")
+    avatar_color: Optional[str] = Field(default=None, description="변경할 아바타 색상")
+    current_password: Optional[str] = Field(default=None, description="현재 비밀번호")
+    new_password: Optional[str] = Field(default=None, description="새 비밀번호")
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -105,6 +97,7 @@ class SignupResponse(BaseModel):
     user: Optional["UserPublicSchema"] = None
     message: str
     error: Optional[str] = None
+    invite_status: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
@@ -237,18 +230,6 @@ class UserSchema(TimestampSchema, SoftDeleteSchema):
     last_login_at: Optional[datetime] = None
 
 
-class UserPublicSchema(ORMBaseSchema):
-    """API 응답 등 외부에 노출할 수 있는 사용자 스키마."""
-
-    id: UUID
-    username: str
-    email: str
-    display_name: str
-    account_status: AccountStatus
-    last_login_at: Optional[datetime] = None
-    created_at: datetime
-
-
 # =============================================================================
 # Re:Call: refresh_tokens
 # =============================================================================
@@ -274,3 +255,26 @@ class RefreshTokenSchema(ORMBaseSchema):
         max_length=255,
     )
     created_at: datetime
+
+class UserPublicSchema(ORMBaseSchema):
+    """API 응답 등 외부에 노출할 수 있는 사용자 스키마."""
+
+    id: UUID
+    username: str
+    email: str
+    display_name: str
+    profile_image_url: Optional[str] = None
+    avatar_color: Optional[str] = None
+    account_status: AccountStatus
+    last_login_at: Optional[datetime] = None
+    created_at: datetime
+
+class VoiceProfileResponse(BaseModel):
+    registered: bool
+    registered_at: Optional[datetime] = None
+    speaker_name: Optional[str] = None
+    name_extraction_failed: bool = False
+    detected_text: Optional[str] = None
+
+class RegisteredVoiceProfileListResponse(BaseModel):
+    names: list[str]

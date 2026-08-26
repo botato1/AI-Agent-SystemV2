@@ -173,7 +173,9 @@ def get_user_id_from_password_reset_token(token: str) -> str:
     return payload["sub"]
 
 # WebSocket 연결용 일회용 티켓 발급 (기본 만료 60초 — 발급 직후 바로 연결한다는 전제)
-def create_ws_ticket(user_id: str, meeting_id: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_ws_ticket(
+    user_id: str, meeting_id: str, expires_delta: Optional[timedelta] = None, view_only: bool = False,
+) -> str:
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
     )
@@ -182,6 +184,7 @@ def create_ws_ticket(user_id: str, meeting_id: str, expires_delta: Optional[time
         "sub": user_id,
         "meeting_id": meeting_id,
         "type": "ws_ticket",
+        "view_only": view_only,
         "jti": str(uuid_lib.uuid4()),
         "exp": expire,
     }
@@ -197,6 +200,96 @@ def verify_ws_ticket(token: str) -> dict[str, Any]:
         raise JWTError("WebSocket 티켓이 아닙니다.")
 
     if not payload.get("sub") or not payload.get("meeting_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+
+    return payload
+
+
+# 채팅방 WebSocket 연결용 일회용 티켓 발급 (meeting용 create_ws_ticket과 동일 패턴 —
+# meeting_id 필드에 강결합된 기존 함수를 건드리지 않기 위해 별도로 둔다)
+def create_room_ws_ticket(
+    user_id: str, room_id: str, expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "room_id": room_id,
+        "type": "room_ws_ticket",
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def verify_room_ws_ticket(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "room_ws_ticket":
+        raise JWTError("채팅방 WebSocket 티켓이 아닙니다.")
+
+    if not payload.get("sub") or not payload.get("room_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+
+    return payload
+
+def create_workspace_invite_token(
+    workspace_id: str,
+    email: str,
+    role: str,
+    invited_by: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=7))
+
+    payload: dict[str, Any] = {
+        "sub": email,
+        "type": "workspace_invite",
+        "workspace_id": workspace_id,
+        "role": role,
+        "invited_by": invited_by,
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def verify_workspace_invite_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "workspace_invite":
+        raise JWTError("워크스페이스 초대 토큰이 아닙니다.")
+
+    return payload
+
+def create_document_ws_ticket(
+    user_id: str, workspace_id: str, expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "workspace_id": workspace_id,
+        "type": "document_ws_ticket",
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def verify_document_ws_ticket(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "document_ws_ticket":
+        raise JWTError("문서 WebSocket 티켓이 아닙니다.")
+
+    if not payload.get("sub") or not payload.get("workspace_id") or not payload.get("jti"):
         raise JWTError("티켓에 필요한 정보가 없습니다.")
 
     return payload

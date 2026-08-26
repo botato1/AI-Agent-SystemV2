@@ -7,101 +7,31 @@
 # meeting_ws_router.py가 저장해둔 .pcm 파일을 workspace_files에 등록하는 것부터 시작한다.
 # audio_upload는 이미 source_file_id가 있다고 가정한다 (실제 STT 실행 연동은 별도 후속 작업).
 
-import json
-import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
-
 from backend.db.crud import content_chunk_crud, file_crud, meeting_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.meeting_postprocess_state import MeetingPostprocessState
+from backend.modules.post_meeting import decision_transition, indexer, llm_extractor
 from backend.modules.rag.document_loader import load_document
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-
-RECORDING_STORAGE_DIR = Path("data/uploads/recordings")
-
-_SUMMARY_PROMPT = """당신은 팀 회의록을 정리하는 비서입니다. 아래 회의 전문을 읽고 요약하세요.
-
-[회의 전문]
-{transcript}
-
-반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 덧붙이지 마세요.
-
-{{
-  "full_summary": "회의 전체 내용을 여러 문단으로 정리",
-  "short_summary": "핵심만 한 문단으로",
-  "discussion_points": ["주요 논의 주제1", "주요 논의 주제2"]
-}}"""
-
-_EXTRACT_PROMPT = """당신은 회의에서 결정사항과 할 일을 추출하는 비서입니다. 아래 회의 전문을 읽으세요.
-
-[회의 전문]
-{transcript}
-
-"~로 확정하자/~로 가자/~는 OO가 담당하자" 같은 표현을 결정사항으로, 담당자가 명시된 작업을 할 일로 추출하세요.
-반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 덧붙이지 마세요.
-
-{{
-  "decisions": [
-    {{"title": "짧은 제목", "decision_text": "결정 내용", "reason": "결정 이유(없으면 빈 문자열)"}}
-  ],
-  "tasks": [
-    {{"title": "할 일 내용", "assignee_label": "담당자 이름(없으면 빈 문자열)"}}
-  ]
-}}"""
+RECORDING_STORAGE_DIR = Path("storage/uploads/recordings")
 
 
 class _PostprocessFailure(Exception):
     """meeting.status를 failed로 남기고 종료해야 하는 예상된 실패."""
 
 
-def _call_llm_json(prompt: str, fallback: dict) -> dict:
+def _parse_due_date(due_date_str: str | None):
+    """llm_extractor가 뽑은 'YYYY-MM-DD' 문자열을 datetime으로 변환. 실패하면 None(마감일 없음 취급)."""
+    if not due_date_str:
+        return None
     try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "format": "json"},
-            timeout=120.0,
-        )
-        response.raise_for_status()
-        raw_text = response.json().get("response", "").strip()
-        parsed = json.loads(raw_text)
-        if not isinstance(parsed, dict):
-            raise ValueError(f"응답이 JSON 객체가 아님: {parsed!r}")
-        return parsed
-    except (httpx.HTTPError, json.JSONDecodeError, ValueError, TypeError) as e:
-        print(f"[meeting_postprocess] LLM 호출 실패: {repr(e)}")
-        return fallback
-
-
-def _generate_summary(full_transcript: str) -> dict:
-    parsed = _call_llm_json(
-        _SUMMARY_PROMPT.format(transcript=full_transcript),
-        fallback={"full_summary": "", "short_summary": "", "discussion_points": []},
-    )
-    return {
-        "full_summary": str(parsed.get("full_summary", "")),
-        "short_summary": str(parsed.get("short_summary", "")),
-        "discussion_points": parsed.get("discussion_points") or [],
-    }
-
-
-def _extract_decisions_and_tasks(full_transcript: str) -> dict:
-    parsed = _call_llm_json(
-        _EXTRACT_PROMPT.format(transcript=full_transcript),
-        fallback={"decisions": [], "tasks": []},
-    )
-    decisions = parsed.get("decisions")
-    tasks = parsed.get("tasks")
-    # LLM이 배열 안에 dict가 아닌 값을 섞어 보낼 수 있으므로 여기서 걸러낸다
-    # (호출부에서 다시 .get()을 부르면 AttributeError로 노드 전체가 죽는 걸 방지).
-    decisions = [d for d in decisions if isinstance(d, dict)] if isinstance(decisions, list) else []
-    tasks = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
-    return {"decisions": decisions, "tasks": tasks}
+        return datetime.strptime(due_date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
 
 
 def _ensure_source_file(db, meeting) -> uuid.UUID:
@@ -174,11 +104,40 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
         full_transcript = "\n".join(
             f"[{s.speaker_label or 'unknown'}] {s.content}" for s in segments
         )
+        # LLM 전용 — 발화 번호를 붙여야 chit_chat_segment_indexes를 세그먼트와 매칭 가능.
+        indexed_transcript = "\n".join(
+            f"[{s.segment_index}][{s.speaker_label or 'unknown'}] {s.content}" for s in segments
+        )
 
         # 1. 원본 파일 확보 (라이브 녹음이면 새로 등록)
         file_id = _ensure_source_file(db, meeting)
 
-        # 2. 발화 세그먼트 청킹 + 임베딩 (ChromaDB + content_chunks)
+        # 2. 요약 + 결정사항 + 할 일 + 제목 + 잡담 세그먼트 판별 — LLM 호출 한 번에 통합 추출.
+        #    (기존엔 이 노드가 자체 프롬프트로 요약/추출을 따로 호출했는데, 승주가 이미
+        #    설계해둔 llm_extractor.extract()와 별개로 돌고 있었음 - 여기로 통합)
+        #    dict가 아닌 topic/action_item 방어는 extract() 내부(status 검증 루프 이전)에서
+        #    처리한다 - 지수 리뷰 반영: 여기서 필터링하면 이미 extract() 내부에서 먼저
+        #    죽은 뒤라 아무 소용이 없었음.
+        #    잡담 세그먼트를 걸러서 임베딩하려면 임베딩(3번)보다 먼저 호출해야 한다.
+        # [추가 - 라이브 테스트 발견] "이번 주 금요일" 같은 상대적 날짜 표현을 LLM이
+        # 정확히 절대 날짜로 환산할 수 있게 회의 날짜를 같이 넘긴다 - started_at이
+        # 없는 경우(예: 문서 업로드형)는 created_at으로 대체.
+        extraction = llm_extractor.extract(
+            indexed_transcript, meeting_date=meeting.started_at or meeting.created_at,
+        )
+
+        # title_is_auto가 아직 develop에 없을 수 있어(PR #74 미병합) getattr로 방어 —
+        # 없으면 기본값 False로 취급해 사용자가 직접 넣은 제목을 절대 덮어쓰지 않는다.
+        if extraction.get("title") and getattr(meeting, "title_is_auto", False):
+            meeting.title = extraction["title"][:200]
+
+        # 3. 발화 세그먼트 청킹 + 임베딩 (ChromaDB + content_chunks) — 잡담 세그먼트는 제외.
+        chit_chat_indexes = set(extraction.get("chit_chat_segment_indexes", []))
+        segments_to_index = [s for s in segments if s.segment_index not in chit_chat_indexes]
+        if not segments_to_index:
+            # 전부 잡담으로 잘못 판단된 경우 안전장치 — 아무것도 임베딩 안 하는 것보다 낫다.
+            segments_to_index = segments
+
         load_result = load_document(db, file_id, transcription=[
             {
                 "speaker": s.speaker_label or "unknown",
@@ -186,63 +145,98 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
                 "start": s.start_ms / 1000,
                 "end": s.end_ms / 1000,
             }
-            for s in segments
+            for s in segments_to_index
         ])
         if load_result.get("status") != "success":
             # 임베딩 실패는 회의 전체를 미완료로 취급한다 — 검색이 안 되는 회의를
             # completed로 표시하면 나중에 "왜 검색이 안 되지"로 이어지기 때문.
             raise _PostprocessFailure(f"세그먼트 임베딩 실패: {load_result}")
+
+        file_crud.update_analysis_status(db, file_id, "completed")  # AI Chat 검색 대상에 포함되려면 필요
+
         segment_chunks = content_chunk_crud.get_chunks_by_file(db, file_id, chunk_type="meeting_segment")
         segment_chunk_ids = [str(c.id) for c in segment_chunks]
 
-        # 3. 요약 생성 및 저장
-        summary_data = _generate_summary(full_transcript)
+        # 4. 요약 / 결정사항 / 할 일 저장 — 원자적 트랜잭션.
+        #    기존엔 단계마다(upsert_summary/process_topics/create_task 각각) 즉시 개별
+        #    커밋했는데, 그러면 예를 들어 할 일 저장 도중 예외가 나도 이미 저장된
+        #    요약/결정사항은 커밋된 채로 남아 meeting.status만 failed가 되고, 재처리
+        #    시 결정사항/할일이 중복 생성될 위험이 있었다 (post_meeting/pipeline.py가
+        #    이미 이 문제를 해결한 패턴 — commit=False로 쌓았다가 한 번만 커밋).
+        #    이 지점 이전 실패는 전부 롤백, 이후엔 확정된 사실로 취급한다.
         summary_row = meeting_crud.upsert_summary(
             db,
             meeting_id,
-            full_summary=summary_data["full_summary"],
-            short_summary=summary_data["short_summary"],
-            discussion_points=summary_data["discussion_points"],
-            generation_status="completed" if summary_data["full_summary"] else "failed",
+            meeting_purpose=extraction["meeting_purpose"],
+            full_summary=extraction["full_summary"],
+            short_summary=extraction["short_summary"],
+            discussion_points=extraction["discussion_points"],
+            next_steps=extraction["next_steps"],
+            generation_status="completed" if extraction["full_summary"] else "failed",
             generated_at=datetime.now(timezone.utc),
+            commit=False,
         )
 
-        # 4. 결정사항 / 할 일 추출 및 저장
-        extraction = _extract_decisions_and_tasks(full_transcript)
+        # decision_transition.process_topics()가 확정/재논의/재확인 상태에 따라
+        # 기존 decision을 전이시키거나 새로 등록한다 (post_meeting 파이프라인 2-3
+        # 설계 재사용 - 여기서 직접 만들지 않는다).
+        # llm_extractor가 이미 status 값을 검증해서 채워주지만, process_topics()도
+        # 자체적으로 한 번 더 화이트리스트 검증한다 (지수 리뷰 반영 - PR #65).
+        topics = [
+            d for d in extraction["topics"]
+            if str(d.get("title") or "").strip() and str(d.get("decision_text") or "").strip()
+        ]
+        new_decisions = decision_transition.process_topics(
+            db,
+            workspace_id=meeting.workspace_id,
+            category_id=meeting.category_id,
+            meeting_id=meeting_id,
+            topics=topics,
+            commit=False,
+        )
 
-        decision_ids: list[str] = []
-        for d in extraction["decisions"]:
-            title = str(d.get("title") or "").strip()
-            decision_text = str(d.get("decision_text") or "").strip()
-            if not title or not decision_text:
-                continue
-            row = meeting_crud.create_decision(
-                db,
-                workspace_id=meeting.workspace_id,
-                meeting_id=meeting_id,
-                title=title,
-                decision_text=decision_text,
-                decided_at=datetime.now(timezone.utc),
-                reason=str(d.get("reason") or "") or None,
-                status="active",
-            )
-            decision_ids.append(str(row.id))
-
-        task_ids: list[str] = []
-        for t in extraction["tasks"]:
+        task_rows = []
+        for t in extraction["action_items"]:
             title = str(t.get("title") or "").strip()
             if not title:
                 continue
+            # [수정] AI가 추출한 할 일은 곧바로 "open"(정식 등록)이 아니라 "suggested"(검수
+            # 대기)로 넣는다 - 프론트 검수 UI(승인/거절, suggestedTasks)와 조회 API
+            # (meeting_crud.list_suggested_tasks_by_meeting)는 이미 이 status를 전제로
+            # 만들어져 있었는데, 생성부만 "open"으로 남아있어서 검수 화면에 아무것도 안
+            # 뜨는 상태였다. 승인 시 프론트가 PATCH .../status로 "open"으로 바꾼다.
             row = meeting_crud.create_task(
                 db,
                 workspace_id=meeting.workspace_id,
                 category_id=meeting.category_id,
                 title=title,
                 meeting_id=meeting_id,
-                status="open",
-                assignee_label=str(t.get("assignee_label") or "") or None,
+                status="suggested",
+                assignee_label=str(t.get("assignee") or "") or None,
+                description=str(t.get("description") or "") or None,
+                due_at=_parse_due_date(t.get("due_date")),
+                commit=False,
             )
-            task_ids.append(str(row.id))
+            task_rows.append(row)
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        decision_ids = [str(d.id) for d in new_decisions]
+        task_ids = [str(row.id) for row in task_rows]
+
+        # 5. 검색 인덱싱 — 4번과 별개 단위 (document_loader/index_decisions는 자체
+        #    원자성을 보장하므로 4번의 db.commit()과 억지로 묶지 않는다. 4번이 이미
+        #    확정된 뒤라 여기서 실패해도 요약/결정/할일 자체는 무효화되지 않는다).
+        # 새로 생성된 decision만 DECISION_COLLECTION에 벡터로 저장한다.
+        indexer.index_decisions(db, meeting.workspace_id, meeting.category_id, new_decisions)
+        # AI Chat이 "왜 그렇게 결정됐어?" 질문에 원문 발화 청크까지 같이 찾아 보여줄 수
+        # 있도록, 이 회의의 content_chunks에 새 decision을 태깅한다 (기존엔 죽은
+        # pipeline.py만 이 함수를 호출하고 있어서 실제로는 한 번도 안 쓰이고 있었음).
+        indexer.tag_chunks_with_decisions(db, file_id, new_decisions, commit=True)
 
         meeting_crud.update_meeting_status(db, meeting_id, status="completed")
 
@@ -250,14 +244,16 @@ def meeting_postprocess_node(state: MeetingPostprocessState) -> dict:
             "full_transcript": full_transcript,
             "meeting_segment_ids": [str(s.id) for s in segments],
             "segment_chunk_ids": segment_chunk_ids,
-            "full_summary": summary_data["full_summary"],
-            "short_summary": summary_data["short_summary"],
-            "discussion_points": summary_data["discussion_points"],
-            "summary_generation_status": "completed" if summary_data["full_summary"] else "failed",
+            "meeting_purpose": extraction["meeting_purpose"],
+            "full_summary": extraction["full_summary"],
+            "short_summary": extraction["short_summary"],
+            "discussion_points": extraction["discussion_points"],
+            "next_steps": extraction["next_steps"],
+            "summary_generation_status": "completed" if extraction["full_summary"] else "failed",
             "meeting_summary_id": str(summary_row.id),
-            "extracted_decisions": extraction["decisions"],
+            "extracted_decisions": extraction["topics"],
             "decision_ids": decision_ids,
-            "extracted_tasks": extraction["tasks"],
+            "extracted_tasks": extraction["action_items"],
             "task_ids": task_ids,
         }
 

@@ -241,7 +241,7 @@ class DocumentPipeline:
         #    단, VL 큐에 이 페이지의 표/차트 처리가 대기 중이면 스킵한다
         #    (아직 처리 안 된 것을 "내용 없음"으로 착각해 전체 페이지를
         #    중복으로 재-OCR하는 버그 수정 — 2026-07-16)
-        has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 2
+        has_real_text = len([t for t in content.text if len(t.text.strip()) > 3]) > 0
         has_ocr_text  = bool(content.images)
         has_tables    = bool(content.tables)
         has_pending_vl = any(task["page_no"] == page_no for task in self._vl_queue)
@@ -295,6 +295,47 @@ class DocumentPipeline:
         return False
 
     @staticmethod
+    def _overlaps_extracted_text(
+        fig_bbox: tuple[float, float, float, float],
+        text_blocks: list,
+        threshold: float = 0.6,
+        bins: int = 40,
+    ) -> bool:
+        """figure bbox 세로 구간의 threshold 이상이 이미 추출된 텍스트로 덮이면 True.
+
+        디지털 PDF에서 테두리 없는(격자선 없는) 표는 pdfplumber가 표로 인식하지
+        못해 _overlaps_plumber_table로 걸러지지 않는다. 이 경우 YOLO가 table_image로
+        잡아 VL OCR을 또 돌리면, 이미 content.text에 정확히 뽑힌 내용이 content.tables에
+        VL 재구성 결과로 중복 추가된다 (예: 표지/목차형 표, 명단표).
+
+        면적(area) 기준으로 재면 다열(multi-column) 표처럼 텍스트 박스가 좁고
+        여백이 넓은 레이아웃에서 실제로는 전체 내용이 다 뽑혔는데도 커버리지가
+        낮게 나와 스킵을 못 한다. 대신 bbox를 세로로 잘게 나눠 각 구간에 텍스트가
+        하나라도 걸치는지(행 단위 커버리지)를 보면 열 배치와 무관하게 안정적으로
+        판단할 수 있다.
+        """
+        fx0, fy0, fx1, fy1 = fig_bbox
+        height = fy1 - fy0
+        if height <= 0:
+            return False
+        bin_h = height / bins
+        covered_bins = [False] * bins
+        for tb in text_blocks:
+            if not tb.text.strip():
+                continue
+            tx0, ty0, tx1, ty1 = tb.bbox
+            if tx1 <= fx0 or tx0 >= fx1:
+                continue
+            y0c, y1c = max(ty0, fy0), min(ty1, fy1)
+            if y1c <= y0c:
+                continue
+            start_bin = max(0, int((y0c - fy0) / bin_h))
+            end_bin = min(bins, int((y1c - fy0) / bin_h) + 1)
+            for i in range(start_bin, end_bin):
+                covered_bins[i] = True
+        return (sum(covered_bins) / bins) >= threshold
+
+    @staticmethod
     def _is_contained(
         fig_bbox: tuple[float, float, float, float],
         accepted: list[tuple[float, float, float, float]],
@@ -313,6 +354,44 @@ class DocumentPipeline:
             if overlap / fig_area >= threshold:
                 return True
         return False
+
+    @staticmethod
+    def _trim_bbox_excluding(
+        container: tuple[float, float, float, float],
+        exclude: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        """container bbox에서 exclude bbox와 겹치는 가장자리를 잘라낸 bbox를 반환합니다.
+
+        완전한 다각형 차집합 대신, exclude가 container의 위/아래/좌/우 중
+        한쪽 가장자리에 거의 붙어서 겹치는(표가 chart 박스 아래쪽을 침범하는 등)
+        실무에서 흔한 케이스만 처리합니다. 애매하게 겹치면(가운데를 관통하는 등)
+        원래 bbox를 그대로 반환합니다 — 호출부에서 이 경우 안전하게 통째로 스킵합니다.
+        """
+        cx0, cy0, cx1, cy1 = container
+        ex0, ey0, ex1, ey1 = exclude
+
+        ix0, iy0 = max(cx0, ex0), max(cy0, ey0)
+        ix1, iy1 = min(cx1, ex1), min(cy1, ey1)
+        if ix1 <= ix0 or iy1 <= iy0:
+            return container  # 안 겹침
+
+        overlap_w = ix1 - ix0
+        overlap_h = iy1 - iy0
+        c_w, c_h = cx1 - cx0, cy1 - cy0
+
+        # 가로로 컨테이너 폭 대부분을 덮으면 위/아래 가장자리 트리밍 후보
+        if overlap_w >= c_w * 0.8:
+            if ey1 >= cy1 - 1:      # exclude가 컨테이너 아래쪽에 붙음
+                return (cx0, cy0, cx1, min(cy1, ey0))
+            if ey0 <= cy0 + 1:      # exclude가 컨테이너 위쪽에 붙음
+                return (cx0, max(cy0, ey1), cx1, cy1)
+        # 세로로 컨테이너 높이 대부분을 덮으면 좌/우 가장자리 트리밍 후보
+        if overlap_h >= c_h * 0.8:
+            if ex1 >= cx1 - 1:      # exclude가 컨테이너 오른쪽에 붙음
+                return (cx0, cy0, min(cx1, ex0), cy1)
+            if ex0 <= cx0 + 1:      # exclude가 컨테이너 왼쪽에 붙음
+                return (max(cx0, ex1), cy0, cx1, cy1)
+        return container  # 애매한 겹침 — 트리밍 불가
 
     # ── YOLO style 적용 ──────────────────────────────────────────────────────
 
@@ -408,6 +487,12 @@ class DocumentPipeline:
                 print(f"  [SKIP] pdfplumber 표와 중복 영역 → VL 스킵 (bbox={nb})")
                 continue
 
+            # 테두리 없는 표라 pdfplumber는 못 잡았지만, 이미 정규 텍스트로
+            # 60% 이상 덮여있으면 VL 재구성이 불필요한 중복이므로 스킵
+            if block.figure_type == "table_image" and self._overlaps_extracted_text(nb, content.text):
+                print(f"  [SKIP] 이미 텍스트로 추출된 영역(테두리 없는 표) → VL 스킵 (bbox={nb})")
+                continue
+
             cropped = crop_layout_rect(page_image, nb, dpi=self.dpi)
             if not is_valid_crop(cropped):
                 continue
@@ -446,18 +531,59 @@ class DocumentPipeline:
         # 만들므로 버린다. 개별 후보를 2개 이상 포함할 때만 컨테이너로 판정
         # (1개 포함은 부분/전체 크롭 관계일 수 있어 유지).
         # diagram 큰 박스는 위 2단계의 "큰 쪽 유지" 규칙 대상이므로 제외.
+        #
+        # 단, table_image와 겹치는 경우는 예외 — chart와 table은 서로 다른
+        # 객체라 "부분/전체 크롭"일 수가 없다. 그렇다고 통째로 버리면 표와
+        # 겹치지 않는 나머지 영역(진짜 차트 콘텐츠)까지 같이 유실되므로,
+        # 표와 겹치는 가장자리만 잘라내고 나머지는 살려서 OCR한다.
+        # 트리밍이 애매해서 실패하면(가운데를 관통하는 등) 안전하게 통째로
+        # 버린다 (2026-07-31).
+        # 표가 chart 박스 아래로 살짝 삐져나오는 경우가 흔해 90% 완전 포함
+        # 기준(_is_contained 기본값)으로는 못 잡으므로 50%로 완화해서 체크한다.
         for big in candidates:
             if id(big) in dropped_ids or big["fig_type"] != "chart":
                 continue
-            contained = sum(
-                1 for other in candidates
+            others_inside = [
+                other for other in candidates
                 if other is not big
                 and id(other) not in dropped_ids
                 and self._is_contained(other["bbox"], [big["bbox"]])
-            )
-            if contained >= 2:
+            ]
+            overlapping_tables = [
+                other for other in candidates
+                if other is not big
+                and id(other) not in dropped_ids
+                and other["fig_type"] == "table_image"
+                and self._is_contained(other["bbox"], [big["bbox"]], threshold=0.5)
+            ]
+            if overlapping_tables:
+                trimmed_bbox = big["bbox"]
+                for tbl in overlapping_tables:
+                    trimmed_bbox = self._trim_bbox_excluding(trimmed_bbox, tbl["bbox"])
+                if trimmed_bbox == big["bbox"]:
+                    print(
+                        f"  [SKIP] 표 영역을 포함하는 chart 컨테이너 → 트리밍 불가, 통째로 스킵 "
+                        f"(bbox={big['bbox']})"
+                    )
+                    dropped_ids.add(id(big))
+                    continue
+                recropped = crop_layout_rect(page_image, trimmed_bbox, dpi=self.dpi)
+                if not is_valid_crop(recropped):
+                    print(
+                        f"  [SKIP] chart에서 표 겹침 영역 제외 후 크롭이 너무 작음 → 스킵 "
+                        f"(원래={big['bbox']} → 조정={trimmed_bbox})"
+                    )
+                    dropped_ids.add(id(big))
+                    continue
                 print(
-                    f"  [SKIP] 개별 figure {contained}개를 감싸는 컨테이너 chart → 스킵 "
+                    f"  [TRIM] chart bbox에서 표와 겹치는 영역 제외 "
+                    f"(원래={big['bbox']} → 조정={trimmed_bbox})"
+                )
+                big["bbox"] = trimmed_bbox
+                big["cropped"] = recropped
+            elif len(others_inside) >= 2:
+                print(
+                    f"  [SKIP] 개별 figure {len(others_inside)}개를 감싸는 컨테이너 chart → 스킵 "
                     f"(bbox={big['bbox']})"
                 )
                 dropped_ids.add(id(big))

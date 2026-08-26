@@ -1,43 +1,25 @@
-"""실시간 판단 파이프라인 1-2: 문서 기반 모순 감지 · 추천
+"""실시간 판단 파이프라인 1-2: 문서 기반 관련 자료 추천
 
-decision_judgment.judge()가 "none"(DECISION_COLLECTION 매칭 없음)을 반환했을 때,
-또는 애초에 정적 자료 관련 발화일 때 도는 경로. 과거 결정과는 무관하게, 지금
-유효한 문서 자체와 비교한다.
+decision_judgment.judge()가 "none"(관련 decision 없음)을 반환했을 때, 발화와 관련된
+문서(문서 분석 탭 업로드 자료, document_collection)를 찾아 추천한다.
 
-[MVP 스코프] 코드 분석(tree-sitter, code_symbols/code_facts)이 아직 구현 확정
-전이라, 이번 스코프는 문서(content_chunks, chunk_type='document_text') 비교만
-구현한다. code_facts 검색은 함수 스텁만 남겨두고 실제 로직은 비워둔다 - 코드
-분석 파이프라인이 확정되면 그때 채운다.
+[수정] 문서 분석 탭 자료는 결정사항이 아니라 참고자료라, 이 내용을 근거로
+"모순"을 판단하지 않는다 (기존엔 문서 내용과 발화가 다르면 모순 팝업을 띄웠으나,
+참고자료는 애초에 맞고 틀리고를 판단할 대상이 아니라는 게 확인되어 제거함).
+문서는 오직 관련 자료 추천에만 쓴다.
+
+[MVP 스코프] code_facts(코드베이스 자체 값과의 사실 비교)는 위 모순판단 제거와
+성격이 달라 별도 판단 - tree-sitter 파이프라인 확정 전이라 스텁만 남겨둔다.
 """
 
-import json
 import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.db.crud import content_chunk_crud, contradiction_crud, file_crud, history_crud
-from backend.modules.llm.ollama_client import OLLAMA_MODEL_HEAVY, OLLAMA_MODEL_LIGHT, _call_ollama
+from backend.db.crud import file_crud, history_crud
 from backend.modules.rag import chroma_client
 
-CONTRADICTION_MATCH_THRESHOLD = 0.65  # TBD - 실험 후 조정. 이 아래는 모순 검토할 가치도 없을 만큼 무관.
-CONTRADICTION_POPUP_THRESHOLD = 0.6
-
-JUDGMENT_PROMPT_TEMPLATE = """아래는 방금 나온 발화와, 그것과 의미적으로 유사한 문서 내용이다.
-이 발화가 문서 내용과 실제로 충돌하는지 판단해서 JSON으로만 답하라.
-
-[문서 내용]
-{document_content}
-(출처: {filename})
-
-[방금 발화]
-{statement}
-
-[출력 JSON]
-{{
-  "is_contradiction": true/false,
-  "confidence": 0.0
-}}
-"""
+RECOMMENDATION_MATCH_THRESHOLD = 0.65  # TBD - 실험 후 조정. 이 아래는 추천할 가치도 없을 만큼 무관.
 
 
 def _find_code_facts_match(statement: str) -> None:
@@ -47,33 +29,6 @@ def _find_code_facts_match(statement: str) -> None:
     지금은 항상 None을 반환해 이 경로가 스킵되게 한다.
     """
     return None
-
-
-def _judge_document_contradiction(document_content: str, filename: str, statement: str) -> dict:
-    prompt = JUDGMENT_PROMPT_TEMPLATE.format(
-        document_content=document_content, filename=filename, statement=statement
-    )
-    # Model1(경량)로 1차 판단
-    raw = _call_ollama(prompt, timeout=60.0, model=OLLAMA_MODEL_LIGHT)
-    judgment = _parse_document_judgment(raw)
-
-    # [추가 - 2026.07.16] confidence 낮으면 Model2로 재판단 (decision_judgment와 동일 패턴)
-    if judgment["is_contradiction"] and judgment["confidence"] < CONTRADICTION_POPUP_THRESHOLD:
-        heavy_raw = _call_ollama(prompt, timeout=150.0, model=OLLAMA_MODEL_HEAVY)
-        judgment = _parse_document_judgment(heavy_raw)
-
-    return judgment
-
-
-def _parse_document_judgment(raw: str) -> dict:
-    try:
-        start, end = raw.find("{"), raw.rfind("}")
-        parsed = json.loads(raw[start : end + 1])
-        parsed.setdefault("is_contradiction", False)
-        parsed.setdefault("confidence", 0.0)
-        return parsed
-    except (json.JSONDecodeError, ValueError):
-        return {"is_contradiction": False, "confidence": 0.0}
 
 
 def judge(
@@ -91,7 +46,7 @@ def judge(
     decision_judgment.judge()가 "none"을 반환했을 때 이어서 호출.
 
     Returns:
-        {"case": "contradiction"|"recommendation"|"none", "popup": dict|None}
+        {"case": "recommendation"|"none", "popup": dict|None}
     """
     session_kwargs = {"session_meeting_id": session_meeting_id, "session_room_id": session_room_id}
 
@@ -123,62 +78,10 @@ def judge(
     if not file_row:
         return {"case": "none", "popup": None}
 
-    # [추가 - 리뷰 반영] top["id"]는 ChromaDB 문서ID(=content_chunks.chroma_id)이지,
-    # Contradiction.reference_chunk_id가 가리키는 Postgres content_chunks.id(별개 UUID)가
-    # 아니다. 실제 청크 row를 찾아서 그 id를 넘겨야 CHECK 제약(reference_type='content_chunk'
-    # → reference_chunk_id 필수)을 만족한다. 못 찾으면 이 매칭은 신뢰할 수 없으므로 스킵.
-    chunk_row = content_chunk_crud.get_chunk_by_chroma_id(db, top["id"])
-    if not chunk_row:
+    # threshold 미만이면 관련도 자체가 낮아 추천할 가치도 없음
+    if top["score"] < RECOMMENDATION_MATCH_THRESHOLD:
         return {"case": "none", "popup": None}
 
-    # threshold 미만이면 관련도 자체가 낮아 모순 검토할 가치도 없음
-    if top["score"] < CONTRADICTION_MATCH_THRESHOLD:
-        return {"case": "none", "popup": None}
-
-    # [수정 - 2026.07.16] 벡터 유사도는 "관련 있어 보이는 후보"를 좁히는 역할일 뿐,
-    # "충돌하는지"는 별개 판단이라 LLM이 내용을 읽고 한 번 더 확인해야 한다
-    # (유사도 높다고 곧 모순은 아님 - 예: "API 응답 속도" 발화와 "API 응답 포맷: JSON"
-    # 문서는 유사도는 높아도 충돌하는 내용이 아님).
-    #
-    # 기존에는 모순 판단(threshold 0.65)과 추천 판단(threshold 0.8)을 별도 숫자로
-    # 나눠서, LLM이 "모순 아님"이라고 판단해도 유사도가 0.65~0.8 사이면 추천도 안 뜨고
-    # 사라지는 구멍이 있었음. 지금은 "모순 판단까지 갔다가 아니라고 나온 것 = 그 자체로
-    # 추천 대상"으로 자연스럽게 이어지도록 통일 - 별도 RECOMMENDATION_MATCH_THRESHOLD 불필요.
-    judgment = _judge_document_contradiction(top["content"], file_row.original_filename, statement)
-
-    if judgment["is_contradiction"] and judgment["confidence"] >= CONTRADICTION_POPUP_THRESHOLD:
-        dedup_key = contradiction_crud.make_deduplication_key(
-            source_type, source_id, file_id, file_id
-        )
-        if not contradiction_crud.is_in_cooldown(db, workspace_id, dedup_key):
-            contradiction = contradiction_crud.create_contradiction(
-                db,
-                workspace_id=workspace_id, category_id=category_id,
-                source_type=source_type, reference_type="content_chunk",
-                reference_file_id=file_id,
-                reference_chunk_id=chunk_row.id,
-                statement_text_snapshot=statement,
-                reference_text_snapshot=top["content"],
-                confidence_score=judgment["confidence"],
-                deduplication_key=dedup_key,
-                **session_kwargs,
-                **({"meeting_segment_id": source_id} if source_type == "meeting_segment"
-                   else {"room_message_id": source_id}),
-            )
-            return {
-                "case": "contradiction",
-                "popup": {
-                    "type": "contradiction",
-                    "message": f"'{statement}'이(가) 업로드된 {file_row.original_filename}의"
-                               f" 내용과 다릅니다",
-                    "contradiction_id": str(contradiction.id),
-                    "actions": ["change_acknowledged", "keep_reference"],
-                },
-            }
-        # 쿨다운 중이면 팝업 없이 종료 (같은 모순 반복 알림 방지)
-        return {"case": "contradiction", "popup": None}
-
-    # 모순은 아니지만 관련은 있었던 경우 → 문서 추천으로 이어짐
     already_shown = history_crud.already_notified_in_session(
         db, reference_file_id=file_id, **session_kwargs
     )

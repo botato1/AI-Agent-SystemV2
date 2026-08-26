@@ -64,6 +64,25 @@ def delete_workspace(db: Session, workspace_id: uuid.UUID) -> Optional[Workspace
 def add_member(
     db: Session, workspace_id: uuid.UUID, user_id: uuid.UUID, added_by: uuid.UUID, role: str = "member"
 ) -> WorkspaceMember:
+    existing = (
+        db.query(WorkspaceMember)
+        .filter(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.user_id == user_id,
+        )
+        .first()
+    )
+    if existing:
+        # 예전에 제거됐던 멤버를 다시 추가하는 경우 - 새로 INSERT하면 유니크 제약 위반되므로
+        # 기존 row를 되살린다
+        existing.removed_at = None
+        existing.role = role
+        existing.added_by = added_by
+        existing.joined_at = func.now()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
     row = WorkspaceMember(
         workspace_id=workspace_id, user_id=user_id, added_by=added_by, role=role
     )

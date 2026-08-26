@@ -104,7 +104,12 @@ class Settings:
         "FRONTEND_PASSWORD_RESET_URL",
         "http://localhost:5173/reset-password"
     )
-
+    
+    # 프론트엔드 회원가입 페이지 URL (워크스페이스 초대 메일 링크에 포함)
+    FRONTEND_SIGNUP_URL: str = os.getenv(
+        "FRONTEND_SIGNUP_URL",
+        "http://localhost:5173/signup"
+    )
 
 # 다른 파일에서 settings.SQLITE_DB_PATH 이런 식으로 쓰기 위한 객체
 settings = Settings()

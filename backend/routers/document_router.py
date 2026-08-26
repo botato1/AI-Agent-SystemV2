@@ -2,10 +2,14 @@
 
 from typing import Literal
 from uuid import UUID
+from pathlib import Path
 
+from fastapi.responses import FileResponse
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query, BackgroundTasks, status
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
+from backend.core.security import create_document_ws_ticket
 from backend.services.document_service import (
     upload_and_process_document,
     delete_processed_document,
@@ -15,7 +19,7 @@ from backend.services.document_service import (
 from backend.db.crud import document_crud, file_crud, similarity_crud
 from backend.schemas.document_schema import DocumentFigureListResponse, DocumentGraphResponse
 from backend.db.session import get_db
-from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
 
 
 router = APIRouter(
@@ -37,7 +41,7 @@ def _get_workspace_file_or_404(db: Session, file_id: UUID, workspace_id: UUID):
 @router.get("/graph", response_model=DocumentGraphResponse)
 def get_document_graph_api(
     workspace_id: UUID,
-    min_score: float = Query(default=0.5, ge=0, le=1),
+    min_score: float = Query(default=0.6, ge=0, le=1),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -63,17 +67,19 @@ def get_document_graph_api(
 @router.get("")
 def get_document_list(
     workspace_id: UUID,
+    category_id: UUID | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
     try:
-        files = file_crud.list_files_by_kind(db, workspace_id, "document")
+        files = file_crud.list_files_by_kind(db, workspace_id, "document", category_id=category_id)
 
         documents = [
             {
                 "document_id": str(f.id),
+                "category_id": str(f.category_id),
                 "filename": f.original_filename,
                 "analysis_status": f.analysis_status,
                 "created_at": f.created_at,
@@ -105,11 +111,10 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     room_id: str | None = Form(None),
-    document_type: Literal["document", "meeting"] = Form(
-        "document",
-        alias="type",
-    ),
+    meeting_id: str | None = Form(None),
+    document_type: Literal["document", "meeting"] = Form("document", alias="type"),
     previous_file_id: UUID | None = Form(None),
+    category_id: UUID | None = Form(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -143,10 +148,12 @@ async def upload_document(
             db=db,
             file=file,
             workspace_id=workspace_id,
+            category_id=category_id,
             background_tasks=background_tasks,
             room_id=room_id,
+            meeting_id=meeting_id,
             document_type=document_type,
-            user_id=current_user_id,
+            current_user_id=current_user_id,
             previous_file_id=previous_file_id,
         )
 
@@ -258,6 +265,33 @@ def delete_document_api(
             detail="문서 삭제 중 오류가 발생했습니다.",
         )
     
+class DocumentCategoryUpdateRequest(BaseModel):
+    category_id: UUID
+
+
+# 문서 카테고리 변경
+@router.patch("/{document_id}")
+def update_document_category_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    request: DocumentCategoryUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    category = resolve_category(db, workspace_id, request.category_id)
+    workspace_file = file_crud.update_file_category(db, document_id, category.id)
+
+    return {
+        "status": "success",
+        "document_id": str(document_id),
+        "category_id": str(workspace_file.category_id),
+        "message": "문서 카테고리가 변경되었습니다.",
+        "error": None,
+    }
+    
     
 @router.get("/{document_id}/figures", response_model=DocumentFigureListResponse)
 def get_document_figures_api(
@@ -276,3 +310,42 @@ def get_document_figures_api(
             for f in figures
         ]
     )
+
+# 원본 파일 다운로드/스트리밍
+@router.get("/{document_id}/file")
+def get_document_file_api(
+    workspace_id: UUID,
+    document_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    workspace_file = _get_workspace_file_or_404(db, document_id, workspace_id)
+
+    file_path = Path(workspace_file.storage_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="원본 파일을 찾을 수 없습니다.",
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type=workspace_file.mime_type or "application/octet-stream",
+        filename=workspace_file.original_filename,
+    )
+
+class DocumentWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 문서/그래프 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=DocumentWsTicketResponse)
+def get_document_ws_ticket(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_document_ws_ticket(current_user_id, str(workspace_id))
+    return DocumentWsTicketResponse(ws_ticket=ticket)

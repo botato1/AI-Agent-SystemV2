@@ -2,10 +2,10 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud
 from backend.schemas.task_schema import (
@@ -30,16 +30,19 @@ def _get_task_or_404(db: Session, task_id: UUID, workspace_id: UUID):
     return item
 
 
-# 워크스페이스 내 진행 중인 할 일 목록 조회
+# 워크스페이스 내 할 일 목록 조회 (기본: 진행 중인 것만, status=all이면 완료 포함 전체)
 @router.get("", response_model=TaskListResponse)
 def get_task_list(
     workspace_id: UUID,
+    status: str | None = Query(None),
+    category_id: UUID | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    items = meeting_crud.list_open_tasks(db, workspace_id)
+    include_done = status == "all"
+    items = meeting_crud.list_tasks(db, workspace_id, include_done=include_done, category_id=category_id)
     return TaskListResponse(
         tasks=[TaskResponse.model_validate(i) for i in items]
     )
@@ -55,12 +58,7 @@ def create_task(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
 
-    category = room_crud.get_default_category(db, workspace_id)
-    if not category:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
-        )
+    category = resolve_category(db, workspace_id, request.category_id)
 
     item = meeting_crud.create_task(
         db,
@@ -135,6 +133,14 @@ def update_task_api(
     _get_task_or_404(db, task_id, workspace_id)
 
     update_fields = request.model_dump(exclude_unset=True)
+    if "category_id" in update_fields:
+        if update_fields["category_id"] is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="category_id는 null로 지울 수 없습니다.",
+            )
+        category = resolve_category(db, workspace_id, update_fields["category_id"])
+        update_fields["category_id"] = category.id
     if not update_fields:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -1,0 +1,27 @@
+FROM pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/modules/stt/stt_requirements_v2.txt .
+RUN pip install --no-cache-dir --break-system-packages -r stt_requirements_v2.txt
+
+RUN pip install --no-cache-dir --break-system-packages --upgrade \
+    torch torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# pyannote.audio 4.x의 오디오 디코딩(AudioDecoder)에 필요, torch 버전과 정확히 맞아야 해서 torch 업그레이드 이후에 설치
+RUN pip install --no-cache-dir --break-system-packages torchcodec \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# 상대 import 유지를 위해 stt/ 서브디렉토리로 복사
+COPY backend/modules/stt/ ./stt/
+
+RUN mkdir -p /app/stt/uploads
+
+EXPOSE 8001
+
+CMD ["python", "-m", "uvicorn", "stt.main:app", "--host", "0.0.0.0", "--port", "8001"]

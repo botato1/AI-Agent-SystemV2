@@ -212,6 +212,7 @@ MeetingInputType = Literal[
 ]
 
 MeetingStatus = Literal[
+    "scheduled",
     "created",
     "recording",
     "paused",
@@ -232,6 +233,7 @@ DecisionStatus = Literal[
     "active",
     "superseded",
     "cancelled",
+    "pending",
 ]
 
 TaskStatus = Literal[
@@ -239,6 +241,7 @@ TaskStatus = Literal[
     "in_progress",
     "done",
     "cancelled",
+    "suggested",
 ]
 
 TaskPriority = Literal[
@@ -292,6 +295,7 @@ AIChatRole = Literal[
 AIMessageSourceType = Literal[
     "content_chunk",
     "code_fact",
+    "decision",
 ]
 
 
@@ -302,4 +306,8 @@ NotificationType = Literal[
     "meeting_summary_ready",
     "file_analysis_completed",
     "file_analysis_failed",
+    "decision_reminder",
+    "repeat_discussion",
+    "document_recommendation",
+    "meeting_reminder",
 ]

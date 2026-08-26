@@ -34,7 +34,15 @@ if str(BASE_DIR) not in sys.path:
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
-CHROMA_DIR = os.path.join(BASE_DIR, "storage", "chroma")
+# [수정 - 2026.08.20, 지수 리뷰] 임베딩 요청 URL이 localhost로 하드코딩돼 있었는데,
+# 82서버 배포판은 docker 네트워크 안에서 ollama 서비스명으로 접속해야 해서(localhost로는
+# 안 닿음) 서버에서 직접 코드를 패치해 쓰고 있었음 - git엔 이 패치가 없어서 재배포
+# (docker compose build)할 때마다 통째로 날아가고 있었다. ollama_client.py의
+# OLLAMA_BASE_URL(env var, 기본값 localhost:11434) 패턴을 그대로 재사용해 env로
+# 제어되게 통일한다.
+from backend.modules.llm.ollama_client import OLLAMA_BASE_URL
+
+CHROMA_DIR = os.getenv("CHROMA_DIR", os.path.join(BASE_DIR, "storage", "chroma"))
 BM25_DIR = os.path.join(BASE_DIR, "storage", "bm25")
 os.makedirs(BM25_DIR, exist_ok=True)
 
@@ -43,7 +51,7 @@ chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 # ── 컬렉션 이름 상수 ──────────────────────────────────────────
 MEETING_COLLECTION  = "meeting_collection"
 DOCUMENT_COLLECTION = "document_collection"
-KNOWLEDGE_COLLECTION = "knowledge_collection"
+KNOWLEDGE_COLLECTION = "knowledge_collection"  # [원복] rag_service.py가 아직 직접 참조 중 - 폐기는 별도 작업으로
 # [추가 - 2026.07.15] post-meeting 파이프라인: 확정된 decision을 별도 벡터화.
 # decisions 테이블(Postgres)의 decision_text(+reason)를 그대로 임베딩해서 넣는 컬렉션.
 # 모순 감지 1순위 검색 대상 (content_chunks의 회의 원문 청크보다 짧고 깨끗해서
@@ -92,7 +100,7 @@ def _build_where(conditions: dict) -> dict:
 # ── 컬렉션 ────────────────────────────────────────────────────
 def get_or_create_collection(collection_name: str):
     ollama_ef = OllamaEmbeddingFunction(
-        url="http://localhost:11434/api/embeddings",
+        url=f"{OLLAMA_BASE_URL}/api/embeddings",
         model_name="bge-m3"
     )
     return chroma_client.get_or_create_collection(
@@ -171,7 +179,9 @@ def insert_document(doc: dict):
         )
 
     upload_context = doc.get("upload_context", "document")
-    collection_name = CONTEXT_TO_COLLECTION.get(upload_context, KNOWLEDGE_COLLECTION)
+    collection_name = CONTEXT_TO_COLLECTION.get(upload_context)
+    if not collection_name:
+        raise ValueError(f"insert_document: 알 수 없는 upload_context입니다: {upload_context!r}")
     collection = get_or_create_collection(collection_name)
 
     tags = doc.get("tags", [])
@@ -292,7 +302,7 @@ def search_hybrid(
     collection_name: str | None = None
 ):
     target_collections = [collection_name] if collection_name else [
-        MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION, DECISION_COLLECTION
+        MEETING_COLLECTION, DOCUMENT_COLLECTION, DECISION_COLLECTION
     ]
 
     # workspace_id(+category_id, +호출부 filter)를 _build_where로 병합
@@ -360,7 +370,7 @@ def search_hybrid(
 
             semantic_score = 1.0 - distance
             raw_bm25       = bm25_score_map.get(doc_id, 0.0)
-            keyword_score  = min(raw_bm25 / max_bm25, 1.0)
+            keyword_score  = max(0.0, min(raw_bm25 / max_bm25, 1.0))
             final_score    = float((semantic_score * 0.7) + (keyword_score * 0.3))
 
             all_results.append({
@@ -389,7 +399,7 @@ def search_hybrid(
 def get_documents_by_document_id(document_id: str, workspace_id: str) -> dict:
     total_ids, total_metadatas, total_documents = [], [], []
 
-    for collection_name in [MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION, DECISION_COLLECTION]:
+    for collection_name in [MEETING_COLLECTION, DOCUMENT_COLLECTION, DECISION_COLLECTION]:
         collection = get_or_create_collection(collection_name)
         try:
             result = collection.get(
@@ -415,7 +425,7 @@ def get_documents_by_document_id(document_id: str, workspace_id: str) -> dict:
 # [수정 사항 - 2026.07.14] workspace_id 필터/BM25 인덱스 분리 반영
 def delete_document(doc_id: str, workspace_id: str, collection_name: str | None = None):
     targets = [collection_name] if collection_name else [
-        MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION, DECISION_COLLECTION
+        MEETING_COLLECTION, DOCUMENT_COLLECTION, DECISION_COLLECTION
     ]
     for col_name in targets:
         try:
@@ -437,6 +447,6 @@ def delete_document(doc_id: str, workspace_id: str, collection_name: str | None 
 
 if __name__ == "__main__":
     print("ChromaDB 연결 확인 중...")
-    for name in [MEETING_COLLECTION, DOCUMENT_COLLECTION, KNOWLEDGE_COLLECTION, DECISION_COLLECTION]:
+    for name in [MEETING_COLLECTION, DOCUMENT_COLLECTION, DECISION_COLLECTION]:
         col = get_or_create_collection(name)
         print(f"{name} 준비 완료: {col.name}")

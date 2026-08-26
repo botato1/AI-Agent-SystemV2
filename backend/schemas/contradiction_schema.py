@@ -43,6 +43,7 @@ class ContradictionSchema(ORMBaseSchema):
 
     source_type: ContradictionSourceType
     meeting_segment_id: Optional[UUID] = None
+    meeting_id: Optional[UUID] = None  # source_type='meeting_segment'일 때만 채워짐
     room_message_id: Optional[UUID] = None
     session_meeting_id: Optional[UUID] = None
     session_room_id: Optional[UUID] = None
@@ -52,6 +53,7 @@ class ContradictionSchema(ORMBaseSchema):
     reference_chunk_id: Optional[UUID] = None
     reference_code_fact_id: Optional[UUID] = None
     reference_decision_id: Optional[UUID] = None
+    judgment_case: Optional[str] = None  # "reasoned_change" | "unreasoned_change" (decision 기반일 때만)
 
     statement_text_snapshot: str = Field(
         ...,
@@ -61,6 +63,13 @@ class ContradictionSchema(ORMBaseSchema):
         ...,
         min_length=1,
     )
+    reference_source_name: Optional[str] = None  # 근거 문서명 또는 결정 제목 (프론트 표시용)
+    display_message: Optional[str] = None  # 프론트에 바로 띄울 수 있는 조합 문구
+    resolution_type: Optional[ContradictionResolutionType] = None  # 해결된 경우만 값 있음
+    source_meeting_title: Optional[str] = None   # 모순이 감지된 회의 제목
+    source_meeting_time: Optional[datetime] = None
+    reference_meeting_title: Optional[str] = None  # 원래 결정이 나온 회의 제목 (reference_type=decision일 때만)
+    reference_meeting_time: Optional[datetime] = None
     reference_location: Optional[dict[str, Any]] = None
     reason: Optional[str] = None
 
@@ -158,6 +167,9 @@ class ContradictionSchema(ORMBaseSchema):
         return self
 
 
+
+
+
 # =============================================================================
 # Re:Call: contradiction_resolutions
 # =============================================================================
@@ -229,3 +241,10 @@ class ContradictionListResponse(BaseModel):
 class ContradictionResolveRequest(BaseModel):
     resolution_type: ContradictionResolutionType
     note: Optional[str] = None
+    new_decision_text: Optional[str] = Field(default=None, min_length=1)
+    new_decision_reason: Optional[str] = None
+
+
+class ContradictionUpdateRequest(BaseModel):
+    statement_text_snapshot: Optional[str] = Field(default=None, min_length=1)
+    reference_text_snapshot: Optional[str] = Field(default=None, min_length=1)

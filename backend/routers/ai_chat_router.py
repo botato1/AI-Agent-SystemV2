@@ -2,15 +2,17 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
 from backend.db.session import get_db
 from backend.db.crud import ai_chat_crud, room_crud
 from backend.graphs.ai_chat_graph import run_ai_chat_answer
 from backend.schemas.chat_schema import (
     AIChatSessionSchema,
+    AIChatSessionListResponse,
+    AIChatSessionUpdateRequest,
     AIChatMessageSchema,
     AIChatMessageCreateRequest,
     AIChatMessageListResponse,
@@ -22,7 +24,10 @@ router = APIRouter(
     prefix="/api/workspaces/{workspace_id}/rooms/{room_id}/ai-chat",
     tags=["AI Chat"],
 )
-
+standalone_router = APIRouter(
+    prefix="/api/workspaces/{workspace_id}/ai-chat",
+    tags=["AI Chat"],
+)
 
 def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
     room = room_crud.get_room_by_id(db, room_id, workspace_id)
@@ -34,37 +39,94 @@ def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
     return room
 
 
-# 세션 조회/생성
-@router.get("/session", response_model=AIChatSessionSchema)
-def get_or_create_ai_chat_session(
+# 새 대화 생성
+@router.post("/sessions", response_model=AIChatSessionSchema, status_code=status.HTTP_201_CREATED)
+def create_ai_chat_session(
     workspace_id: UUID,
     room_id: UUID,
+    category_id: UUID | None = Query(None),
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     _get_room_or_404(db, room_id, workspace_id)
-
-    session = ai_chat_crud.get_or_create_session(db, workspace_id, room_id, UUID(current_user_id))
+    category = resolve_category(db, workspace_id, category_id)
+    session = ai_chat_crud.create_session(db, workspace_id, room_id, UUID(current_user_id), category_id=category.id)
     return AIChatSessionSchema.model_validate(session)
 
 
-# 질문 전송 (AI 답변 생성)
-@router.post("/messages", response_model=AIChatMessageSchema, status_code=status.HTTP_201_CREATED)
+# 대화 목록 조회 (최근 활동순)
+@router.get("/sessions", response_model=AIChatSessionListResponse)
+def list_ai_chat_sessions(
+    workspace_id: UUID,
+    room_id: UUID,
+    category_id: UUID | None = Query(None),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_room_or_404(db, room_id, workspace_id)
+    sessions = ai_chat_crud.list_sessions(db, workspace_id, room_id, UUID(current_user_id), category_id=category_id)
+    return AIChatSessionListResponse(sessions=[AIChatSessionSchema.model_validate(s) for s in sessions])
+
+# 대화 카테고리 수정
+@router.patch("/sessions/{session_id}", response_model=AIChatSessionSchema)
+def update_ai_chat_session(
+    workspace_id: UUID,
+    room_id: UUID,
+    session_id: UUID,
+    request: AIChatSessionUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_owned_session_or_404(db, session_id, workspace_id, room_id, current_user_id)
+    if request.category_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="수정할 내용이 없습니다.")
+    category = resolve_category(db, workspace_id, request.category_id)
+    session = ai_chat_crud.update_session_category(db, session_id, category.id)
+    return AIChatSessionSchema.model_validate(session)
+
+def _get_owned_session_or_404(db: Session, session_id: UUID, workspace_id: UUID, room_id: UUID, current_user_id: str):
+    session = ai_chat_crud.get_session(db, session_id)
+    if (
+        not session
+        or session.workspace_id != workspace_id
+        or session.room_id != room_id
+        or session.user_id != UUID(current_user_id)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="대화를 찾을 수 없습니다.")
+    return session
+
+
+# 대화 삭제
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_ai_chat_session(
+    workspace_id: UUID,
+    room_id: UUID,
+    session_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_owned_session_or_404(db, session_id, workspace_id, room_id, current_user_id)
+    ai_chat_crud.delete_session(db, session_id)
+
+
+# 질문 전송 (특정 대화에)
+@router.post("/sessions/{session_id}/messages", response_model=AIChatMessageSchema, status_code=status.HTTP_201_CREATED)
 def send_ai_chat_message(
     workspace_id: UUID,
     room_id: UUID,
+    session_id: UUID,
     request: AIChatMessageCreateRequest,
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     room = _get_room_or_404(db, room_id, workspace_id)
+    session = _get_owned_session_or_404(db, session_id, workspace_id, room_id, current_user_id)
 
-    session = ai_chat_crud.get_or_create_session(db, workspace_id, room_id, UUID(current_user_id))
-
-    # 답변 생성 노드에 넘길 대화 이력 — 이번 질문을 저장하기 전 시점의 기록만 사용
-    # (저장 후 조회하면 방금 보낸 질문이 "이전 대화"에 중복으로 들어감)
     history_rows = ai_chat_crud.get_session_history(db, session.id)
     chat_history = [
         {"role": m.role, "content": m.content}
@@ -84,8 +146,6 @@ def send_ai_chat_message(
     answer = result.get("answer") or "지금은 답변을 생성할 수 없습니다. 잠시 후 다시 시도해주세요."
     sources = result.get("retrieved_sources") or []
 
-    # 답변 생성을 먼저 시도하고 성공했을 때만 메시지를 저장한다.
-    # (실패 시 대화기록에 "답변 없는 질문"만 남는 것을 방지)
     assistant_message = ai_chat_crud.add_ai_exchange(
         db,
         session_id=session.id,
@@ -97,23 +157,21 @@ def send_ai_chat_message(
     return AIChatMessageSchema.model_validate(assistant_message)
 
 
-# 대화 기록 조회
-@router.get("/messages", response_model=AIChatMessageListResponse)
+# 특정 대화 기록 조회
+@router.get("/sessions/{session_id}/messages", response_model=AIChatMessageListResponse)
 def get_ai_chat_messages(
     workspace_id: UUID,
     room_id: UUID,
+    session_id: UUID,
     current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    _get_room_or_404(db, room_id, workspace_id)
-
-    session = ai_chat_crud.get_or_create_session(db, workspace_id, room_id, UUID(current_user_id))
-    messages = ai_chat_crud.get_session_history(db, session.id)
+    _get_owned_session_or_404(db, session_id, workspace_id, room_id, current_user_id)
+    messages = ai_chat_crud.get_session_history(db, session_id)
     return AIChatMessageListResponse(
         messages=[AIChatMessageSchema.model_validate(m) for m in messages]
     )
-
 
 # 메시지별 근거자료 조회
 @router.get("/messages/{message_id}/sources", response_model=AIMessageSourceListResponse)
@@ -147,5 +205,176 @@ def get_ai_chat_message_sources(
 
     sources = ai_chat_crud.get_message_sources(db, message_id)
     return AIMessageSourceListResponse(
-        sources=[AIMessageSourceSchema.model_validate(s) for s in sources]
+        sources=[
+            AIMessageSourceSchema.model_validate(s).model_copy(update={"file_name": filename})
+            for s, filename in sources
+        ]
+    )
+
+
+# 새 대화 생성 (워크스페이스 단독)
+@standalone_router.post("/sessions", response_model=AIChatSessionSchema, status_code=status.HTTP_201_CREATED)
+def create_standalone_ai_chat_session(
+    workspace_id: UUID,
+    category_id: UUID | None = Query(None),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    category = resolve_category(db, workspace_id, category_id)
+    session = ai_chat_crud.create_session(db, workspace_id, None, UUID(current_user_id), category_id=category.id)
+    return AIChatSessionSchema.model_validate(session)
+
+
+# 대화 목록 조회 (워크스페이스 단독)
+@standalone_router.get("/sessions", response_model=AIChatSessionListResponse)
+def list_standalone_ai_chat_sessions(
+    workspace_id: UUID,
+    category_id: UUID | None = Query(None),
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    sessions = ai_chat_crud.list_sessions(db, workspace_id, None, UUID(current_user_id), category_id=category_id)
+    return AIChatSessionListResponse(sessions=[AIChatSessionSchema.model_validate(s) for s in sessions])
+
+
+def _get_owned_standalone_session_or_404(db: Session, session_id: UUID, workspace_id: UUID, current_user_id: str):
+    session = ai_chat_crud.get_session(db, session_id)
+    if (
+        not session
+        or session.workspace_id != workspace_id
+        or session.room_id is not None
+        or session.user_id != UUID(current_user_id)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="대화를 찾을 수 없습니다.")
+    return session
+
+
+# 대화 카테고리 수정 (워크스페이스 단독)
+@standalone_router.patch("/sessions/{session_id}", response_model=AIChatSessionSchema)
+def update_standalone_ai_chat_session(
+    workspace_id: UUID,
+    session_id: UUID,
+    request: AIChatSessionUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_owned_standalone_session_or_404(db, session_id, workspace_id, current_user_id)
+    if request.category_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="수정할 내용이 없습니다.")
+    category = resolve_category(db, workspace_id, request.category_id)
+    session = ai_chat_crud.update_session_category(db, session_id, category.id)
+    return AIChatSessionSchema.model_validate(session)
+
+# 대화 삭제 (워크스페이스 단독)
+@standalone_router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_standalone_ai_chat_session(
+    workspace_id: UUID,
+    session_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_owned_standalone_session_or_404(db, session_id, workspace_id, current_user_id)
+    ai_chat_crud.delete_session(db, session_id)
+
+
+# 질문 전송 (워크스페이스 단독, 특정 대화에)
+@standalone_router.post("/sessions/{session_id}/messages", response_model=AIChatMessageSchema, status_code=status.HTTP_201_CREATED)
+def send_standalone_ai_chat_message(
+    workspace_id: UUID,
+    session_id: UUID,
+    request: AIChatMessageCreateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    category = room_crud.get_default_category(db, workspace_id)
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="워크스페이스의 기본 카테고리를 찾을 수 없습니다.",
+        )
+    session = _get_owned_standalone_session_or_404(db, session_id, workspace_id, current_user_id)
+
+    history_rows = ai_chat_crud.get_session_history(db, session.id)
+    chat_history = [
+        {"role": m.role, "content": m.content}
+        for m in history_rows
+        if m.role in ("user", "assistant")
+    ]
+
+    result = run_ai_chat_answer(
+        session_id=str(session.id),
+        workspace_id=str(workspace_id),
+        category_id=str(category.id),
+        user_id=current_user_id,
+        user_message=request.content,
+        chat_history=chat_history,
+    )
+    answer = result.get("answer") or "지금은 답변을 생성할 수 없습니다. 잠시 후 다시 시도해주세요."
+    sources = result.get("retrieved_sources") or []
+
+    assistant_message = ai_chat_crud.add_ai_exchange(
+        db,
+        session_id=session.id,
+        user_content=request.content,
+        assistant_content=answer,
+        sources=sources,
+        model_name=result.get("answer_model_name"),
+    )
+    return AIChatMessageSchema.model_validate(assistant_message)
+
+
+# 특정 대화 기록 조회 (워크스페이스 단독)
+@standalone_router.get("/sessions/{session_id}/messages", response_model=AIChatMessageListResponse)
+def get_standalone_ai_chat_messages(
+    workspace_id: UUID,
+    session_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_owned_standalone_session_or_404(db, session_id, workspace_id, current_user_id)
+    messages = ai_chat_crud.get_session_history(db, session_id)
+    return AIChatMessageListResponse(
+        messages=[AIChatMessageSchema.model_validate(m) for m in messages]
+    )
+
+
+# 메시지별 근거자료 조회 (워크스페이스 단독)
+@standalone_router.get("/messages/{message_id}/sources", response_model=AIMessageSourceListResponse)
+def get_standalone_ai_chat_message_sources(
+    workspace_id: UUID,
+    message_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    result = ai_chat_crud.get_message_with_session(db, message_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="메시지를 찾을 수 없습니다.",
+        )
+
+    _, session = result
+    if (
+        session.workspace_id != workspace_id
+        or session.room_id is not None
+        or session.user_id != UUID(current_user_id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="메시지를 찾을 수 없습니다.",
+        )
+
+    sources = ai_chat_crud.get_message_sources(db, message_id)
+    return AIMessageSourceListResponse(
+        sources=[
+            AIMessageSourceSchema.model_validate(s).model_copy(update={"file_name": filename})
+            for s, filename in sources
+        ]
     )
