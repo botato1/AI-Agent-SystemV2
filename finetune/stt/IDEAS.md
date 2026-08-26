@@ -158,6 +158,33 @@ LLM에게 **발음형을 함께 예측**하게 해서 텍스트와 음운 정보
 **음질 지표**로 평가했지 인식률로 평가하지 않았다.
 도입한다면 반드시 **CER로 전후 비교**할 것.
 
+**2026-08-26 착수 시도 — 설치 단계에서 보류.** 82서버(GPU, ARM64/aarch64,
+stt_venv 공유 환경)에 실제로 두 라이브러리를 시도했다:
+
+- **DeepFilterNet**: 핵심(DeepFilterLib)이 Rust로 짜여 있어 Cargo 컴파일이
+  필요했고(설치함), 빌드는 성공했지만 **numpy를 2.5.x → 1.26.4로 강제
+  다운그레이드**해서 `pyannote-core`/`pyannote-metrics`/`scipy`(numpy≥2.0
+  요구)와 정면 충돌했다. **서버 재시작 시 화자분리 자체가 깨질 뻔한
+  위험한 상황**이었다 — `pip uninstall`로 즉시 되돌리고 서버 정상 재기동
+  확인함. ⚠️ 이 공유 venv에 직접 설치하면 안 된다. 격리된 별도
+  프로세스/venv로만 시도할 것.
+- **pyrnnoise**: dry-run에선 numpy 충돌 없이 깨끗했으나(사전 컴파일된
+  aarch64 wheel 있음), 실제 임포트 시 `pyrnnoise/__init__.py`가 무조건
+  끌어오는 의존 패키지 `audiolab`이 이미 설치된 `av`(PyAV) 18.0.0과
+  런타임 비호환(`ModuleNotFoundError: av.option`)이었다. `audiolab`
+  최신화도 무의미(pip 메타데이터상 이미 "만족"으로 나오는데 실제론 깨짐 —
+  `audiolab` 자체의 버그로 보임). `pyrnnoise`가 `audiolab`을 우회할
+  경로를 코드 구조상 제공하지 않아 여기서 막힘.
+
+**다음에 시도한다면**: ① `av` 버전을 낮춰서 `audiolab` 호환 확인 (단,
+`av`를 우리 코드는 안 쓰지만 다른 의존성이 최신 버전을 요구할 수 있어
+dry-run 필수), 또는 ② `audiolab`/파일 I/O 의존성이 없는 다른 RNNoise
+바인딩 탐색, 또는 ③ 애초에 격리된 venv/서브프로세스로 갈 것(이러면 이
+버전 충돌들이 우리 서버에 영향을 못 준다 — 지연 비용과 맞바꾸는 선택).
+**공유 venv에 새 오디오 처리 라이브러리를 설치할 땐 반드시 `pip install
+--dry-run`으로 numpy 재설치 여부부터 확인**할 것 — 오늘 DeepFilterNet이
+그걸 건너뛰었으면 실제 서버가 깨질 뻔했다.
+
 ---
 
 ## 측정 기반
