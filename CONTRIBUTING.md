@@ -103,7 +103,8 @@ pip install -r requirements.txt
 
 # Linux 서버 (CUDA 12.8 이상 — RTX 5090/Blackwell은 필수)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-pip install paddlepaddle-gpu -i https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
+pip install paddlepaddle-gpu==2.6.2 -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
+# -i(index-url) 아니라 -f(find-links)여야 합니다 - 86서버(RTX 5090, Python 3.12)에서 실측 확인함
 pip install -r requirements.txt
 ```
 

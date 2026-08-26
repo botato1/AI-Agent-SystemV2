@@ -16,10 +16,12 @@ COPY backend/modules/document/requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages \
     torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
-# paddlepaddle-gpu - Linux + CUDA 12.x용. 실측 확인된 조합은 3.0.0
-# (다른 CUDA 버전 서버로 옮길 경우 https://www.paddlepaddle.org.cn/install 에서 재확인 필요)
+# paddlepaddle-gpu - Linux + CUDA 12.x용.
+# [주의] install.txt/requirements.txt에 적힌 대로 -i(index-url)를 쓰면 "No matching
+# distribution found"로 빌드가 실패한다 - 이 URL은 PEP 503 인덱스가 아니라 링크 나열형
+# HTML이라 -f(find-links)로 읽어야 한다. 86서버(RTX 5090, python 3.12)에서 실측 확인함.
 RUN pip install --no-cache-dir --break-system-packages \
-    paddlepaddle-gpu -i https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
+    paddlepaddle-gpu==2.6.2 -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
 
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
