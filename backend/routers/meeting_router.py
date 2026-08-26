@@ -650,10 +650,16 @@ def reanalyze_meeting_api(
     require_workspace_member(db, workspace_id, current_user_id)
     meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
 
-    if meeting.status != "completed":
+    # completed -> processing 원자적 전이. 이미 재분석이 진행 중(processing)이거나
+    # 애초에 completed가 아니면 전이가 실패해 None이 반환된다 - 중복 클릭/재시도로
+    # 재분석이 두 번 동시에 도는 것을 여기서 막는다 (try_transition_meeting_status 참고).
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="completed", to_status="processing",
+    )
+    if transitioned is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="완료된 회의만 재분석할 수 있습니다.",
+            detail="완료된 회의만 재분석할 수 있습니다 (이미 재분석이 진행 중일 수 있습니다).",
         )
 
     background_tasks.add_task(
