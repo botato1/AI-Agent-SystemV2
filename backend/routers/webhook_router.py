@@ -62,6 +62,9 @@ def stt_refine_webhook(
             f"[webhook] 정밀 재분석 완료: meeting_id={meeting_id}, "
             f"refined_at={payload.refined_at}, segment_count={payload.segment_count}"
         )
+        # session_id 재사용 시 STT 서버 쪽 meeting_id가 여러 개 생길 수 있어서, 웹훅으로
+        # 받을 때마다 최신 meeting_id를 저장해둔다 - 수동 재분석 시 이 값을 우선 사용한다.
+        meeting_crud.update_meeting_info(db, meeting_id, stt_meeting_id=payload.meeting_id)
         try:
             refined_data = meeting_service.fetch_refined_transcript(payload.meeting_id)
             print(f"[webhook] 재분석 세그먼트 {len(refined_data.get('segments', []))}개 조회 완료")

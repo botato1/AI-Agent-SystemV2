@@ -60,8 +60,13 @@ async def _request_stt(file_content: bytes, filename: str) -> dict:
 def regenerate_summary_from_refined_transcript(
     meeting_id: str, refined_data: dict,
     max_wait_seconds: float = 300.0, poll_interval_seconds: float = 5.0,
+    force: bool = False,
 ) -> None:
     """정밀 재분석 완료 웹훅 수신 시 요약만 다시 생성해 갱신한다.
+
+    force=True면 이미 재분석 반영된 회의도 다시 갱신한다 - 사용자가 "재분석"
+    버튼으로 수동 재요청한 경우(trigger_manual_reanalysis)에 쓴다. 기본값(False)은
+    웹훅 중복 수신 방지용 dedup을 그대로 유지한다.
 
     meeting_postprocess_node는 재실행하지 않는다 - 그 노드가 결정사항/할 일
     추출까지 한 번에 묶여있어서, 여기서 다시 부르면 decision/task가 중복
@@ -95,7 +100,7 @@ def regenerate_summary_from_refined_transcript(
             time.sleep(poll_interval_seconds)
             waited += poll_interval_seconds
 
-        if summary_row.refined_at is not None:
+        if summary_row.refined_at is not None and not force:
             print(f"[meeting_service] 이미 재분석 반영됨, 중복 웹훅 스킵: meeting_id={meeting_id}")
             return
 
@@ -156,6 +161,55 @@ def regenerate_summary_from_refined_transcript(
         print(f"[meeting_service] 재분석본 요약 갱신 실패: meeting_id={meeting_id}, error={repr(e)}")
     finally:
         db.close()
+
+
+def _find_stt_meeting_id(session_id: str) -> str | None:
+    """8002의 GET /api/meetings 목록에서 session_id로 STT 쪽 meeting_id("{session_id}_{timestamp}")를 찾는다.
+
+    우리 Meeting.id(UUID)는 STT 서버 호출 시 session_id로 쓰이지만, STT 서버는
+    자기 자신의 meeting_id(파일 경로에 쓰는 조합 ID)를 별도로 갖고 있어서 이걸로
+    변환해야 /refine 엔드포인트를 호출할 수 있다.
+    """
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings")
+    response.raise_for_status()
+    for item in response.json().get("meetings", []):
+        if item.get("session_id") == session_id:
+            return item.get("meeting_id")
+    return None
+
+
+def trigger_manual_reanalysis(meeting_id: str, stt_meeting_id: str | None = None) -> None:
+    """사용자가 "재분석" 버튼을 눌렀을 때 STT 서버의 정밀 재분석을 수동으로 재요청한다.
+
+    stt_meeting_id는 이 회의가 웹훅을 한 번이라도 받아서 DB(Meeting.stt_meeting_id)에
+    저장해둔 값을 우선 사용한다 - session_id 재사용(재연결/재개) 시 STT 서버에 동일
+    session_id로 여러 meeting_id가 생길 수 있어 검색만으로는 항상 정확하지 않기 때문이다.
+    아직 한 번도 웹훅을 못 받은 회의는(None) session_id 기반 최신순 검색으로 폴백한다.
+
+    force=True로 호출하므로 이미 재분석된 회의도 다시 돌아간다(기존 재분석본 덮어씀,
+    실시간 결과는 보존됨 - STT 서버 쪽 정책). 오래 걸리는 GPU 작업이라 백그라운드
+    태스크로 실행하고, 끝나면 웹훅 수신 때와 동일한 경로로 요약을 갱신한다.
+    """
+    try:
+        if not stt_meeting_id:
+            stt_meeting_id = _find_stt_meeting_id(meeting_id)
+        if not stt_meeting_id:
+            print(f"[meeting_service] 수동 재분석 대상 없음: STT 서버에 session_id={meeting_id} 회의가 없습니다.")
+            return
+
+        with httpx.Client(timeout=STT_REQUEST_TIMEOUT_SECONDS) as client:
+            response = client.post(
+                f"{STT_SERVER_BASE_URL}/api/meetings/{stt_meeting_id}/refine",
+                params={"force": "true"},
+            )
+        response.raise_for_status()
+        print(f"[meeting_service] 수동 재분석 완료: meeting_id={meeting_id}, stt_meeting_id={stt_meeting_id}")
+
+        refined_data = fetch_refined_transcript(stt_meeting_id)
+        regenerate_summary_from_refined_transcript(meeting_id=meeting_id, refined_data=refined_data, force=True)
+    except Exception as e:
+        print(f"[meeting_service] 수동 재분석 실패: meeting_id={meeting_id}, error={repr(e)}")
 
 
 def _save_segments_bulk(
