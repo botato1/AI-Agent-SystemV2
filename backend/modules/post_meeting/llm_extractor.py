@@ -35,6 +35,10 @@ EXTRACTION_PROMPT_TEMPLATE = """다음은 회의 전체 발화 기록이다. 각
 - action_items는 담당자 또는 기한이 명시적으로 언급된 항목만 포함한다.
 - 인사말/날씨/안부 등 회의 주제와 무관한 잡담은 full_summary/discussion_points/topics
   어디에도 포함하지 마라. 대신 그런 발화의 번호를 chit_chat_segment_indexes에 전부 나열하라.
+- 각 발화 앞에는 화자 라벨도 함께 붙어있다([번호][화자명]: 내용). topics의 evidence,
+  discussion_points, full_summary를 작성할 때 발화 화자가 명확히 확인되면 "○○○가 ~라고
+  제안함/발언함" 식으로 화자를 명시해서 요약하라. 화자 라벨이 "SPEAKER"처럼 식별 안 된
+  경우나 여러 명이 함께 동의한 내용은 화자를 굳이 지어내지 말고 기존처럼 서술해도 된다.
 - title은 이 회의 내용을 대표하는 15자 내외의 짧은 제목이다.
 - full_summary, meeting_purpose, next_steps, discussion_points, topics의 title/decision_text/
   evidence/reason, action_items의 description은 전부 회의록/보고서에 쓰는 개조식("~함", "~임",
