@@ -1,35 +1,45 @@
-# backend/services/document_loader.py
+# backend/modules/rag/document_loader.py
 #
-# 사용자 업로드 문서(document/meeting)와 음성(voice)을
-# 청킹해서 ChromaDB에 적재하는 모듈.
+# [수정 사항 - 2026.07.14] Re:Call v2 마이그레이션
+# 기존 구조: SQLite documents 테이블(json_path, conversation_id)을 조회해서
+#            ChromaDB에만 저장 — Postgres 쪽에 아무 row도 안 남았음.
+# 변경 구조: workspace_files(file_id)를 기준으로, OCR/STT 결과(chunks[] 또는
+#            transcription[])를 인자로 직접 받아서 청킹 후
+#              1) ChromaDB에 임베딩 저장 (chroma_client.insert_document)
+#              2) Postgres content_chunks에 메타데이터 row 저장 (content_chunk_crud)
+#            두 저장을 항상 짝지어 수행함 (doc5 스키마 원칙 #11).
 #
-# [청킹 전략]
-# document/meeting:
-#   - chunks[]에서 style=="caption" 제거 (팀원이 미리 제거해서 넘겨줄 예정)
+# workspace_id/category_id는 더 이상 호출부에서 따로 안 넘겨도 됨 —
+# file_id로 workspace_files를 조회해서 자동으로 가져옴 (단일 출처 원칙).
+#
+# [청킹 전략 — 기존과 동일, 알고리즘 자체는 스키마 무관이라 그대로 유지]
+# document 계열 (chunks[] 입력):
+#   - style=="caption" 제거 (호출부에서 미리 제거해서 넘겨줄 예정, 방어 코드로 유지)
 #   - style=="title"  → 새 청크 경계 + content 맨 앞에 포함
 #   - style=="body"   → 500~1700자 기준으로 묶기
-#   - 청크 content = "[섹션 title]\n[body 내용들]"
+#   - content_chunks.chunk_type = "document_text"
 #
-# voice:
-#   - transcription[] 발화를 300~800자 기준으로 묶기
-#   - 화자 바뀌는 지점 우선 경계로
-#   - 청크 content = "[SPEAKER_00]: 발화\n[SPEAKER_01]: 발화\n..."
-#
-# [컬렉션 매핑]
-#   type == "document" → document_collection
-#   type == "meeting"  → meeting_collection
-#   type == "voice"    → meeting_collection
+# meeting/voice 계열 (transcription[] 입력):
+#   - 발화를 300~800자 기준으로 묶기, 화자 바뀌는 지점 우선 경계로
+#   - content_chunks.chunk_type = "meeting_segment"
+#     (주의: 실시간 STT 원본은 meeting_segments 테이블에 발화 단위로 이미 저장됨.
+#      여기서 만드는 chunk_type='meeting_segment'는 그것과 다른 개념으로,
+#      "RAG 검색에 적합한 크기로 재구성한 회의 전사 청크"를 의미함.
+#      이름이 헷갈릴 수 있어 팀 컨벤션 확정되면 chunk_type 값 재검토 필요.)
 
 import sys
-import json
 from pathlib import Path
+from typing import Optional
+from uuid import UUID
 
-BASE_DIR = Path(__file__).resolve().parents[2]
+from sqlalchemy.orm import Session
+
+BASE_DIR = Path(__file__).resolve().parents[3]
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
 
-from backend.modules.rag.chroma_client import insert_document
-from backend.db.crud import get_document_by_id
+from backend.modules.rag.chroma_client import insert_document, delete_document
+from backend.db.crud import content_chunk_crud, file_crud
 
 # ── 청킹 파라미터 ──────────────────────────────────────────────
 DOC_CHUNK_MIN  = 500    # 문서 청크 최소 글자 수
@@ -38,7 +48,7 @@ STT_CHUNK_MIN  = 300    # 음성 청크 최소 글자 수
 STT_CHUNK_MAX  = 800    # 음성 청크 최대 글자 수
 
 
-# ── 문서/회의록 청킹 ──────────────────────────────────────────
+# ── 문서/회의록 청킹 (스키마 무관, 기존 로직 그대로) ────────────
 
 def _chunk_document(chunks: list) -> list[dict]:
     """
@@ -46,40 +56,36 @@ def _chunk_document(chunks: list) -> list[dict]:
     검색에 적합한 크기(500~1700자)의 청크 리스트로 반환한다.
 
     규칙:
-    - style == "caption" → 제외 (팀원이 미리 제거 예정이지만 방어 코드로 유지)
-    - style == "title"   → 새 청크 경계. 현재 모인 body가 있으면 먼저 확정.
-                           다음 청크의 맨 앞에 이 title을 포함시킴.
-    - style == "body"    → 현재 청크에 계속 추가.
+    - style == "caption" → 제외 (호출부에서 미리 제거 예정이지만 방어 코드로 유지)
+    - style in ("title", "heading") → 새 청크 경계. 현재 모인 내용이 있으면 먼저 확정.
+                           다음 청크의 맨 앞에 이 제목을 포함시킴.
+    - 그 외 ("body", "table", "image", "chart" 등) → 현재 청크에 계속 추가.
                            DOC_CHUNK_MAX를 넘으면 현재 청크 확정 후 새로 시작.
 
     반환: [{"content": str, "page_number": int}, ...]
     """
     result = []
-    current_lines = []       # 현재 청크에 모인 텍스트 라인들
-    current_title = ""       # 현재 섹션 title
-    current_page = 1         # 현재 페이지 번호
-    current_chars = 0        # 현재 청크의 글자 수
+    current_lines = []
+    current_title = ""
+    current_page = 1
+    current_chars = 0
 
     def flush(lines, title, page):
-        """현재 모인 lines를 하나의 청크로 확정."""
-        if not lines:
+        if not lines and not title:
             return
         content = "\n".join(lines).strip()
+        if title:
+            content = f"{title}\n{content}".strip() if content else title
         if not content:
             return
-        # title이 있으면 content 맨 앞에 포함
-        if title:
-            content = f"{title}\n{content}"
         result.append({"content": content, "page_number": page})
 
     for chunk in chunks:
-        # 8003 응답은 chunk["style"] 직접, 기존 포맷은 chunk["metadata"]["style"]
         style = (
             chunk.get("metadata", {}).get("style")
             or chunk.get("style")
             or "body"
         )
-        # 8003 응답은 chunk["text"], 기존 포맷은 chunk["content"]
         content = (
             chunk.get("content")
             or chunk.get("text")
@@ -89,56 +95,48 @@ def _chunk_document(chunks: list) -> list[dict]:
 
         if not content:
             continue
-
-        # caption 제외 (방어 코드)
         if style == "caption":
             continue
 
-        if style == "title":
-            # 현재 모인 body가 있으면 먼저 확정
+        if style in ("title", "heading"):
+            # [수정] 이전엔 "current_title만 있어도" flush해서, title 다음에 바로
+            # heading이 오면(본문 없이) "제목만 있는 빈 청크"가 그대로 확정돼버렸다
+            # (회의 요약 저장 시 첫 청크가 항상 이랬음 - 팀원 리포트). 실제 본문
+            # (current_lines)이 있을 때만 flush하고, 없으면 새 title/heading으로
+            # 그냥 덮어써서 다음 본문과 짝지어지게 한다.
             if current_lines:
                 flush(current_lines, current_title, current_page)
                 current_lines = []
                 current_chars = 0
-            # 새 섹션 시작
             current_title = content
             current_page = page
 
-        elif style == "body":
+        else:
             content_len = len(content)
-
-            # 이미 MAX를 넘는 경우: 현재 청크 확정 후 새로 시작
             if current_chars + content_len > DOC_CHUNK_MAX and current_chars >= DOC_CHUNK_MIN:
                 flush(current_lines, current_title, current_page)
                 current_lines = []
                 current_chars = 0
-                # title은 다음 청크에도 이어서 사용 (같은 섹션 내 분할이므로)
 
             current_lines.append(content)
             current_chars += content_len
             current_page = page
 
-    # 마지막 청크 처리
     flush(current_lines, current_title, current_page)
-
     return result
 
 
-# ── 음성(STT) 청킹 ────────────────────────────────────────────
+# ── 음성(STT) 청킹 (스키마 무관, 기존 로직 그대로) ──────────────
 
 def _chunk_transcription(transcription: list) -> list[dict]:
     """
     voice 타입의 transcription[]을 받아서
     검색에 적합한 크기(300~800자)의 청크 리스트로 반환한다.
 
-    규칙:
-    - 화자(speaker)가 바뀌는 지점을 우선 청크 경계로 사용
-    - 같은 화자가 이어지더라도 STT_CHUNK_MAX를 넘으면 청크 확정
-
     반환: [{"content": str, "start": float, "end": float}, ...]
     """
     result = []
-    current_lines = []    # "[SPEAKER_00]: 발화내용" 형식의 라인들
+    current_lines = []
     current_chars = 0
     current_start = 0.0
     current_end = 0.0
@@ -166,7 +164,6 @@ def _chunk_transcription(transcription: list) -> list[dict]:
         speaker_changed = (prev_speaker is not None and speaker != prev_speaker)
         over_max = (current_chars + line_len > STT_CHUNK_MAX and current_chars >= STT_CHUNK_MIN)
 
-        # 화자가 바뀌거나 MAX를 넘으면 현재 청크 확정
         if (speaker_changed or over_max) and current_lines:
             flush(current_lines, current_start, current_end)
             current_lines = []
@@ -181,230 +178,138 @@ def _chunk_transcription(transcription: list) -> list[dict]:
         current_end = end
         prev_speaker = speaker
 
-    # 마지막 청크 처리
     flush(current_lines, current_start, current_end)
-
     return result
-
-
-# ── 컬렉션 결정 ───────────────────────────────────────────────
-
-def _get_upload_context(doc_type: str) -> str:
-    """
-    type → upload_context 매핑.
-    chroma_client.CONTEXT_TO_COLLECTION이 이 값을 기준으로
-    컬렉션을 결정한다.
-
-    document → document_collection
-    meeting  → meeting_collection
-    voice    → meeting_collection
-    """
-    mapping = {
-        "document": "document",
-        "meeting":  "meeting",
-        "voice":    "voice",
-    }
-    return mapping.get(doc_type, "document")
-
-
-# ── 공통 메타데이터 빌더 ──────────────────────────────────────
-
-def _build_base_meta(doc: dict, room_id: str = "") -> dict:
-    """문서/음성 공통 메타데이터."""
-    return {
-        "title":          doc.get("title", ""),
-        "document_id":    doc.get("id") or doc.get("document_id", ""),
-        "filename":       doc.get("filename", ""),
-        "type":           doc.get("type", "document"),
-        "source":         doc.get("source", ""),
-        "language":       doc.get("language", "ko"),
-        "created_at":     doc.get("created_at", ""),
-        "status":         doc.get("status", "processed"),
-        "notion_url":     doc.get("notion_url") or "",
-        "error":          doc.get("error") or "",
-        "user_edited":    False,
-        "tags":           ",".join(doc.get("tags", [])),
-        "importance_score": doc.get("importance_score", 0),
-        "room_id":        room_id,
-        "tech_score":     0,  # 사용자 업로드 문서는 tech_score 없음
-    }
 
 
 # ── 메인 적재 함수 ────────────────────────────────────────────
 
-def load_document(document_id: str, room_id: str = "") -> dict:
+def load_document(
+    db: Session,
+    file_id: UUID,
+    *,
+    chunks: Optional[list] = None,
+    transcription: Optional[list] = None,
+    upload_context_override: Optional[str] = None,
+    chunk_type_override: Optional[str] = None,
+) -> dict:
     """
-    document_id를 받아서 SQLite documents 테이블에서 json_path를 조회하고,
-    해당 JSON 파일을 읽어서 청킹 후 ChromaDB에 적재한다.
+    workspace_files.id(file_id)를 기준으로 OCR/STT 결과를 청킹하여
+    ChromaDB + Postgres(content_chunks)에 동시 저장한다.
 
-    흐름:
-    문서 업로드
-    → 8000에서 8003 호출
-    → 8000 SQLite documents 저장 (json_path 포함)
-    → load_document(document_id) 호출
-    → json_path에서 chunks[]/transcription[] 읽기
-    → 청킹 후 ChromaDB 저장
+    chunks와 transcription 중 정확히 하나만 넘겨야 한다.
+    - chunks: OCR 서버가 뽑은 [{"style": "title"|"body"|"caption", "content"/"text": str, "page_number": int}, ...]
+    - transcription: STT 서버가 뽑은 [{"speaker": str, "text": str, "start": float, "end": float}, ...]
 
-    Args:
-        document_id: SQLite documents 테이블의 id
-        room_id: 채팅방 ID (검색 필터용)
+    workspace_id/category_id는 file_id로 workspace_files를 조회해서 자동으로 가져온다.
+
+    [추가] upload_context_override/chunk_type_override — chunks=(문서 청킹 로직)를 쓰면서도
+    문서가 아닌 다른 성격의 콘텐츠(예: 회의 요약)를 저장해야 하는 경우를 위한 탈출구.
+    청킹 알고리즘(제목/본문 크기 기준 묶기)은 문서용을 그대로 재사용하되, 저장되는
+    ChromaDB 컬렉션(upload_context)과 content_chunks.chunk_type만 다르게 지정할 수 있다.
+    안 넘기면 기존 동작(chunks면 "document"/"document_text") 그대로다.
 
     Returns:
-        {"status": "success"/"error", "chunk_count": int, "document_id": str, "error": str}
+        {"status": "success"/"error", "chunk_count": int, "file_id": str, "error": str}
     """
-    print(f"[document_loader] 적재 시작 → document_id={document_id}")
+    print(f"[document_loader] 적재 시작 → file_id={file_id}")
 
-    # 1. SQLite에서 문서 정보 조회
-    try:
-        db_record = get_document_by_id(document_id)
-    except Exception as e:
-        print(f"[document_loader] DB 조회 실패: {e}")
-        return {"status": "error", "chunk_count": 0, "document_id": document_id, "error": f"db_lookup_failed: {e}"}
-
-    if not db_record:
-        print(f"[document_loader] document_id를 찾을 수 없음: {document_id}")
-        return {"status": "error", "chunk_count": 0, "document_id": document_id, "error": "document_not_found"}
-
-    json_path = db_record.get("json_path")
-    if not json_path:
-        print(f"[document_loader] json_path가 없음: {document_id}")
-        return {"status": "error", "chunk_count": 0, "document_id": document_id, "error": "json_path_missing"}
-
-    # 2. json_path에서 전체 JSON 읽기
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-    except Exception as e:
-        print(f"[document_loader] JSON 파일 읽기 실패 ({json_path}): {e}")
-        return {"status": "error", "chunk_count": 0, "document_id": document_id, "error": f"json_read_failed: {e}"}
-
-    # 3. room_id가 없으면 db_record에서 보완
-    # SQLite documents 테이블의 컬럼명은 conversation_id
-    if not room_id:
-        room_id = db_record.get("conversation_id", "")
-
-    # 4. 타입 판단 후 적재
-    doc_type = doc.get("type", "document")
-    upload_context = _get_upload_context(doc_type)
-    base_meta = _build_base_meta(doc, room_id)
-
-    # db_record 값으로 보완 (document_id는 반드시 SQLite documents.id와 일치)
-    base_meta["document_id"] = db_record.get("id", base_meta["document_id"])
-    base_meta["title"]       = db_record.get("title", base_meta["title"])
-    base_meta["filename"]    = db_record.get("title", base_meta["filename"])
-    base_meta["type"]        = db_record.get("type", base_meta["type"])
-    base_meta["source"]      = db_record.get("source", base_meta["source"])
-
-    try:
-        if doc_type == "voice":
-            return _load_voice(doc, base_meta, upload_context)
-        else:
-            return _load_text_document(doc, base_meta, upload_context)
-
-    except Exception as e:
-        print(f"[document_loader 에러] {document_id}: {e}")
-        return {"status": "error", "chunk_count": 0, "document_id": document_id, "error": str(e)}
-
-
-def _load_text_document(doc: dict, base_meta: dict, upload_context: str) -> dict:
-    """document/meeting 타입 적재."""
-    chunks = doc.get("chunks", [])
-    doc_id = base_meta["document_id"]
-
-    if not chunks:
-        print(f"[document_loader] chunks가 비어있음 → document_id: {doc_id}")
+    if bool(chunks) == bool(transcription):
         return {
-            "status": "error",
-            "chunk_count": 0,
-            "document_id": doc_id,
-            "error": "chunks_empty",
+            "status": "error", "chunk_count": 0, "file_id": str(file_id),
+            "error": "chunks 또는 transcription 중 정확히 하나만 전달해야 합니다.",
         }
 
-    chunked = _chunk_document(chunks)
+    # 1. workspace_files 조회 → workspace_id/category_id 단일 출처로 가져옴
+    file_row = file_crud.get_file(db, file_id)
+    if not file_row:
+        print(f"[document_loader] file_id를 찾을 수 없음: {file_id}")
+        return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": "file_not_found"}
+
+    workspace_id = str(file_row.workspace_id)
+    category_id = str(file_row.category_id)
+
+    # 2. 청킹
+    if transcription is not None:
+        if not transcription:
+            return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": "transcription_empty"}
+        chunked = _chunk_transcription(transcription)
+        chunk_type = "meeting_segment"
+        upload_context = "meeting"
+    else:
+        if not chunks:
+            return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": "chunks_empty"}
+        chunked = _chunk_document(chunks)
+        chunk_type = chunk_type_override or "document_text"
+        upload_context = upload_context_override or "document"
 
     if not chunked:
-        print(f"[document_loader] 청킹 결과 없음 → document_id: {doc_id}")
-        return {
-            "status": "error",
-            "chunk_count": 0,
-            "document_id": doc_id,
-            "error": "chunk_result_empty",
-        }
+        print(f"[document_loader] 청킹 결과 없음 → file_id: {file_id}")
+        return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": "chunk_result_empty"}
 
-    for idx, chunk in enumerate(chunked):
-        chunk_id = f"{doc_id}_chunk_{idx:04d}"
-        metadata = {
-            **base_meta,
-            "chunk_index": idx,
-            "page_number": chunk.get("page_number", 1),
-            "upload_context": upload_context,
-            "chroma_id": chunk_id,
-            # rag_filter = {"document_id": document_id} 로 검색할 때
-            # SQLite documents.id와 반드시 일치해야 함
-            "document_id": base_meta["document_id"],
-        }
-        insert_document({
-            "id":      chunk_id,
-            "content": chunk["content"],
-            **metadata,
-        })
+    # 3. ChromaDB + Postgres 저장
+    #
+    # [수정 사항 - 2026.07.15] 리뷰 피드백 반영: 트랜잭션 미분리 문제
+    # 기존에는 청크마다 insert_document() → content_chunk_crud.create_chunk()를
+    # 반복 호출해서, create_chunk 내부의 개별 commit이 청크 수만큼 발생했음.
+    # 중간에 실패하면 ChromaDB엔 있는데 Postgres엔 없는 고아 청크가 생김.
+    #
+    # 변경: 1) ChromaDB 저장을 먼저 전부 수행하면서 Postgres에 넣을 dict만 모아둠
+    #       2) 마지막에 bulk_create_chunks()로 Postgres에 단 한 번만 commit
+    #       3) 2번이 실패하면 1번에서 이미 넣은 ChromaDB 청크를 보정 삭제(delete_document)
+    #          해서 "ChromaDB엔 있는데 Postgres엔 없는" 상태를 남기지 않음
+    chroma_inserted_ids: list[str] = []
+    pg_chunk_rows: list[dict] = []
 
-    print(f"[document_loader] 완료 → {len(chunked)}개 청크 적재 (document_id: {doc_id})")
-    return {
-        "status": "success",
-        "chunk_count": len(chunked),
-        "document_id": doc_id,
-        "error": None,
-    }
+    try:
+        for idx, chunk in enumerate(chunked):
+            chroma_id = f"{file_id}_chunk_{idx:04d}"
 
+            extra_meta = {}
+            if transcription is not None:
+                extra_meta = {"stt_start": chunk.get("start", 0.0), "stt_end": chunk.get("end", 0.0)}
 
-def _load_voice(doc: dict, base_meta: dict, upload_context: str) -> dict:
-    """voice 타입 적재."""
-    transcription = doc.get("transcription", [])
-    doc_id = base_meta["document_id"]
+            # 3-1. ChromaDB
+            insert_document({
+                "id": chroma_id,
+                "content": chunk["content"],
+                "workspace_id": workspace_id,
+                "category_id": category_id,
+                "document_id": str(file_id),
+                "chunk_index": idx,
+                "upload_context": upload_context,
+                "title": file_row.original_filename,
+                "filename": file_row.original_filename,
+                **extra_meta,
+            })
+            chroma_inserted_ids.append(chroma_id)
 
-    if not transcription:
-        print(f"[document_loader] transcription이 비어있음 → document_id: {doc_id}")
-        return {
-            "status": "error",
-            "chunk_count": 0,
-            "document_id": doc_id,
-            "error": "transcription_empty",
-        }
+            # 3-2. Postgres에 넣을 값은 일단 리스트에만 모아둠 (커밋은 아래서 한 번에)
+            pg_chunk_rows.append(dict(
+                workspace_id=file_row.workspace_id,
+                category_id=file_row.category_id,
+                file_id=file_id,
+                chunk_type=chunk_type,
+                chunk_index=idx,
+                chunk_text=chunk["content"],
+                chroma_id=chroma_id,
+                page_number=chunk.get("page_number") if transcription is None else None,
+                metadata_json=extra_meta or None,
+            ))
 
-    chunked = _chunk_transcription(transcription)
+        # 3-3. Postgres 단일 트랜잭션으로 일괄 저장
+        content_chunk_crud.bulk_create_chunks(db, pg_chunk_rows)
+        saved = len(pg_chunk_rows)
 
-    if not chunked:
-        print(f"[document_loader] STT 청킹 결과 없음 → document_id: {doc_id}")
-        return {
-            "status": "error",
-            "chunk_count": 0,
-            "document_id": doc_id,
-            "error": "stt_chunk_result_empty",
-        }
+    except Exception as e:
+        # Postgres 저장(또는 그 이전 단계)이 실패하면, 이미 ChromaDB에 들어간
+        # 청크를 보정 삭제해서 고아 데이터를 남기지 않는다.
+        print(f"[document_loader] 저장 실패, ChromaDB 보정 삭제 시도: {e}")
+        try:
+            delete_document(str(file_id), workspace_id)
+        except Exception as cleanup_error:
+            print(f"[document_loader] 보정 삭제도 실패 — 수동 확인 필요: {cleanup_error}")
+        return {"status": "error", "chunk_count": 0, "file_id": str(file_id), "error": str(e)}
 
-    for idx, chunk in enumerate(chunked):
-        chunk_id = f"{doc_id}_chunk_{idx:04d}"
-        metadata = {
-            **base_meta,
-            "chunk_index": idx,
-            "page_number": 0,          # 음성은 페이지 개념 없음
-            "upload_context": upload_context,
-            "chroma_id": chunk_id,
-            # 음성 전용 메타데이터
-            "stt_start": chunk.get("start", 0.0),
-            "stt_end":   chunk.get("end", 0.0),
-        }
-        insert_document({
-            "id":      chunk_id,
-            "content": chunk["content"],
-            **metadata,
-        })
-
-    print(f"[document_loader] 완료 → {len(chunked)}개 청크 적재 (document_id: {doc_id})")
-    return {
-        "status": "success",
-        "chunk_count": len(chunked),
-        "document_id": doc_id,
-        "error": None,
-    }
+    print(f"[document_loader] 완료 → {saved}개 청크 적재 (file_id: {file_id})")
+    return {"status": "success", "chunk_count": saved, "file_id": str(file_id), "error": None}

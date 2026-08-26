@@ -15,7 +15,16 @@ if str(BASE_DIR) not in sys.path:
 load_dotenv(BASE_DIR / ".env")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+# [수정 - 2026.07.16] Model1/Model2 이원화 확정.
+#   Model1(경량, 실시간): Qwen2.5-7B — judgment/ 파이프라인 기본 모델, 파인튜닝 대상
+#   Model2(무거운 모델): Qwen3-8B — confidence 낮을 때 escalate 대상 + post_meeting 전용
+#   (post_meeting은 회의 종료 후 비동기 처리라 레이턴시 제약이 없어 처음부터 Model2로 감)
+OLLAMA_MODEL_LIGHT = os.getenv("OLLAMA_MODEL_LIGHT", "qwen2.5:7b")   # Model1
+OLLAMA_MODEL_HEAVY = os.getenv("OLLAMA_MODEL_HEAVY", "qwen3:8b")    # Model2
+
+# 하위 호환용 - 기존에 OLLAMA_MODEL을 직접 참조하던 코드가 있으면 Model1로 동작
+OLLAMA_MODEL = OLLAMA_MODEL_LIGHT
 
 
 # ── 유틸 ─────────────────────────────────────────────────────
@@ -77,6 +86,62 @@ def normalize_query(user_input: str) -> str:
         return user_input
 
     return response_text
+
+
+# [추가] AI chat 검색용 쿼리 재작성. "아 근데 코드리뷰 규칙 뭐였는지 기억이 안
+# 나는데 그것만 따로 알려줄 수 있어?"처럼 대화체 발화를 그대로 벡터 검색
+# query_text로 넘기면, 잡담성 토큰("아 근데"/"기억이 안 나는데"/"알려줄 수
+# 있어?")이 임베딩을 흐려서 핵심 키워드("코드리뷰 규칙")와의 유사도가 낮아지는
+# 문제가 있음. 임계값을 낮추는 건 오탐만 늘리는 미봉책이라, 임베딩 전에 핵심
+# 검색 의도만 추출하는 전처리로 해결한다 - normalize_query()(은어/약어 변환)와
+# 같은 "다운스트림에 맞게 발화를 다듬는 전처리" 계열이지만 다루는 노이즈
+# 종류가 다름(용어 치환 vs 잡담 제거)이라 별도 함수로 둔다.
+#
+# [설계] Model1(LIGHT)+프롬프트만 사용, 파인튜닝 없음 - "테스트 먼저, 부족하면
+# 그때 파인튜닝" 원칙 적용. Model2(HEAVY)는 실시간성 없는 post-meeting 전용이라
+# 매 채팅 요청마다 도는 이 전처리엔 안 맞음.
+#
+# [연결 필요] 이 함수 자체는 여기(내 파일)서 만들지만, 실제로 search_hybrid()
+# 호출부에 연결하는 건 backend/graphs/nodes/ai_chat_answer.py(내 파일 아님) 쪽
+# 작업이라 별도 요청 필요.
+EXTRACT_SEARCH_QUERY_INSTRUCTION = (
+    "아래는 사용자가 채팅으로 입력한 대화체 발화이다. 이 발화를 문서 검색에 쓸 "
+    "핵심 쿼리로 압축하라.\n\n"
+    "[규칙]\n"
+    "- 감탄사, 완곡 표현, \"기억이 안 나는데\"/\"알려줄 수 있어?\" 같은 대화체 "
+    "군더더기는 제거하고, 실제로 찾고 싶은 대상(주제/용어/개체명)만 남겨라.\n"
+    "- 발화에 없는 내용을 추측해서 추가하지 마라.\n"
+    "- 이미 짧고 핵심만 있는 발화면 그대로 반환해라.\n"
+    "- 결과는 완전한 문장이 아니어도 된다 (구/명사구 형태 권장).\n\n"
+    '다음 JSON 형식으로만 답하라: {"query": "..."}'
+)
+
+
+def extract_search_query(user_message: str) -> str:
+    """대화체 발화에서 벡터 검색용 핵심 쿼리만 추출. 실패 시 원문 그대로 반환
+    (검색 자체가 아예 안 되는 것보다는 잡음 섞인 원문으로라도 검색하는 게 낫다).
+
+    [수정 - 82서버 테스트에서 발견] _call_ollama()의 중국어 감지·재시도(최대 2회)를
+    거치고도 중국어가 섞인 채로 반환되는 경우가 있었음(예: "DB,选用"). 이런 응답도
+    문법적으론 유효한 JSON이라 파싱 자체는 성공하므로, 파싱 성공 여부만으로는
+    걸러지지 않는다 - normalize_query()와 동일하게 has_chinese() 체크를 추가해
+    원문으로 폴백시킨다."""
+    prompt = f"{EXTRACT_SEARCH_QUERY_INSTRUCTION}\n\n발화: {user_message}"
+    try:
+        raw = _call_ollama(prompt, timeout=30.0, model=OLLAMA_MODEL_LIGHT,
+                            response_format="json", temperature=0)
+        parsed = json.loads(raw)
+        query = parsed.get("query")
+        if not (isinstance(query, str) and query.strip()):
+            return user_message
+        query = query.strip()
+        if has_chinese(query):
+            print(f"[extract_search_query] 중국어 감지 → 원문으로 폴백: {query!r}")
+            return user_message
+        return query
+    except Exception as e:
+        print(f"[extract_search_query] 쿼리 추출 실패, 원문으로 폴백: {repr(e)}")
+        return user_message
 
 
 # ── 의도 분류 (4개 카테고리로 단순화) ──────────────────────────
@@ -207,14 +272,59 @@ def _build_context_from_docs(docs: list, max_chars: int = 6000) -> str:
     return "\n\n".join(parts)[:max_chars]
 
 
-def _call_ollama(prompt: str, timeout: float = 150.0) -> str:
-    """Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회)."""
+def _call_ollama(
+    prompt: str,
+    timeout: float = 150.0,
+    model: str = OLLAMA_MODEL_LIGHT,
+    response_format: str | None = None,
+    temperature: float | None = None,
+) -> str:
+    """
+    Ollama 단일 호출 + 중국어 감지 재시도 (최대 3회).
+
+    [수정 - 2026.07.16] model 인자 추가 (Model1/2 이원화).
+    기본값은 OLLAMA_MODEL_LIGHT(Model1)이라 기존 호출부는 그대로 둬도 동작한다.
+    Model2로 escalate하려면 model=OLLAMA_MODEL_HEAVY로 명시 호출.
+
+    [수정] response_format 인자 추가 (승주 리뷰 반영). "json"을 넘기면 Ollama의
+    구조화 출력 모드로 응답이 항상 유효한 JSON이 되도록 강제한다. JSON을 파싱해
+    쓰는 호출부(contradiction_detect 등)가 이 공용 함수를 쓰면서도 기존의
+    format:json 보장을 잃지 않게 하기 위함. 기본값 None이면 payload에 아예
+    포함하지 않으므로 기존 호출부 동작은 그대로다.
+
+    [추가] temperature 인자 추가. 기본값 None이면 Ollama 기본값(모델 Modelfile에
+    별도 설정 없으면 0.8 근처)이 그대로 적용되어, 완전히 같은 입력에도 매번 다른
+    출력이 나올 수 있다. 실시간 판단 파이프라인(decision_judgment.py)처럼 같은
+    입력에는 항상 같은 판단이 나와야 하는 호출부는 temperature=0으로 명시해서
+    호출해야 한다 - 재현성이 필요 없는 다른 호출부(채팅 답변, 요약 등)는 기본값
+    그대로 두면 기존 동작이 안 바뀐다.
+    """
     # 프롬프트 끝에 한국어 강제 지시 추가
     ko_suffix = "\n\n[중요] 반드시 한국어로만 답하세요. 중국어 사용 절대 금지."
 
+    def _payload(p: str) -> dict:
+        # [추가] keep_alive - 모델을 GPU 메모리에 계속 상주시켜 호출마다 재로드되는
+        # 오버헤드를 없앤다. 실시간 판단 파이프라인처럼 발화 하나당 여러 번 순차
+        # 호출하는 경우, 이게 없으면 매 호출이 로드→추론→언로드를 반복해 체감
+        # 지연이 크게 늘어난다.
+        #
+        # [추가 - 2026.08.20] think: false - qwen3 계열(OLLAMA_MODEL_HEAVY)이 기본적으로
+        # 답변 전에 긴 chain-of-thought "생각"을 먼저 생성하는데, 이 응답의 thinking
+        # 필드는 어차피 아래서 안 읽고 버려진다(response 필드만 사용). 실측 결과
+        # "1+1은?" 같은 사소한 프롬프트에도 thinking 있으면 31.5초, 끄면 0.99초로
+        # 32배 차이 - 회의 후처리(llm_extractor.extract())가 발화량과 무관하게
+        # 항상 느렸던 원인이 이것으로 확인됨. qwen2.5 기반 모델(LIGHT/판단모델)엔
+        # 이 개념 자체가 없어 무시되는 필드라 전역으로 꺼도 안전하다.
+        body = {"model": model, "prompt": p, "stream": False, "keep_alive": "30m", "think": False}
+        if response_format is not None:
+            body["format"] = response_format
+        if temperature is not None:
+            body["options"] = {"temperature": temperature}
+        return body
+
     response = httpx.post(
         f"{OLLAMA_BASE_URL}/api/generate",
-        json={"model": OLLAMA_MODEL, "prompt": prompt + ko_suffix, "stream": False},
+        json=_payload(prompt + ko_suffix),
         timeout=timeout,
     )
     text = response.json().get("response", "답변 생성 실패").strip()
@@ -226,11 +336,9 @@ def _call_ollama(prompt: str, timeout: float = 150.0) -> str:
         print(f"[경고] 중국어 감지 → 재시도 {attempt + 1}/2")
         response = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt + ko_suffix + "\n한국어 외 다른 언어는 절대 사용하지 마세요.",
-                "stream": False,
-            },
+            json=_payload(
+                prompt + ko_suffix + "\n한국어 외 다른 언어는 절대 사용하지 마세요."
+            ),
             timeout=timeout,
         )
         text = response.json().get("response", "답변 생성 실패").strip()
@@ -677,60 +785,6 @@ JSON:
     return _parse_json_array(raw_answer)
 
 
-# ── 화자분리 보완 ─────────────────────────────────────────────
-def enhance_diarization(segments: list[dict]) -> list[dict]:
-    """
-    STT 화자분리 결과 보완.
-    문맥 기반으로 잘못 분리된 발화 수정, speaker 레이블은 유지.
-    중국어 감지 or JSON 파싱 실패 시 원본 segments 그대로 반환.
-    """
-    transcript = "\n".join(
-        f"[{s.get('speaker', 'UNKNOWN')} {s.get('start', 0):.1f}s] {s.get('text', '')}"
-        for s in segments
-    )
-
-    prompt = f"""[INST] [화자분리보완]
-아래는 자동 화자분리된 STT 결과입니다.
-문맥을 보고 잘못 분리된 발화만 수정하세요.
-speaker 레이블(SPEAKER_00 등)은 변경하지 말고 그대로 유지하세요.
-반드시 아래 JSON 배열 형식으로만 출력하세요. 다른 말 하지 마세요.
-중국어 사용 절대 금지.
-
-입력:
-{transcript}
-
-출력 형식:
-[
-  {{"speaker": "SPEAKER_00", "start": 0.0, "end": 3.2, "text": "발화 내용"}},
-  ...
-] [/INST]"""
-
-    try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=60.0
-        )
-        response_text = response.json().get("response", "").strip()
-
-        if has_chinese(response_text):
-            print(f"[경고] 화자분리 중국어 감지 → 원본 반환")
-            return segments
-
-        json_match = response_text[response_text.find("["):response_text.rfind("]") + 1]
-        enhanced = json.loads(json_match)
-
-        if not enhanced:
-            return segments
-
-        print(f"[ollama_client] 화자분리 보완 완료: {len(enhanced)}개 발화")
-        return enhanced
-
-    except Exception as e:
-        print(f"[ollama_client] 화자분리 보완 실패, 원본 사용: {e}")
-        return segments
-
-
 # ── 내부 유틸 ─────────────────────────────────────────────────
 def _parse_json_array(text: str) -> list[dict]:
     """LLM 응답에서 JSON 배열만 추출"""
@@ -756,141 +810,6 @@ def _parse_json_array(text: str) -> list[dict]:
             return parsed if isinstance(parsed, list) else []
         except:
             return []
-
-# ── 음성 회의록 분석 함수들 ───────────────────────────────────
-
-def generate_voice_summary(content: str) -> str | None:
-    """음성 전사 내용 요약 (한두 문단)"""
-    if not content or not content.strip():
-        return None
-
-    prompt = f"""[INST]
-아래는 음성 회의록의 전사 내용입니다. 전체 내용을 한두 문단으로 요약해줘.
-
-[규칙]
-- 회의의 주요 주제와 결론을 중심으로 요약해라.
-- 원본에 없는 내용은 추가하지 마라.
-- 한국어로 작성해라.
-- 제목은 만들지 마라.
-- 2~3문단 이내로 작성해라.
-
-전사 내용:
-{content[:8000]}
-
-요약:
-[/INST]"""
-    return _call_ollama(prompt)
-
-
-def extract_keywords_with_count(content: str) -> list[dict]:
-    """
-    음성/문서 내용에서 핵심 키워드와 빈도수 추출.
-    반환: [{"word": "마케팅", "count": 24}, ...]
-    """
-    if not content or not content.strip():
-        return []
-
-    # 빈도수는 LLM 추출 후 실제 텍스트에서 카운트
-    prompt = f"""[INST]
-아래 내용에서 핵심 키워드 10~15개를 추출해줘.
-반드시 JSON 배열로만 반환해라. 다른 설명은 쓰지 마라.
-
-[규칙]
-- 조사, 접속사, 대명사 등 의미 없는 단어는 제외해라.
-- 기술 용어, 프로젝트명, 담당자명, 주요 업무 키워드 위주로 추출해라.
-- 반드시 아래 형식의 JSON 배열만 반환해라.
-
-출력 형식:
-["키워드1", "키워드2", "키워드3"]
-
-내용:
-{content[:6000]}
-
-JSON:
-[/INST]"""
-
-    raw = _call_ollama(prompt)
-
-    # JSON 파싱
-    try:
-        cleaned = re.sub(r"```json|```", "", raw.strip()).strip()
-        keywords = json.loads(cleaned)
-        if not isinstance(keywords, list):
-            return []
-    except Exception:
-        match = re.search(r"\[.*?\]", raw, re.DOTALL)
-        if not match:
-            return []
-        try:
-            keywords = json.loads(match.group(0))
-        except Exception:
-            return []
-
-    # 실제 텍스트에서 빈도수 카운트
-    result = []
-    content_lower = content.lower()
-    for kw in keywords:
-        if not isinstance(kw, str) or not kw.strip():
-            continue
-        count = content_lower.count(kw.lower())
-        if count > 0:
-            result.append({"word": kw.strip(), "count": count})
-
-    # 빈도수 내림차순 정렬
-    result.sort(key=lambda x: x["count"], reverse=True)
-    return result
-
-
-def extract_timestamps(transcription: list[dict]) -> list[dict]:
-    """
-    STT transcription에서 주요 발화 타임스탬프 추출.
-    transcription: [{"speaker": "SPEAKER_00", "start": 0.0, "end": 3.2, "text": "..."}]
-    반환: [{"time": "00:14:30", "summary": "신규 채널 전략 논의"}, ...]
-    """
-    if not transcription:
-        return []
-
-    # 전사 내용을 텍스트로 변환
-    transcript_text = "\n".join(
-        f"[{int(s.get('start', 0) // 60):02d}:{int(s.get('start', 0) % 60):02d}] "
-        f"{s.get('speaker', 'SPEAKER')}: {s.get('text', '')}"
-        for s in transcription
-    )
-
-    prompt = f"""[INST]
-아래는 음성 회의록의 타임스탬프별 전사 내용입니다.
-중요한 발화 10개 이내를 골라서 각 시간대의 핵심 내용을 한 줄로 요약해줘.
-반드시 JSON 배열로만 반환해라. 다른 설명은 쓰지 마라.
-
-출력 형식:
-[
-  {{"time": "00:00", "summary": "회의 시작 및 안건 소개"}},
-  {{"time": "05:30", "summary": "신규 기능 개발 방향 논의"}}
-]
-
-전사 내용:
-{transcript_text[:6000]}
-
-JSON:
-[/INST]"""
-
-    raw = _call_ollama(prompt)
-
-    try:
-        cleaned = re.sub(r"```json|```", "", raw.strip()).strip()
-        result = json.loads(cleaned)
-        if isinstance(result, list):
-            return result
-    except Exception:
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if match:
-            try:
-                result = json.loads(match.group(0))
-                if isinstance(result, list):
-                    return result
-            except Exception:
-                pass
-    return []
 
 # ── 테스트 ────────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from doc_processor.core.models import ImageBlock, PageContent
 from doc_processor.postprocess import layout_restorer, table_cleaner, text_cleaner
+from doc_processor.postprocess.reading_order import restore_reading_order
 from doc_processor.postprocess.vertical_text_restorer import restore_vertical_text
 
 
@@ -9,9 +10,10 @@ class PostProcessor:
     """파싱/OCR 결과를 정제하는 후처리 파이프라인."""
 
     def process(self, content: PageContent) -> PageContent:
-        # 1. 텍스트 정제 → 계층 구조 복원
+        # 1. 텍스트 정제 → 읽기 순서 복원(다단/박스 레이아웃) → 계층 구조 복원
         cleaned_text = text_cleaner.clean_text_blocks(content.text)
-        restored_text = layout_restorer.restore_hierarchy(cleaned_text)
+        ordered_text = restore_reading_order(cleaned_text)
+        restored_text = layout_restorer.restore_hierarchy(ordered_text)
 
         # 2. 표 정제
         cleaned_tables = table_cleaner.clean_tables(content.tables)
@@ -34,8 +36,10 @@ class PostProcessor:
                 voting_confidence=img.voting_confidence,
                 source_engines=img.source_engines,
                 paddle_lines=img.paddle_lines,
-                quality_score=img.quality_score,
-                debug=new_debug,
+                surya_lines=img.surya_lines,
+                quality_score=img.quality_score,   # 손실 방지: OCR 품질 점수 유지
+                debug=new_debug,                   # 손실 방지: 디버그 정보 유지
+                image_path=img.image_path,         # 손실 방지: figure 이미지 경로 유지
             ))
 
         return PageContent(

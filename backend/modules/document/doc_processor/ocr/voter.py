@@ -1,16 +1,56 @@
-"""OCR 품질 필터 + Paddle 결과 정제."""
+"""OCR Voting + 품질 필터.
+
+PaddleOCR와 Surya OCR 결과를 비교 투표하여 최적 텍스트를 선택합니다.
+투표 이전과 이후 두 단계에서 품질 필터를 적용합니다.
+
+Phase 2 강화:
+    - 라인 단위 쓰레기 필터 (_is_junk_line)
+    - 브랜드/라인 반복 감지 (_line_repeat_ratio)
+    - 특수문자 비율 임계값 강화 0.50 → 0.40
+    - 최소 문자 수 강화: len <= 3 폐기 (_MIN_CHARS = 4)
+
+Phase 3 강화:
+    - 부분 유사 구간(0.10~0.84)에서 둘 다 출력 → 단일 선택
+    - clean_surya(태그 제거) 길이 기준으로 paddle vs surya 선택
+    - surya 선택 시 clean 텍스트를 저장(태그 오염 방지)
+"""
 from __future__ import annotations
 
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 from typing import Any
 
 # ── 전체 텍스트 품질 필터 기준 ─────────────────────────────────────────────────
-_MIN_CONFIDENCE    = 0.40
-_MIN_CHARS         = 4
-_MAX_SPECIAL_RATIO = 0.40
-_MAX_REPEAT_RATIO  = 0.60
-_MAX_LINE_REPEAT   = 0.50
+_MIN_CONFIDENCE    = 0.40   # 이 미만이면 결과 폐기
+_MIN_CHARS         = 4      # 전체 텍스트가 이 미만이면 폐기
+_MAX_SPECIAL_RATIO = 0.40   # 특수문자 비율 > 40% 폐기 (기존 0.50 → 강화)
+_MAX_REPEAT_RATIO  = 0.60   # 반복 단어 비율 > 60% 폐기
+_MAX_LINE_REPEAT   = 0.50   # 동일 라인 반복 비율 > 50% 폐기 (Anua\nAnua...)
+
+
+# ── Surya 태그 제거 ───────────────────────────────────────────────────────────
+
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+_LATEX_CMD_RE = re.compile(r'\\[a-zA-Z]+\{[^}]*\}|\\[a-zA-Z]+')
+
+def _clean_surya(text: str) -> str:
+    """Surya 출력에서 HTML/LaTeX 태그를 제거한 순수 텍스트를 반환합니다."""
+    t = _HTML_TAG_RE.sub("", text)
+    t = _LATEX_CMD_RE.sub("", t)
+    t = re.sub(r'[{}]', "", t)
+    t = re.sub(r'\s+', " ", t).strip()
+    return t
+
+
+# ── 유사도 ────────────────────────────────────────────────────────────────────
+
+# 부분 유사 구간: 이 범위에서 paddle_only + surya_only 둘 다 출력 대신 단일 선택
+_SIM_PARTIAL_LOW = 0.10   # 미만이면 완전 무관 → 현행 유지
+# 상한은 기존 threshold(0.84)와 동일
+
+def _similar(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
 
 
 # ── 라인 단위 쓰레기 필터 ─────────────────────────────────────────────────────
@@ -111,9 +151,10 @@ def _is_quality_result(text: str, confidence: float) -> tuple[bool, str]:
 
 def vote(
     paddle_lines: list[str],
+    surya_lines: list[str],
     threshold: float = 0.84,
 ) -> dict[str, Any]:
-    """PaddleOCR 결과를 품질 필터링하여 반환합니다.
+    """PaddleOCR와 Surya OCR 결과를 Voting하여 최적 텍스트를 선택합니다.
 
     Returns:
         {
@@ -125,18 +166,74 @@ def vote(
             "filter_reason": str,
         }
     """
+    used_surya: set[int] = set()
     voted: list[dict[str, Any]] = []
 
     for paddle_line in paddle_lines:
-        voted.append({
-            "text": paddle_line,
-            "confidence": 0.62,
-            "source": "paddle_only",
-            "paddle": paddle_line,
-        })
+        best_index = None
+        best_score = 0.0
+        for idx, surya_line in enumerate(surya_lines):
+            if idx in used_surya:
+                continue
+            score = _similar(paddle_line, surya_line)
+            if score > best_score:
+                best_score = score
+                best_index = idx
 
-    # ── 라인 단위 쓰레기 필터 ─────────────────────────────────────────────────
+        if best_index is not None and best_score >= threshold:
+            # 높은 유사도 — 기존 matched 경로: 더 긴 원문 선택
+            surya_line = surya_lines[best_index]
+            used_surya.add(best_index)
+            chosen = surya_line if len(surya_line) >= len(paddle_line) else paddle_line
+            line_conf = round((1.0 + best_score) / 2.0, 3)
+            voted.append({
+                "text": chosen,
+                "confidence": line_conf,
+                "source": "paddle+surya",
+                "paddle": paddle_line,
+                "surya": surya_line,
+            })
+        elif best_index is not None and best_score >= _SIM_PARTIAL_LOW:
+            # 부분 유사 구간(0.10~threshold): clean_surya 길이 비교 후 단일 선택
+            surya_line = surya_lines[best_index]
+            surya_clean = _clean_surya(surya_line)
+            used_surya.add(best_index)  # surya_only 중복 출력 방지
+            if len(surya_clean) >= len(paddle_line):
+                chosen = surya_clean
+                source = "partial+surya"
+            else:
+                chosen = paddle_line
+                source = "partial+paddle"
+            voted.append({
+                "text": chosen,
+                "confidence": 0.55,
+                "source": source,
+                "paddle": paddle_line,
+                "surya": surya_line,
+            })
+        else:
+            # 완전 무관(score < 0.10) — 기존 paddle_only 유지
+            voted.append({
+                "text": paddle_line,
+                "confidence": 0.62,
+                "source": "paddle_only",
+                "paddle": paddle_line,
+                "surya": "",
+            })
+
+    for idx, surya_line in enumerate(surya_lines):
+        if idx not in used_surya:
+            voted.append({
+                "text": surya_line,
+                "confidence": 0.62,
+                "source": "surya_only",
+                "paddle": "",
+                "surya": surya_line,
+            })
+
+    # ── 라인 단위 쓰레기 필터 (투표 후) ──────────────────────────────────────
     clean_voted = [v for v in voted if not _is_junk_line(v["text"])]
+    # 전부 제거되지 않도록 — 쓰레기 라인이 과반수면 전체 폐기 예정이므로 원본 유지
     if clean_voted:
         voted = clean_voted
 

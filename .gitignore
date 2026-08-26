@@ -4,7 +4,8 @@ __pycache__/
 .env
 *.pyc
 .DS_Store
-frontend/node_modules/
+node_modules/
+**/node_modules/
 
 # 테스트 파일
 test_file/
@@ -15,6 +16,7 @@ data/raw/
 data/processed/
 data/knowledge/
 data/uploads/
+backend/modules/document/dataset/
 
 # 자동 생성 저장소
 storage/
@@ -33,3 +35,41 @@ unsloth_compiled_cache/
 # RAG/finetune requirement파일
 requirements_finetune.txt
 requirements_rag.txt
+
+# 가상환경 (추가)
+venv-rag/
+venv-finetune/
+
+# DB 파일
+*.db
+*.sqlite
+
+# 환경변수 추가 패턴
+.env.*
+
+# 파인튜닝 체크포인트
+checkpoint-*/
+*.gguf
+*.safetensors
+
+# 파인튜닝 로컬 작업물 (v12 등 채택 버전만 finetune/에 커밋, 나머지 버전/비교스크립트는 로컬 보관용)
+finetune_local/
+
+
+# 모델 캐시
+.cache/
+
+# 프론트엔드 빌드 산출물
+.vite/
+dist/
+build/
+*.log
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude Code local dev config
+.claude/

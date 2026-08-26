@@ -7,7 +7,6 @@ pip install paddlepaddle==3.0.0
 
 pip install -r requirements.txt
 
-
 # ----------------------------------------
 # Linux 서버 설치 순서 (CUDA 13.x)
 # ----------------------------------------
