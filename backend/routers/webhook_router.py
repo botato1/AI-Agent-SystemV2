@@ -72,8 +72,11 @@ def stt_refine_webhook(
         is_new_stt_session = meeting.stt_meeting_id != payload.meeting_id
         meeting_crud.update_meeting_info(db, meeting_id, stt_meeting_id=payload.meeting_id)
         try:
-            refined_data = meeting_service.fetch_refined_transcript(payload.meeting_id)
-            print(f"[webhook] 재분석 세그먼트 {len(refined_data.get('segments', []))}개 조회 완료")
+            # 이 세션 하나가 아니라, 이 회의(session_id)에 속한 모든 세션의 세그먼트를
+            # 합쳐서 요약을 만든다 - 재연결로 세션이 여러 개면 이번 웹훅의 세션 구간만으론
+            # 요약이 불완전해진다.
+            refined_data = meeting_service.fetch_merged_refined_transcript(payload.session_id)
+            print(f"[webhook] 재분석 세그먼트 {len(refined_data.get('segments', []))}개 조회 완료 (전체 세션 합산)")
             # 요약 재생성은 LLM 호출이 걸리는 작업이라 웹훅 응답을 막지 않도록 백그라운드로 실행.
             # meeting_postprocess_node는 재호출하지 않는다 - 함수 자체 docstring 참조.
             background_tasks.add_task(

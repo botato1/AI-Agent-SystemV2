@@ -40,11 +40,47 @@ def fetch_refined_transcript(stt_meeting_id: str) -> dict:
     stt_meeting_id는 8002 자체 형식의 ID(웹훅 payload의 meeting_id)이며,
     우리 Meeting.id(UUID)와는 다르다 - session_id로 우리 회의를 찾은 뒤,
     이 함수엔 웹훅 payload의 meeting_id를 그대로 넘겨야 한다.
+
+    주의: 이 함수는 세션 하나(재연결 전/후 중 한쪽)의 세그먼트만 반환한다.
+    회의 전체 요약을 만들 땐 fetch_merged_refined_transcript()를 써야 한다.
     """
     with httpx.Client(timeout=30.0) as client:
         response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings/{stt_meeting_id}")
     response.raise_for_status()
     return response.json()
+
+
+def fetch_merged_refined_transcript(session_id: str) -> dict:
+    """이 회의(session_id)에 속한 모든 STT 세션의 정밀 재분석 세그먼트를 시간순으로 합쳐서 반환한다.
+
+    재연결/재개로 같은 session_id에 STT 서버 쪽 meeting_id가 여러 개 생긴 경우,
+    세션 하나의 세그먼트만으로 요약을 만들면 다른 세션 구간이 통째로 빠진다.
+    GET /api/meetings 목록에서 이 session_id에 해당하는 세션을 전부 찾아
+    시작 시각(started_at) 순으로 세그먼트를 이어붙인다.
+    """
+    with httpx.Client(timeout=30.0) as client:
+        list_response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings")
+    list_response.raise_for_status()
+
+    sessions = [
+        item for item in list_response.json().get("meetings", [])
+        if item.get("session_id") == session_id
+    ]
+    sessions.sort(key=lambda item: item.get("started_at") or "")
+
+    merged_segments: list[dict] = []
+    for item in sessions:
+        stt_meeting_id = item.get("meeting_id")
+        if not stt_meeting_id:
+            continue
+        try:
+            detail = fetch_refined_transcript(stt_meeting_id)
+        except httpx.HTTPError as e:
+            print(f"[meeting_service] 세션 세그먼트 조회 실패, 건너뜀: stt_meeting_id={stt_meeting_id}, error={repr(e)}")
+            continue
+        merged_segments.extend(detail.get("segments", []))
+
+    return {"segments": merged_segments}
 
 
 async def _request_stt(file_content: bytes, filename: str) -> dict:
@@ -206,7 +242,9 @@ def trigger_manual_reanalysis(meeting_id: str, stt_meeting_id: str | None = None
         response.raise_for_status()
         print(f"[meeting_service] 수동 재분석 완료: meeting_id={meeting_id}, stt_meeting_id={stt_meeting_id}")
 
-        refined_data = fetch_refined_transcript(stt_meeting_id)
+        # 세션 하나가 아니라, 이 회의에 속한 모든 세션의 세그먼트를 합쳐서 요약을 만든다
+        # (재연결로 세션이 여러 개면 방금 재분석한 세션 구간만으로는 요약이 불완전해진다).
+        refined_data = fetch_merged_refined_transcript(meeting_id)
         regenerate_summary_from_refined_transcript(meeting_id=meeting_id, refined_data=refined_data, force=True)
     except Exception as e:
         print(f"[meeting_service] 수동 재분석 실패: meeting_id={meeting_id}, error={repr(e)}")
