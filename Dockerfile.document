@@ -1,0 +1,35 @@
+FROM pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
+
+# RTX 5090(Blackwell, sm_120)은 CUDA 12.8 이상이 필수라 STT와 동일한 베이스 이미지 사용
+# (backend/modules/document/requirements.txt 상단 주석 참고)
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app/document
+
+# opencv-python이 headless가 아니라 필요 (libgl1/libglib2.0-0 없으면 import 시점에 에러)
+RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/modules/document/requirements.txt .
+
+# torch/torchvision - cu128 인덱스로 재설치 (베이스 이미지 버전과 어긋나지 않게)
+RUN pip install --no-cache-dir --break-system-packages \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+# paddlepaddle-gpu - Linux + CUDA 12.x용.
+# [주의] install.txt/requirements.txt에 적힌 대로 -i(index-url)를 쓰면 "No matching
+# distribution found"로 빌드가 실패한다 - 이 URL은 PEP 503 인덱스가 아니라 링크 나열형
+# HTML이라 -f(find-links)로 읽어야 한다. 86서버(RTX 5090, python 3.12)에서 실측 확인함.
+RUN pip install --no-cache-dir --break-system-packages \
+    paddlepaddle-gpu==2.6.2 -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
+
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+
+# 상대 import(doc_processor 패키지) 유지를 위해 document/ 전체를 그대로 복사
+COPY backend/modules/document/ .
+
+RUN mkdir -p storage/uploads/documents data/uploads/documents
+
+EXPOSE 8003
+
+CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8003"]
