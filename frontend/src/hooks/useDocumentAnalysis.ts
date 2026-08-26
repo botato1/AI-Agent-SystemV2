@@ -29,8 +29,6 @@ function toAnalyzedDocument(d: DocumentListItem): AnalyzedDocument {
   };
 }
 
-const PENDING_STATUSES = new Set(["pending", "processing"]);
-
 function toDocStatus(apiStatus: string): AnalyzedDocument["status"] {
   if (apiStatus === "completed") return "analyzed";
   if (apiStatus === "failed") return "failed";
@@ -184,7 +182,7 @@ export function useDocumentAnalysis(workspaceId: string) {
       setActiveDocId(tempId);
       pendingUploadIdsRef.current.add(tempId);
 
-      const res = await uploadDocumentApi(workspaceId, file, undefined, "document", undefined, categoryId);
+      const res = await uploadDocumentApi(workspaceId, file, undefined, undefined, categoryId);
 
       if (res.status === "success" && res.documentId) {
         pendingUploadIdsRef.current.delete(tempId);

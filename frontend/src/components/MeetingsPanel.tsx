@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
 import { useCategories } from "../hooks/useCategories";
-import { LiveMeetingStatus, LiveSegment, ContradictionAlert, ContradictionAlertAction, AudioQualityAlert } from "../hooks/useLiveMeeting";
+import { LiveMeetingStatus, LiveSegment, ContradictionAlert, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
 import { Meeting, MeetingStatus, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision } from "../services/meeting";
-import { ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
+import { ContradictionSeverity } from "../services/contradiction";
 import {
   UploadIcon,
   TrashIcon,
@@ -16,7 +16,6 @@ import {
   StopIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  ChevronDownIcon,
   WarningIcon,
   AssistIcon,
   PencilIcon,
@@ -490,7 +489,6 @@ interface MeetingsPanelProps {
   liveAudioQualityAlerts: AudioQualityAlert[];
   onClearAudioQualityAlert: (alertId: string) => void;
   agendaReminder: AgendaReminderPopup | null;
-  onClearAgendaReminder: () => void;
   liveError: string | null;
   joinableMeeting: Meeting | null;
   isViewer: boolean;
@@ -509,7 +507,6 @@ interface MeetingsPanelProps {
   onLeaveLive: () => void;
   onResetLive: () => void;
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
-  onEditLiveSegment: (segmentId: string, content: string) => Promise<boolean>;
   onRenameLive: (title: string) => void;
   // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어왔을 때, 그 회의를 바로 선택해서 보여주기 위한 값 -
   // 소비하고 나면 상위(App)에서 null로 리셋해줘야 뒤로 갔다 다시 들어와도 강제로 재선택되지 않는다.
@@ -727,11 +724,9 @@ function EditableShortSummaryField({
 function EditableTitleField({
   title,
   onSave,
-  t,
 }: {
   title: string;
   onSave: (title: string) => void;
-  t: any;
 }) {
   const [draft, setDraft] = useState(title);
 
@@ -1257,7 +1252,6 @@ export default function MeetingsPanel({
   liveAudioQualityAlerts,
   onClearAudioQualityAlert,
   agendaReminder,
-  onClearAgendaReminder,
   liveError,
   joinableMeeting,
   isViewer,
@@ -1269,7 +1263,6 @@ export default function MeetingsPanel({
   onLeaveLive,
   onResetLive,
   onMapLiveSpeakers,
-  onEditLiveSegment,
   onRenameLive,
   initialMeetingId,
   onInitialMeetingIdConsumed,
@@ -1383,7 +1376,6 @@ export default function MeetingsPanel({
     refresh: refreshContradictions,
     pendingSummaryFor,
     changeSummary,
-    isChangeSummaryLoading,
     closeChangeSummary,
   } = useContradictions(workspaceId);
 
@@ -1600,11 +1592,6 @@ export default function MeetingsPanel({
   function handleUpload(file: File, title: string) {
     uploadAudio(file, title);
     setShowUploadModal(false);
-  }
-
-  function defaultMeetingTitle(): string {
-    const d = new Date();
-    return t.meeting_default_title(d.getMonth() + 1, d.getDate());
   }
 
   // 지금 사이드바에서 특정 카테고리를 보고 있으면, 새로 시작하는 회의도 거기 소속으로 만든다
@@ -2208,7 +2195,6 @@ export default function MeetingsPanel({
                               <EditableTitleField
                                 title={selectedRealMeeting.title}
                                 onSave={(title) => renameMeeting(selectedRealMeeting.id, title)}
-                                t={t}
                               />
                             ) : (
                               <p className="text-sm font-bold text-recall-text">{selectedRealMeeting.title}</p>
@@ -2650,7 +2636,6 @@ export default function MeetingsPanel({
         <ChangeSummaryModal
           contradiction={pendingSummaryFor}
           changeSummary={changeSummary}
-          isLoading={isChangeSummaryLoading}
           onClose={closeChangeSummary}
           t={t}
         />
@@ -2703,7 +2688,6 @@ export default function MeetingsPanel({
         <MeetingStartModal
           workspaceId={workspaceId}
           currentUserId={currentUserId}
-          defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
           categories={categoriesState.categories}
           suggestedCategoryId={categoriesState.suggestedCategoryId}

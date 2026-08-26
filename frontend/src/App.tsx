@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
@@ -50,13 +50,6 @@ import {
   deleteRoomApi,
 } from "./services/room";
 
-interface RegisteredAccount {
-  username: string;
-  email?: string;
-  password: string;
-  user: User;
-}
-
 type Selection = { type: "channel"; channel: Channel } | { type: "placeholder"; key: PlaceholderKey };
 
 const PLACEHOLDER_LABELS: Record<
@@ -69,7 +62,6 @@ export default function App() {
   const t = translations[lang];
 
   // 로그인/회원가입 상태
-  const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
 
@@ -321,11 +313,6 @@ export default function App() {
   // 다른 화면 전환에도 안 없어지도록 여기(App)로 끌어올려서 항상 마운트 상태로 유지한다.
   const aiChat = useAiChat(currentWorkspaceId, selectedCategoryId);
 
-  // 회원가입
-  const handleSignUp = (account: RegisteredAccount) => {
-    setRegisteredAccounts((prev) => [...prev, account]);
-  };
-
   // 로그인
   const handleLogIn = (user: User) => {
     setCurrentUser(user);
@@ -562,8 +549,6 @@ export default function App() {
   if (!currentUser) {
     return (
       <AuthView
-        registeredAccounts={registeredAccounts}
-        onSignUp={handleSignUp}
         onLogIn={handleLogIn}
         inviteToken={inviteToken}
         t={t}
@@ -654,8 +639,6 @@ export default function App() {
           memberAvatarById={memberAvatarById}
           activeRecorderName={activeRecorderName}
           onOpenDecision={openDecision}
-          categories={categoriesState.categories}
-          selectedCategoryId={selectedCategoryId}
           t={t}
         />
       ) : selection.key === "home" ? (
@@ -700,7 +683,6 @@ export default function App() {
           audioQualityAlerts={liveMeeting.audioQualityAlerts}
           onClearAudioQualityAlert={liveMeeting.clearAudioQualityAlert}
           agendaReminder={liveMeeting.agendaReminder}
-          onClearAgendaReminder={liveMeeting.clearAgendaReminder}
           errorMessage={liveMeeting.errorMessage}
           joinableMeeting={liveMeeting.joinableMeeting}
           isViewer={liveMeeting.isViewer}
@@ -712,7 +694,6 @@ export default function App() {
           onLeave={liveMeeting.leave}
           onReset={liveMeeting.reset}
           onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
-          onEditLiveSegment={liveMeeting.editSegmentContent}
           onRenameLive={liveMeeting.renameMeeting}
           initialMeetingId={pendingMeetingId}
           onInitialMeetingIdConsumed={() => setPendingMeetingId(null)}
@@ -726,7 +707,6 @@ export default function App() {
       ) : selection.key === "dashboard" ? (
         <DashboardView
           workspaceId={currentWorkspaceId}
-          userName={currentUser.name}
           tasks={realTasks.tasks}
           onCreateTask={realTasks.createTask}
           onUpdateTask={realTasks.updateTask}

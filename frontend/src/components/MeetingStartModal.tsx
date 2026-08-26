@@ -10,7 +10,6 @@ const CREATE_CATEGORY_VALUE = "__create__";
 interface MeetingStartModalProps {
   workspaceId: string;
   currentUserId: string;
-  defaultTitle: string;
   onClose: () => void;
   onStart: (
     title: string,
@@ -48,7 +47,6 @@ function generatePrettyDefaultTitle(t: any): string {
 export default function MeetingStartModal({
   workspaceId,
   currentUserId,
-  defaultTitle,
   onClose,
   onStart,
   t,

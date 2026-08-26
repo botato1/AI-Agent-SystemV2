@@ -29,18 +29,6 @@ class ChunkMetadata(BaseModel):
     gemini_model: str | None = None
 
 
-class PageResultSchema(BaseModel):
-    """page_results 배열의 단일 페이지 — 디버깅용."""
-
-    page_number: int
-    text_blocks: list[dict] = Field(default_factory=list)
-    tables: list[dict] = Field(default_factory=list)
-    images: list[dict] = Field(default_factory=list)
-    charts: list[dict] = Field(default_factory=list)
-    confidence: dict[str, float] = Field(default_factory=dict)
-    fallback_used: bool = False
-
-
 class DocumentMetadata(BaseModel):
     """문서 단위 메타데이터."""
 

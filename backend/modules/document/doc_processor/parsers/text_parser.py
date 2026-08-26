@@ -89,8 +89,3 @@ def extract_text_blocks(fitz_page: fitz.Page) -> list[TextBlock]:
             ))
 
     return blocks
-
-
-def extract_raw_text(fitz_page: fitz.Page) -> str:
-    """단순 텍스트 문자열 추출 (TXT 출력용)."""
-    return fitz_page.get_text("text").strip()
