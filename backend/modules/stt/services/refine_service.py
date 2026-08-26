@@ -500,7 +500,12 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     # 요청) — 등록된 진짜 화자 판정(위 1~4단계)이 전부 끝난 뒤의 순수 후처리다.
     # assign_unassigned_ids 문서 참고: 턴 분할 로직에는 영향을 주지 않는다.
     if enrolled_count:
-        assign_unassigned_ids(
+        # GPU 추론(pool.extract_embedding)이 세그먼트 수만큼 반복되므로 이벤트 루프에서
+        # 직접 부르면 그동안 서버 전체(다른 실시간 세션 포함)가 멈춘다 — 위 run_diarization/
+        # build_speaker_timeline/find_overlap_spans_from_audio/correct_transcript와 같은
+        # 이유로 executor에 넘긴다(지수 리뷰, 2026-08-26).
+        await loop.run_in_executor(
+            None, assign_unassigned_ids,
             refined_segments, audio, sample_rate, app_state.speaker_embedding_inference,
         )
     _mark("미상id배정")

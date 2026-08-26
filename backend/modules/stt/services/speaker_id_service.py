@@ -257,6 +257,11 @@ class LiveSpeakerIdentifier:
         문턱(_UNASSIGNED_MERGE_THRESHOLD)을 높게 잡은 이유는 모듈 상단 주석 참고 —
         다른 사람을 합치는 것보다 같은 사람을 여러 id로 쪼개는 게 안전하다는
         2026-08-20 묶음 판정 실험의 결론을 그대로 적용했다.
+
+        update_profile=False 분기는 현재 유일한 호출부(assign_unassigned_ids)가
+        항상 True로만 부르기 때문에 지금은 도달하지 않는다(2026-08-26, 지수 리뷰).
+        identify()의 잠정(partial) 경로처럼 실시간 자막에도 이 raw id를 붙이게
+        될 때를 대비해 남겨뒀다 — 그 전까지는 죽은 코드가 맞다.
         """
         if self._unassigned_profiles:
             best_label, best_score = max(
