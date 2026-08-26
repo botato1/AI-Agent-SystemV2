@@ -7,6 +7,7 @@ import {
   startMeetingApi,
   joinMeetingApi,
   beginScheduledMeetingApi,
+  endMeetingApi,
   pauseMeetingApi,
   resumeMeetingApi,
   mapSpeakerNamesApi,
@@ -534,9 +535,24 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       reconnectTimerRef.current = setTimeout(connect, RECONNECT_RETRY_INTERVAL_MS);
     }
 
-    function connect() {
+    async function connect() {
       const isReconnectAttempt = reconnectDeadlineRef.current !== null;
-      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, meetingData.ws_ticket);
+
+      // ws_ticket은 1회용이라, 최초 연결에서 이미 소모된 티켓을 재연결 때 그대로 재사용하면
+      // 서버가 항상 거절한다(4401) - "재연결 중..."에서 영원히 못 벗어나던 원인이었다.
+      // 재연결 때는 /join으로 새 티켓을 받아서 붙는다. 백엔드가 원래 녹음 담당자(started_by)는
+      // view_only=False로 재발급해주므로, 호스트가 재연결해도 마이크 전송 권한이 유지된다.
+      let ticket = meetingData.ws_ticket;
+      if (isReconnectAttempt) {
+        const joinRes = await joinMeetingApi(workspaceId, meetingData.id);
+        if (joinRes.status !== "success" || !joinRes.wsTicket) {
+          scheduleReconnect();
+          return;
+        }
+        ticket = joinRes.wsTicket;
+      }
+
+      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, ticket);
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
 
@@ -803,6 +819,15 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     isIntentionalCloseRef.current = true;
     reconnectDeadlineRef.current = null;
     clearReconnectTimer();
+
+    // [수정] 예전엔 REST로 회의 종료를 알리지 않고 WS 연결이 실제로 끊기는 시점에만
+    // 서버가 상태를 processing으로 바꿨다 - session_end 대기(최대 1분)에, 백엔드의
+    // 재연결 유예(25초)까지 겹쳐서 다른 참가자에게 "종료됨"이 반영되기까지 너무 오래
+    // 걸렸다. 여기서 즉시 /end를 호출해 상태부터 확정시키면, 그 뒤 WS가 늦게 닫혀도
+    // 백엔드는 이미 processing 상태라 아무 일도 안 하고 넘어간다.
+    if (meeting) {
+      await endMeetingApi(workspaceId, meeting.id);
+    }
 
     // session_end는 밀려 있는 자막이 많으면 최대 1분까지 걸릴 수 있다 - 그보다 짧게 잡으면
     // 서버가 마지막 자막을 다 보내기 전에 소켓을 닫아버려서 회의 후반부 스크립트가 화면에서

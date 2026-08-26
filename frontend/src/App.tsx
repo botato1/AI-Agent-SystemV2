@@ -3,6 +3,7 @@ import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
 import HomeView from "./components/HomeView";
+import { LIVE_ACTIVE_STATUSES } from "./components/MeetingsPanel";
 import DashboardView from "./components/DashboardView";
 import DocumentAnalysisView from "./components/DocumentAnalysisView";
 import GraphView from "./components/GraphView";
@@ -288,6 +289,7 @@ export default function App() {
   });
   const voiceMeetingStatus =
     liveMeeting.status === "recording" ? "recording" : liveMeeting.status === "paused" ? "paused" : null;
+  const isMeetingLiveActive = LIVE_ACTIVE_STATUSES.includes(liveMeeting.status);
 
   // 배너에 띄울 회의 - 내가 직접 시작/참가한 회의(liveMeeting.meeting)가 있으면 그걸 쓰고,
   // 없으면 다른 사람이 시작해둔 회의(joinableMeeting, 유휴 상태에서 5초마다 폴링해서 얻음)를 쓴다.
@@ -663,6 +665,7 @@ export default function App() {
             liveMeeting.beginScheduled(meetingId);
             setSelection({ type: "placeholder", key: "voiceMeeting" });
           }}
+          isMeetingLiveActive={isMeetingLiveActive}
           onOpenDecision={openDecision}
           categories={categoriesState.categories}
           t={t}

@@ -400,6 +400,7 @@ def resolve_contradiction(
                 new_decision = Decision(
                     workspace_id=old_decision.workspace_id,
                     meeting_id=contradiction.session_meeting_id or old_decision.meeting_id,
+                    source_segment_id=contradiction.meeting_segment_id,
                     title=old_decision.title,
                     decision_text=decision_text,
                     reason=new_decision_reason,

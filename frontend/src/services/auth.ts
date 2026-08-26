@@ -257,6 +257,14 @@ export async function refreshAccessToken(): Promise<string | null> {
       }),
     });
 
+    // 502 등 서버 쪽이 일시적으로 흔들린 것뿐인데(진짜 토큰 무효가 아님) 토큰을
+    // 지워버리면, 서버가 회복된 뒤에도 재로그인부터 다시 해야 한다 - 5xx는 재발급
+    // "실패"로만 취급하고 토큰은 그대로 둔다. 진짜 무효한 토큰(4xx)일 때만 지운다.
+    if (response.status >= 500) {
+      console.error(`토큰 재발급 실패(서버 오류 ${response.status}) - 토큰은 유지, 나중에 재시도`);
+      return null;
+    }
+
     const data: RefreshResponse = await response.json();
 
     if (!response.ok || data.status === "error" || !data.token) {
@@ -275,6 +283,8 @@ export async function refreshAccessToken(): Promise<string | null> {
 
     return newAccessToken;
   } catch (error) {
+    // fetch 자체가 실패(네트워크 순단 등)한 경우도 서버 오류와 마찬가지로 토큰이
+    // 무효해진 게 아니므로 지우지 않는다.
     console.error("refreshAccessToken 통신 오류:", error);
     return null;
   }
@@ -293,7 +303,19 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
 
   if (response.status === 401) {
     console.log("Access Token 만료. 재발급 시도 중...");
-    const newAccessToken = await refreshAccessToken();
+
+    // 재발급 한 번 실패했다고 바로 로그아웃시키면, 서버가 순간적으로만 흔들린
+    // 경우(502 등)에도 화면이 초기화면으로 날아간다 - 특히 회의 녹음 중이면 치명적.
+    // 진짜 로그아웃 처리는 몇 번 더 재시도해도 계속 안 될 때만 한다.
+    const RETRY_DELAYS_MS = [500, 1500];
+    let newAccessToken: string | null = null;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      newAccessToken = await refreshAccessToken();
+      if (newAccessToken) break;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+      }
+    }
 
     if (newAccessToken) {
       headers.set("Authorization", `Bearer ${newAccessToken}`);

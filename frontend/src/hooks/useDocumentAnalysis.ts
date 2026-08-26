@@ -45,11 +45,23 @@ export function useDocumentAnalysis(workspaceId: string) {
   const [isLoading, setIsLoading] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
 
+  // 업로드 중이라 서버에 아직 문서 row가 없는(=클라이언트 임시 ID만 존재하는) 항목의
+  // ID 집합. 백엔드는 처리(최대 5분)가 끝나야 row를 만들기 때문에, 그 사이 목록 폴링이
+  // 이 항목들을 서버 응답으로 지워버리지 않도록 병합 시 보존한다.
+  const pendingUploadIdsRef = useRef<Set<string>>(new Set());
+
   async function loadDocuments() {
     if (!workspaceId) return;
     const res = await getDocumentListApi(workspaceId);
     if (res.status === "success") {
-      setDocuments(res.documents.map(toAnalyzedDocument));
+      const serverDocs = res.documents.map(toAnalyzedDocument);
+      const serverIds = new Set(serverDocs.map((d) => d.id));
+      setDocuments((prev) => {
+        const localOnly = prev.filter(
+          (d) => pendingUploadIdsRef.current.has(d.id) && !serverIds.has(d.id)
+        );
+        return [...localOnly, ...serverDocs];
+      });
     }
   }
 
@@ -170,14 +182,23 @@ export function useDocumentAnalysis(workspaceId: string) {
       };
       setDocuments((prev) => [placeholder, ...prev]);
       setActiveDocId(tempId);
+      pendingUploadIdsRef.current.add(tempId);
 
       const res = await uploadDocumentApi(workspaceId, file, undefined, "document", undefined, categoryId);
 
       if (res.status === "success" && res.documentId) {
-        setDocuments((prev) =>
-          prev.map((d) => (d.id === tempId ? { ...d, id: res.documentId as string } : d))
-        );
-        setActiveDocId((prev) => (prev === tempId ? (res.documentId as string) : prev));
+        pendingUploadIdsRef.current.delete(tempId);
+        const newId = res.documentId as string;
+        setDocuments((prev) => {
+          // 업로드 응답을 기다리는 동안 폴링/WS가 먼저 서버 문서를 받아와 이미 목록에
+          // 들어와 있을 수 있다 - 그 경우 placeholder를 같은 id로 또 붙이면(map) id가
+          // 중복된 두 항목이 같이 렌더링된다. 이미 있으면 placeholder만 제거한다.
+          if (prev.some((d) => d.id === newId)) {
+            return prev.filter((d) => d.id !== tempId);
+          }
+          return prev.map((d) => (d.id === tempId ? { ...d, id: newId } : d));
+        });
+        setActiveDocId((prev) => (prev === tempId ? newId : prev));
         await loadDocuments();
       } else {
         setDocuments((prev) => prev.map((d) => (d.id === tempId ? { ...d, status: "failed" } : d)));
@@ -189,6 +210,7 @@ export function useDocumentAnalysis(workspaceId: string) {
   async function deleteDocument(id: string) {
     const res = await deleteDocumentApi(workspaceId, id);
     if (res.status === "success") {
+      pendingUploadIdsRef.current.delete(id);
       setDocuments((prev) => prev.filter((d) => d.id !== id));
       setActiveDocId((prev) => (prev === id ? null : prev));
     } else {
