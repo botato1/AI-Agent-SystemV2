@@ -14,16 +14,7 @@ import {
   LoginResponse,
 } from "../services/auth";
 
-interface RegisteredAccount {
-  username: string;
-  email?: string;
-  password: string;
-  user: User;
-}
-
 interface AuthViewProps {
-  registeredAccounts: RegisteredAccount[];
-  onSignUp: (account: RegisteredAccount) => void;
   onLogIn: (user: User) => void;
   inviteToken?: string | null;
   t: any;
@@ -31,7 +22,7 @@ interface AuthViewProps {
 
 type Mode = "login" | "signup";
 
-export default function AuthView({ registeredAccounts, onSignUp, onLogIn, inviteToken, t }: AuthViewProps) {
+export default function AuthView({ onLogIn, inviteToken, t }: AuthViewProps) {
   const [mode, setMode] = useState<Mode>(inviteToken ? "signup" : "login");
 
   // 폼 입력 상태
@@ -229,20 +220,6 @@ export default function AuthView({ registeredAccounts, onSignUp, onLogIn, invite
         alert(t.auth_invite_invalid);
       }
     }
-
-    onSignUp({
-      username: username.trim(),
-      email: fullEmail,
-      password,
-      user: {
-        id: crypto.randomUUID(),
-        name: name.trim(),
-        username: username.trim(),
-        status: "online",
-        avatarColor,
-        avatarImageUrl,
-      },
-    });
 
     // 회원가입 후 다시 로그인 화면으로 보내는 대신, 방금 만든 계정으로 바로 로그인시킨다
     const loginResult = await loginApi(username.trim(), password.trim());

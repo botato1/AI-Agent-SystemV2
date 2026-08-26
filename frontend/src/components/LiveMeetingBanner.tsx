@@ -1,6 +1,5 @@
 import Avatar from "./Avatar";
 import { hashAvatarColor } from "../data/avatarColors";
-import { MicIcon } from "./icons";
 
 interface LiveMeetingBannerProps {
   title: string;

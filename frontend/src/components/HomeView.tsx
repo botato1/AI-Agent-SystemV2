@@ -1,9 +1,8 @@
 // src/components/HomeView.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
 import { useRecentMeetings } from "../hooks/useRecentMeetings";
 import { useDashboardSummary } from "../hooks/useDashboardSummary";
-import { useWorkspaceDecisions } from "../hooks/useWorkspaceDecisions";
 import { useContradictions } from "../hooks/useContradictions";
 import { getWorkspaceMembersApi, WorkspaceMemberInfo } from "../services/workspace";
 import {
@@ -19,7 +18,6 @@ import { getCategoryColor } from "../utils/categoryColor";
 import CategoryBadge from "./CategoryBadge";
 import {
   MicIcon,
-  WarningIcon,
   CloseIcon,
   TrashIcon,
   PencilIcon,
@@ -31,7 +29,6 @@ import {
 } from "./icons";
 import WelcomeOnboarding from "./WelcomeOnboarding";
 import MeetingSearchModal from "./MeetingSearchModal";
-import MeetingAttendeesModal from "./MeetingAttendeesModal";
 import MeetingExportModal from "./MeetingExportModal";
 import ManageMembersModal from "./ManageMembersModal";
 import InviteMemberModal from "./InviteMemberModal";
