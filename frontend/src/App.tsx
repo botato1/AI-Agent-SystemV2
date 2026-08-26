@@ -231,11 +231,13 @@ export default function App() {
     loadRealWorkspaces();
   }, [currentUser]);
 
-  // 2-1. 워크스페이스 선택/전환 또는 사이드바 카테고리 선택 시 실시간 채팅방(rooms) 목록 조회
+  // 2-1. 워크스페이스 선택/전환 또는 사이드바 카테고리 선택 시 실시간 채팅방(rooms) 목록 조회.
+  // 다른 팀원이 새로 만든 채팅방은 별도 실시간 채널이 없어서, 새로고침 없이 보이려면
+  // 백그라운드에서 주기적으로 조용히 재조회해야 한다 (알림벨/할 일 목록과 동일한 방식).
   useEffect(() => {
-    async function loadRooms() {
-      if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId) return;
 
+    async function loadRooms() {
       const res = await getRoomListApi(currentWorkspaceId, selectedCategoryId ?? undefined);
 
       if (res.status === "success") {
@@ -247,17 +249,21 @@ export default function App() {
     }
 
     loadRooms();
+    const timer = setInterval(loadRooms, 8000);
+    return () => clearInterval(timer);
   }, [currentWorkspaceId, selectedCategoryId]);
 
-  // 2-2. 워크스페이스 선택/전환 시 멤버 목록 조회 (채팅 메시지 발신자 이름 표시용)
+  // 2-2. 워크스페이스 선택/전환 시 멤버 목록 조회 (채팅 메시지 발신자 이름 표시용).
+  // 새로 초대된 팀원은 이 목록에 없으면 이름 대신 user_id가 그대로 노출되므로,
+  // 자주는 아니어도 백그라운드에서 주기적으로 재조회해 새로고침 없이 반영한다.
   useEffect(() => {
-    async function loadMembers() {
-      if (!currentWorkspaceId) {
-        setMemberNameById({});
-        setMemberAvatarById({});
-        return;
-      }
+    if (!currentWorkspaceId) {
+      setMemberNameById({});
+      setMemberAvatarById({});
+      return;
+    }
 
+    async function loadMembers() {
       const res = await getWorkspaceMembersApi(currentWorkspaceId);
 
       if (res.status === "success") {
@@ -276,6 +282,8 @@ export default function App() {
     }
 
     loadMembers();
+    const timer = setInterval(loadMembers, 30000);
+    return () => clearInterval(timer);
   }, [currentWorkspaceId]);
 
   // 💡 현재 선택된 워크스페이스 객체 추출
