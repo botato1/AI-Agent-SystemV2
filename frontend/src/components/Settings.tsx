@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Language } from "../data/translations";
 import { ChevronRightIcon, MoonIcon, SunIcon, PlusIcon, PencilIcon, TrashIcon, CheckIcon, CloseIcon, GripIcon } from "./icons";
 import { Theme } from "../hooks/useTheme";
