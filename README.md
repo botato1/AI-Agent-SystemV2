@@ -299,7 +299,11 @@ AI-Agent-SystemV2/
 ├── frontend/
 │   └── src/
 │       ├── components/
-│       ├── pages/
+│       ├── hooks/
+│       ├── services/
+│       ├── lib/
+│       ├── data/
+│       ├── utils/
 │       ├── App.tsx
 │       └── main.tsx
 │
