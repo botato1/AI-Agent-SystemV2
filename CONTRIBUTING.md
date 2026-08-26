@@ -278,7 +278,7 @@ OCR처럼 정확도가 중요한 기능은 측정 스크립트와 근거 문서�
 ## 코드 스타일
 
 - 백엔드: Python (PEP 8 준수 권장), FastAPI 라우터/서비스/CRUD 계층 구조를 따릅니다.
-- 프론트엔드: TypeScript, React, 기존 컴포넌트 구조(`components/`, `pages/`)를 따릅니다.
+- 프론트엔드: TypeScript, React, 기존 디렉토리 구조(`components/`, `hooks/`, `services/`, `lib/`, `data/`, `utils/`)를 따릅니다.
 - 새로운 의존성을 추가할 때는 라이선스가 OSI 인증 라이선스(MIT, Apache-2.0 등)인지 확인해 주세요.
 - 판단이 필요했던 코드에는 이유를 주석으로 남깁니다. 무엇을 하는지는 코드가 말해주지만, 왜 그렇게 했는지는 주석만이 말해줍니다.
 
