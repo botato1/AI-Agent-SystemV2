@@ -6,6 +6,7 @@ import ContradictionEditForm from "./ContradictionEditForm";
 import ContradictionApplyForm from "./ContradictionApplyForm";
 import { CloseIcon } from "./icons";
 import { showConfirm } from "../lib/confirm";
+import { buildApplyConfirmMessage, getContradictionPreviewContent } from "../lib/parseContradictionMessage";
 
 interface ContradictionCompareModalProps {
   contradiction: Contradiction;
@@ -74,7 +75,12 @@ export default function ContradictionCompareModal({
             contradiction={contradiction}
             onCancel={() => setIsApplying(false)}
             onApply={async ({ newDecisionText, newDecisionReason }) => {
-              const confirmed = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+              const { existingContent } = getContradictionPreviewContent(contradiction);
+              const confirmed = await showConfirm(
+                buildApplyConfirmMessage(t, existingContent, newDecisionText),
+                t.contradiction_apply,
+                t.task_cancel
+              );
               if (!confirmed) return false;
               onResolve(contradiction.id, "change_acknowledged", newDecisionText, newDecisionReason);
               return true;
@@ -116,7 +122,12 @@ export default function ContradictionCompareModal({
                       setIsApplying(true);
                       return;
                     }
-                    const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                    const { existingContent, newStatement } = getContradictionPreviewContent(contradiction);
+                    const ok = await showConfirm(
+                      buildApplyConfirmMessage(t, existingContent, newStatement),
+                      t.contradiction_apply,
+                      t.task_cancel
+                    );
                     if (ok) onResolve(contradiction.id, "change_acknowledged");
                   }}
                   className="flex-1 rounded-lg bg-recall-accent px-3 py-2 text-xs font-medium text-white hover:opacity-90"
