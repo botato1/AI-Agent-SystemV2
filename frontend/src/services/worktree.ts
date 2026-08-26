@@ -225,68 +225,6 @@ export async function getWorktreeListApi(workspaceId: string): Promise<GetWorktr
 }
 
 /**
- * 3. 워크트리 단건 조회 API (GET /api/workspaces/{workspace_id}/worktrees/{worktree_id})
- */
-export async function getWorktreeApi(
-  workspaceId: string,
-  worktreeId: string
-): Promise<GetWorktreeResponse> {
-  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
-  const token = localStorage.getItem("access_token");
-
-  if (!token) {
-    return {
-      status: "error",
-      worktree: null,
-      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
-      error: "UNAUTHORIZED",
-    };
-  }
-
-  try {
-    const response = await authFetch(
-      `${API_BASE_URL}/api/workspaces/${workspaceId}/worktrees/${worktreeId}`,
-      { method: "GET" }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || data.status === "error") {
-      let defaultMsg = "워크트리 정보를 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 워크트리입니다.";
-      }
-
-      return {
-        status: "error",
-        worktree: null,
-        message: data.message || defaultMsg,
-        error: data.error || `HTTP_${response.status}`,
-      };
-    }
-
-    return {
-      status: "success",
-      worktree: data.worktree || data,
-      message: data.message || "성공",
-      error: null,
-    };
-  } catch (error) {
-    console.error("getWorktreeApi error:", error);
-    return {
-      status: "error",
-      worktree: null,
-      message: "서버와 통신할 수 없습니다.",
-      error: "NETWORK_ERROR",
-    };
-  }
-}
-
-/**
  * 4. 워크트리 내 파일 목록 조회 API (GET /api/workspaces/{workspace_id}/worktrees/{worktree_id}/files)
  */
 export async function getWorktreeFilesApi(
