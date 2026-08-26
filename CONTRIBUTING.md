@@ -85,13 +85,13 @@ docker compose up -d --build
 > **최초 실행 전 `docker-compose.yml`을 사용 환경에 맞게 수정해야 합니다.**
 > - `volumes`의 `/mnt/nas_2026_spring/...`, `/srv/dobby/...` 경로는 개발 서버 전용입니다. 로컬에서는 상대경로나 named volume으로 변경하세요.
 > - `frontend` 서비스의 `VITE_API_URL`을 접속할 백엔드 주소로 변경하세요 (로컬은 `http://localhost:8000`).
-> - GPU가 없으면 `fastapi`·`stt`·`ollama` 세 서비스의 `deploy.resources.reservations.devices` 항목을 모두 제거하세요.
+> - GPU가 없으면 `fastapi`·`stt`·`document`·`ollama` 네 서비스의 `deploy.resources.reservations.devices` 항목을 모두 제거하세요.
 
-문서 OCR(8003) 서버는 `docker-compose.yml`에 포함되어 있지 않습니다(아래 5번 참고). 이 서버 없이도 회원가입·로그인·채팅·AI Chat·실시간 회의 녹음은 동작하지만, 문서 업로드 분석만 사용할 수 없습니다.
+문서 처리(OCR) 서버는 `document` 서비스로 `docker-compose.yml`에 포함되어 있어(`Dockerfile.document`), `docker compose up`으로 다른 서비스와 함께 뜹니다.
 
-### 5. 문서 처리(OCR) 서버 실행 (컨테이너화 안 되어 있음 — 수동 실행)
+### 5. 문서 처리(OCR) 서버 — Docker 없이 로컬에서 직접 실행하는 경우
 
-다른 서비스와 달리 아직 Dockerfile이 없어서, 아래 순서로 직접 실행해야 합니다.
+`Dockerfile.document`가 실제로 하는 것과 동일한 절차입니다. GPU 드라이버·CUDA 버전에 따라 설치 명령이 달라집니다.
 
 **의존성 설치**
 
@@ -101,7 +101,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install paddlepaddle==3.0.0
 pip install -r requirements.txt
 
-# Linux 서버 (CUDA 13.x)
+# Linux 서버 (CUDA 12.8 이상 — RTX 5090/Blackwell은 필수)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install paddlepaddle-gpu -i https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html
 pip install -r requirements.txt
@@ -125,8 +125,6 @@ curl -X POST http://localhost:8003/api/document
 ```
 
 GPU(CUDA)가 없으면 매우 느려집니다. `torch.cuda.is_available()`이 `True`인지 먼저 확인하는 걸 권장합니다.
-
-> ⚠️ 이 서버는 아직 Docker 컨테이너로 패키징되어 있지 않은 유일한 서비스입니다. 컨테이너화는 향후 과제로 남아있습니다.
 
 <br />
 
