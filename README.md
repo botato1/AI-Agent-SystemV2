@@ -61,8 +61,8 @@ PostgreSQL (관계형 데이터)  ──  ChromaDB (임베딩 / RAG 검색)  ─
 ```
 
 두 대의 서버에 Docker Compose로 분산 배포되어 있습니다.
-- **Server 1** — FastAPI 백엔드, PostgreSQL, 프론트엔드(nginx), Ollama, STT 서버
-- **Server 2** — 문서 처리(OCR/VL) 서버 (GPU 리소스 격리)
+- **Server 1** — FastAPI 백엔드, PostgreSQL, 프론트엔드(nginx), Ollama, STT 서버 (NVIDIA GB10)
+- **Server 2** — 문서 처리(OCR/VL) 서버, GPU 리소스 격리 (NVIDIA RTX 5090)
 
 <br />
 
@@ -103,8 +103,12 @@ PostgreSQL (관계형 데이터)  ──  ChromaDB (임베딩 / RAG 검색)  ─
 
 | Category | Stack |
 | --- | --- |
-| STT | whisper.cpp (large-v3-turbo) |
-| Speaker Diarization | pyannote.audio |
+| STT (확정 전사) | Qwen3-ASR-1.7B |
+| STT (실시간 잠정 전사) | Qwen3-ASR-0.6B |
+| Speaker Diarization | pyannote/speaker-diarization-3.1 |
+| Speaker Embedding | pyannote/wespeaker-voxceleb-resnet34-LM |
+| VAD | Silero VAD |
+| Overlap Detection | pyannote/segmentation-3.0 |
 
 ### Frontend
 
@@ -286,7 +290,7 @@ AI-Agent-SystemV2/
 │   │   └── crud/              # CRUD 함수
 │   └── modules/
 │       ├── document/          # 문서 처리(OCR/VL) 서버 — doc_processor/
-│       ├── stt/                # STT 서버 (whisper.cpp + pyannote)
+│       ├── stt/                # STT 서버 (Qwen3-ASR + pyannote)
 │       ├── rag/                # ChromaDB 클라이언트, 검색/리랭킹
 │       ├── judgment/           # 실시간 모순 판단 로직
 │       ├── post_meeting/       # 회의 후처리(요약/결정/할일 추출) 로직
@@ -469,4 +473,4 @@ Docs: README 갱신
 
 ## License
 
-This project is developed for academic and team project purposes.
+This project is licensed under the MIT License — see the [LICENSE](./LICENSE) file for details.
