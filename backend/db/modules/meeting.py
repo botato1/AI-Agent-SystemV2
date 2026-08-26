@@ -33,6 +33,11 @@ class Meeting(Base):
     paused_at = Column(DateTime(timezone=True), nullable=True)
     paused_duration_ms = Column(BigInteger, nullable=False, server_default="0")
     speaker_labels = Column(JSONB, nullable=True)  # {"SPEAKER_00": "지수", ...} 화자 라벨→실명 매핑
+    # STT 서버(8002) 자체 회의 ID ("{session_id}_{시작시각}" 형식, session_id=이 Meeting.id).
+    # 같은 session_id로 재연결/재개가 여러 번 일어나면 STT 서버 쪽에 meeting_id가 여러 개
+    # 생길 수 있어서, 정밀 재분석 웹훅으로 받은 최신 값을 여기에 저장해두고 수동 재분석
+    # 요청 시 이걸 우선 사용한다 (meeting_service.trigger_manual_reanalysis 참고).
+    stt_meeting_id = Column(String(200), nullable=True)
     created_at = created_at_col()
     updated_at = updated_at_col()
     deleted_at = Column(DateTime(timezone=True), nullable=True)
