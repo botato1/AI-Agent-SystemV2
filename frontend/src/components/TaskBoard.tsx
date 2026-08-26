@@ -17,7 +17,6 @@ import {
   PlusIcon,
   CheckIcon,
   ChevronDownIcon,
-  ChevronLeftIcon,
   TrashIcon,
   CloseIcon,
   WarningIcon,

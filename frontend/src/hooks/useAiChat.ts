@@ -85,6 +85,12 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
             modelName: m.model_name,
           }))
         );
+        // 근거자료가 없는 답변엔 "근거자료 보기" 버튼 자체를 숨기려면 있는지 여부를
+        // 미리 알아야 하는데, 백엔드가 목록 응답에 개수를 안 내려줘서 메시지별로
+        // 따로 조회해야 한다 - 답변마다 병렬로 미리 불러와둔다.
+        res.messages
+          .filter((m) => m.role === "assistant")
+          .forEach((m) => fetchSources(m.id));
       }
     }
 
@@ -180,6 +186,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
             : m
         )
       );
+      fetchSources(assistant.id);
 
       // 첫 질문으로 대화 제목이 자동 생성되므로, 목록도 다시 불러와 제목/정렬을 맞춘다
       loadSessions();

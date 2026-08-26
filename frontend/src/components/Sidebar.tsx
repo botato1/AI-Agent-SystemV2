@@ -12,6 +12,7 @@ import {
   HomeIcon,
   GridIcon,
   ChatIcon,
+  InsightIcon,
   DocumentIcon,
   MicIcon,
   GraphIcon,
@@ -639,7 +640,7 @@ export default function Sidebar({
                 : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
             }`}
           >
-            <ChatIcon size={16} className="flex-shrink-0" />
+            <InsightIcon size={16} className="flex-shrink-0" />
             <span className="truncate font-medium">{t.ai_chat_page_title}</span>
           </button>
 

@@ -286,7 +286,6 @@ export async function uploadDocumentApi(
   workspaceId: string,
   file: File,
   roomId?: string,
-  documentType: "document" | "meeting" = "document",
   meetingId?: string,
   categoryId?: string
 ): Promise<UploadDocumentResponse> {

@@ -23,7 +23,6 @@ import { Contradiction, ContradictionSeverity } from "../services/contradiction"
 import { AppNotification } from "../services/notification";
 import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
-import { Category } from "../services/category";
 import Avatar from "./Avatar";
 import ContradictionMessage from "./ContradictionMessage";
 import DocumentPreviewModal from "./DocumentPreviewModal";
@@ -47,8 +46,6 @@ interface MainAreaProps {
   memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
   onOpenDecision: (decisionId: string) => void;
-  categories: Category[];
-  selectedCategoryId: string | null;
   t: any;
 }
 
@@ -812,8 +809,6 @@ export default function MainArea({
   memberAvatarById,
   activeRecorderName,
   onOpenDecision,
-  categories,
-  selectedCategoryId,
   t,
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");

@@ -31,7 +31,7 @@ import re
 import httpx
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-SAMPLE_SIZE_PER_CATEGORY = 30  # None이면 전체 사용
+SAMPLE_SIZE_PER_CATEGORY = None  # None이면 전체 사용 (50/51/75/75/104 = 355개)
 RANDOM_SEED = 42
 
 MODELS = [

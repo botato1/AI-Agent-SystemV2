@@ -28,7 +28,6 @@ export default function MeetingSearchModal({
   const [results, setResults] = useState<RecentMeetingItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
 
   // 디바운스를 적용해 실시간 검색 지원
   useEffect(() => {
@@ -46,7 +45,6 @@ export default function MeetingSearchModal({
       date_to: dateTo ? new Date(dateTo + "T23:59:59").toISOString() : undefined,
     });
     setIsLoading(false);
-    setHasSearched(true);
 
     if (res.status === "success") {
       setResults(res.meetings);

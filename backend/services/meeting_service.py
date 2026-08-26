@@ -40,11 +40,62 @@ def fetch_refined_transcript(stt_meeting_id: str) -> dict:
     stt_meeting_id는 8002 자체 형식의 ID(웹훅 payload의 meeting_id)이며,
     우리 Meeting.id(UUID)와는 다르다 - session_id로 우리 회의를 찾은 뒤,
     이 함수엔 웹훅 payload의 meeting_id를 그대로 넘겨야 한다.
+
+    주의: 이 함수는 세션 하나(재연결 전/후 중 한쪽)의 세그먼트만 반환한다.
+    회의 전체 요약을 만들 땐 fetch_merged_refined_transcript()를 써야 한다.
     """
     with httpx.Client(timeout=30.0) as client:
         response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings/{stt_meeting_id}")
     response.raise_for_status()
     return response.json()
+
+
+def _list_stt_sessions(session_id: str) -> list[dict]:
+    """이 회의(session_id)에 해당하는 모든 STT 서버 세션을 시작 시각 오름차순으로 반환한다.
+
+    재연결/재개로 같은 session_id에 STT 서버 쪽 meeting_id가 여러 개 생길 수 있는데,
+    "최신 세션 하나 찾기"(_find_stt_meeting_id)와 "전체 세션 병합"(fetch_merged_refined_transcript)이
+    똑같은 조회+필터 로직을 각자 구현하고 있었어서 하나로 모았다 - 정렬을 한 곳에서만
+    관리하면 두 함수 다 항상 같은 기준(시작 시각)으로 동작한다.
+    """
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings")
+    response.raise_for_status()
+
+    sessions = [
+        item for item in response.json().get("meetings", [])
+        if item.get("session_id") == session_id
+    ]
+    sessions.sort(key=lambda item: item.get("started_at") or "")
+    return sessions
+
+
+def fetch_merged_refined_transcript(session_id: str) -> dict:
+    """이 회의(session_id)에 속한 모든 STT 세션의 정밀 재분석 세그먼트를 시간순으로 합쳐서 반환한다.
+
+    재연결/재개로 같은 session_id에 STT 서버 쪽 meeting_id가 여러 개 생긴 경우,
+    세션 하나의 세그먼트만으로 요약을 만들면 다른 세션 구간이 통째로 빠진다.
+    """
+    sessions = _list_stt_sessions(session_id)
+
+    merged_segments: list[dict] = []
+    # 세션이 여러 개여도 같은 STT 서버로 요청을 반복하는 거라, 클라이언트(TCP 연결)를
+    # 세션마다 새로 열지 않고 하나 재사용한다.
+    with httpx.Client(timeout=30.0) as client:
+        for item in sessions:
+            stt_meeting_id = item.get("meeting_id")
+            if not stt_meeting_id:
+                continue
+            try:
+                response = client.get(f"{STT_SERVER_BASE_URL}/api/meetings/{stt_meeting_id}")
+                response.raise_for_status()
+                detail = response.json()
+            except httpx.HTTPError as e:
+                print(f"[meeting_service] 세션 세그먼트 조회 실패, 건너뜀: stt_meeting_id={stt_meeting_id}, error={repr(e)}")
+                continue
+            merged_segments.extend(detail.get("segments", []))
+
+    return {"segments": merged_segments}
 
 
 async def _request_stt(file_content: bytes, filename: str) -> dict:
@@ -60,8 +111,13 @@ async def _request_stt(file_content: bytes, filename: str) -> dict:
 def regenerate_summary_from_refined_transcript(
     meeting_id: str, refined_data: dict,
     max_wait_seconds: float = 300.0, poll_interval_seconds: float = 5.0,
+    force: bool = False,
 ) -> None:
     """정밀 재분석 완료 웹훅 수신 시 요약만 다시 생성해 갱신한다.
+
+    force=True면 이미 재분석 반영된 회의도 다시 갱신한다 - 사용자가 "재분석"
+    버튼으로 수동 재요청한 경우(trigger_manual_reanalysis)에 쓴다. 기본값(False)은
+    웹훅 중복 수신 방지용 dedup을 그대로 유지한다.
 
     meeting_postprocess_node는 재실행하지 않는다 - 그 노드가 결정사항/할 일
     추출까지 한 번에 묶여있어서, 여기서 다시 부르면 decision/task가 중복
@@ -95,7 +151,7 @@ def regenerate_summary_from_refined_transcript(
             time.sleep(poll_interval_seconds)
             waited += poll_interval_seconds
 
-        if summary_row.refined_at is not None:
+        if summary_row.refined_at is not None and not force:
             print(f"[meeting_service] 이미 재분석 반영됨, 중복 웹훅 스킵: meeting_id={meeting_id}")
             return
 
@@ -156,6 +212,66 @@ def regenerate_summary_from_refined_transcript(
         print(f"[meeting_service] 재분석본 요약 갱신 실패: meeting_id={meeting_id}, error={repr(e)}")
     finally:
         db.close()
+
+
+def _find_stt_meeting_id(session_id: str) -> str | None:
+    """session_id로 STT 쪽 meeting_id("{session_id}_{timestamp}") 중 가장 최근 세션을 찾는다.
+
+    우리 Meeting.id(UUID)는 STT 서버 호출 시 session_id로 쓰이지만, STT 서버는
+    자기 자신의 meeting_id(파일 경로에 쓰는 조합 ID)를 별도로 갖고 있어서 이걸로
+    변환해야 /refine 엔드포인트를 호출할 수 있다.
+    """
+    sessions = _list_stt_sessions(session_id)  # 시작 시각 오름차순 - 마지막이 최신
+    if not sessions:
+        return None
+    return sessions[-1].get("meeting_id")
+
+
+def trigger_manual_reanalysis(meeting_id: str, stt_meeting_id: str | None = None) -> None:
+    """사용자가 "재분석" 버튼을 눌렀을 때 STT 서버의 정밀 재분석을 수동으로 재요청한다.
+
+    stt_meeting_id는 이 회의가 웹훅을 한 번이라도 받아서 DB(Meeting.stt_meeting_id)에
+    저장해둔 값을 우선 사용한다 - session_id 재사용(재연결/재개) 시 STT 서버에 동일
+    session_id로 여러 meeting_id가 생길 수 있어 검색만으로는 항상 정확하지 않기 때문이다.
+    아직 한 번도 웹훅을 못 받은 회의는(None) session_id 기반 최신순 검색으로 폴백한다.
+
+    force=True로 호출하므로 이미 재분석된 회의도 다시 돌아간다(기존 재분석본 덮어씀,
+    실시간 결과는 보존됨 - STT 서버 쪽 정책). 오래 걸리는 GPU 작업이라 백그라운드
+    태스크로 실행하고, 끝나면 웹훅 수신 때와 동일한 경로로 요약을 갱신한다.
+
+    호출 전 라우터가 회의 상태를 completed -> processing으로 원자적 전이시켜
+    중복 실행을 막아뒀으므로, 성공하든 실패하든 여기서 반드시 completed로 되돌린다
+    (안 그러면 회의가 processing에 멈춰 다시는 재분석/조회가 안 되는 상태로 남는다).
+    """
+    try:
+        if not stt_meeting_id:
+            stt_meeting_id = _find_stt_meeting_id(meeting_id)
+        if not stt_meeting_id:
+            print(f"[meeting_service] 수동 재분석 대상 없음: STT 서버에 session_id={meeting_id} 회의가 없습니다.")
+            return
+
+        with httpx.Client(timeout=STT_REQUEST_TIMEOUT_SECONDS) as client:
+            response = client.post(
+                f"{STT_SERVER_BASE_URL}/api/meetings/{stt_meeting_id}/refine",
+                params={"force": "true"},
+            )
+        response.raise_for_status()
+        print(f"[meeting_service] 수동 재분석 완료: meeting_id={meeting_id}, stt_meeting_id={stt_meeting_id}")
+
+        # 세션 하나가 아니라, 이 회의에 속한 모든 세션의 세그먼트를 합쳐서 요약을 만든다
+        # (재연결로 세션이 여러 개면 방금 재분석한 세션 구간만으로는 요약이 불완전해진다).
+        refined_data = fetch_merged_refined_transcript(meeting_id)
+        regenerate_summary_from_refined_transcript(meeting_id=meeting_id, refined_data=refined_data, force=True)
+    except Exception as e:
+        print(f"[meeting_service] 수동 재분석 실패: meeting_id={meeting_id}, error={repr(e)}")
+    finally:
+        db = SessionLocal()
+        try:
+            meeting_crud.try_transition_meeting_status(
+                db, uuid.UUID(meeting_id), from_status="processing", to_status="completed",
+            )
+        finally:
+            db.close()
 
 
 def _save_segments_bulk(

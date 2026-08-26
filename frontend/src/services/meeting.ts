@@ -2458,3 +2458,72 @@ export async function splitMeetingSegmentApi(
     };
   }
 }
+
+export interface ReanalyzeMeetingResponse {
+  status: "success" | "error";
+  message: string;
+  error: string | null;
+}
+
+/**
+ * STT 재분석 수동 재요청 API (POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/reanalyze)
+ *
+ * 완료(completed) 상태의 회의만 재요청 가능하며, 202 응답은 "요청 접수" 의미일 뿐
+ * 재분석 완료를 뜻하지 않는다 - 실제 완료는 기존 meeting_summary_ready 알림으로 전달된다.
+ */
+export async function reanalyzeMeetingApi(
+  workspaceId: string,
+  meetingId: string
+): Promise<ReanalyzeMeetingResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/reanalyze`,
+      { method: "POST" }
+    );
+
+    if (!response.ok) {
+      let data: { message?: string; error?: string } = {};
+      try {
+        data = await response.json();
+      } catch {
+        // 본문이 비어있을 수 있음 (예: 일부 에러 응답)
+      }
+
+      let defaultMsg = "재분석 요청에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 재분석을 요청할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+      else if (response.status === 409) defaultMsg = "분석이 완료된 회의만 재분석할 수 있습니다.";
+
+      return {
+        status: "error",
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      message: "재분석을 요청했습니다. 완료되면 알림으로 알려드릴게요.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("reanalyzeMeetingApi error:", error);
+    return {
+      status: "error",
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}

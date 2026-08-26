@@ -1,29 +1,20 @@
 # backend/schemas/chat_schema.py
 
 """
-기존 채팅 요청·응답, 채팅방 메시지, 파일 연결,
-개인 AI Chat 관련 Pydantic 스키마를 정의한다.
+채팅방 메시지, 파일 연결, 개인 AI Chat 관련 Pydantic 스키마를 정의한다.
 
-TODO:
-- 아래 Legacy 블록은 기존 채팅 라우터와 서비스가 참조하고 있으므로
-  마이그레이션 완료 전까지 유지한다.
-- 기존 conversations/messages 기반 채팅 기능을
-  rooms/room_messages 기반 구조로 교체한 후 Legacy 블록을 삭제한다.
 - room_messages는 모순 감지 대상이지만 RAG 소스로
   ChromaDB에 저장하지 않는다.
-- 신규 채팅 및 AI Chat API의 생성·수정·조회 스키마는
-  관련 라우터 구현 시 별도로 정의한다.
 """
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from pydantic import (
     BaseModel,
     Field,
-    field_validator,
     model_validator,
 )
 
@@ -39,119 +30,6 @@ from backend.schemas.type_schema import (
     FileKind,
     RoomMessageType,
 )
-
-
-# =============================================================================
-# Legacy: 기존 채팅 요청·응답 스키마
-# =============================================================================
-
-RequestType = Literal[
-    "chat",
-    "rag_search",
-    "legal_analysis",
-    "legal_task_generate",
-    "case_card_generate",
-]
-
-
-class ChatRequest(BaseModel):
-    """기존 프론트엔드에서 메인 채팅 API로 전달하는 요청."""
-
-    # 기존 conversation 기반 채팅방 ID
-    conversation_id: Optional[str] = None
-
-    # 이전 room_id 호환 필드
-    room_id: Optional[str] = None
-
-    content: str
-
-    # 기존 프론트엔드 및 서비스 호환을 위해 str로 유지
-    source: str = "text"
-
-    # 값이 없으면 기존 classifier 노드에서 분류
-    request_type: Optional[RequestType] = None
-
-    target_document_id: Optional[str] = None
-    target_filename: Optional[str] = None
-    target_document_ids: Optional[List[str]] = None
-
-
-class ChatMessageSchema(BaseModel):
-    """기존 대화 기록에 포함되는 메시지의 최소 구조."""
-
-    message_id: Optional[str] = None
-    role: str
-    content: str
-    created_at: Optional[str] = None
-
-
-# 기존 코드의 MessageSchema import 호환을 위해 유지
-MessageSchema = ChatMessageSchema
-
-
-class ChatMessage(BaseModel):
-    """기존 DB에 저장되거나 조회되는 채팅 메시지 구조."""
-
-    message_id: str
-    conversation_id: str
-    room_id: Optional[str] = None
-
-    role: str
-    content: str
-    created_at: str
-
-
-class ChatHistoryResponse(BaseModel):
-    """기존 대화 기록 조회 응답."""
-
-    conversation_id: str
-    room_id: Optional[str] = None
-
-    messages: List[ChatMessageSchema] = Field(
-        default_factory=list,
-    )
-
-
-class ConversationSchema(BaseModel):
-    """기존 채팅방 세션 구조."""
-
-    conversation_id: str
-    room_id: Optional[str] = None
-
-    title: str
-    created_at: str
-    updated_at: str
-
-    document_id: Optional[str] = None
-    filename: Optional[str] = None
-
-
-class ConversationListResponse(BaseModel):
-    """기존 채팅방 목록 응답."""
-
-    conversations: List[ConversationSchema] = Field(
-        default_factory=list,
-    )
-
-
-class ConversationTitleUpdateRequest(BaseModel):
-    """기존 채팅방 제목 수정 요청."""
-
-    title: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-    )
-
-    @field_validator("title")
-    @classmethod
-    def title_must_not_be_blank(cls, value: str) -> str:
-        title = value.strip()
-
-        if not title:
-            raise ValueError("제목은 공백일 수 없습니다.")
-
-        return title
 
 
 # =============================================================================

@@ -44,4 +44,5 @@ export {
   Headphones as HeadphoneIcon,
   Scissors as SplitIcon,
   GripVertical as GripIcon,
+  Lightbulb as InsightIcon,
 } from "lucide-react";
