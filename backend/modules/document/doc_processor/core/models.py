@@ -21,7 +21,6 @@ class LayoutBlock:
 
     # figure 전용 필드
     figure_type: str = "unknown"   # "photo" | "chart" | "diagram" | "logo" | "unknown"
-    has_caption: bool = False      # 주변에 caption 블록이 존재하는지
     ocr_skip: bool = False         # True = OCR 불필요 (로고/아이콘/배너)
 
 
@@ -108,38 +107,6 @@ class PageResult:
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "page": self.page,
-            "content": {
-                "text": [
-                    {"text": b.text, "bbox": b.bbox, "font": b.font, "size": b.size, "style": b.style}
-                    for b in self.content.text
-                ],
-                "tables": [
-                    {"data": b.data, "markdown": b.markdown, "bbox": b.bbox}
-                    for b in self.content.tables
-                ],
-                "images": [
-                    {
-                        "bbox": b.bbox,
-                        "ocr_text": b.ocr_text,
-                        "voting_confidence": b.voting_confidence,
-                        "source_engines": b.source_engines,
-                    }
-                    for b in self.content.images
-                ],
-                "charts": [
-                    {"bbox": b.bbox, "description": b.description, "extracted_data": b.extracted_data}
-                    for b in self.content.charts
-                ],
-            },
-            "confidence": self.confidence.to_dict(),
-            "fallback_used": self.fallback_used,
-            "engine": self.engine,
-            "created_at": self.created_at,
-        }
 
 
 @dataclass
@@ -262,12 +229,6 @@ class OcrStats:
             return 0.0
         return round(self._voted_char_sum / self._engine_char_n, 1)
 
-    @property
-    def pages_per_second(self) -> float:
-        """페이지 처리 속도. processing_time_sec가 0이면 0.0."""
-        # page_count는 OcrStats에 없으므로 호출 측에서 넘겨야 함 → 별도 메서드로 제공
-        return 0.0  # 호환성 유지용 stub; print_summary에 page_count 전달로 계산
-
     # ── 관계식 검증 ───────────────────────────────────────────────────────────
 
     def validate_counts(self) -> bool:
@@ -381,10 +342,3 @@ class DocumentResult:
     pdf_type: str  # "digital" | "scanned" | "mixed"
     pages: list[PageResult] = field(default_factory=list)
     ocr_stats: OcrStats = field(default_factory=OcrStats)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source,
-            "pdf_type": self.pdf_type,
-            "pages": [p.to_dict() for p in self.pages],
-        }

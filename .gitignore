@@ -52,6 +52,9 @@ checkpoint-*/
 *.gguf
 *.safetensors
 
+# Jupyter 체크포인트
+.ipynb_checkpoints/
+
 # 모델 캐시
 .cache/
 

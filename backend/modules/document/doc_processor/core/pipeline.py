@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import re
 import time
 import uuid
 
@@ -37,7 +36,6 @@ from doc_processor.parsers.image_parser import (
     normalize_bbox,
     render_page,
 )
-from doc_processor.ocr.table_ocr import get_or_create_tsr, run_table_ocr
 from doc_processor.ocr.vl_engine import VLEngine as QwenVLEngine, unload as _unload_qwen_vl
 from doc_processor.ocr.paddle_vl_1_6_engine import PaddleVL16Engine, unload as _unload_paddle_vl
 from doc_processor.postprocess.vl_parser import parse as vl_parse
@@ -64,7 +62,6 @@ class DocumentPipeline:
         self.debug_ocr = debug_ocr
         self.ocr_upscale = ocr_upscale          # True 이면 ImageBlock.debug 채움
         self._paddle: PaddleEngine | None = None
-        self._tsr = None
         self._worst_ocr: list[dict] = []    # quality_score 하위 20건 (debug_ocr=True 시 사용)
         self._postprocessor = PostProcessor()
         self._confidence_engine = ConfidenceEngine()
@@ -100,7 +97,6 @@ class DocumentPipeline:
         if not lines:
             return 0.0
 
-        import re
         total_chars = sum(len(l) for l in lines)
         if total_chars == 0:
             return 0.0
@@ -136,7 +132,6 @@ class DocumentPipeline:
         layout_map: dict[int, list] = {}
         if self._yolo and self._yolo.available:
             print("[Pipeline] YOLO 레이아웃 분석 중...")
-            import time
             _t = time.perf_counter()
             layout_map = self._yolo.parse(pdf_path)
             _elapsed = time.perf_counter() - _t
