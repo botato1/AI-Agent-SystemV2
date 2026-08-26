@@ -638,6 +638,35 @@ def get_meeting_audio_api(
         filename=workspace_file.original_filename,
     )
 
+# STT 정밀 재분석 수동 재요청 (화자 인식/STT 품질이 안 좋을 때 사용자가 직접 트리거)
+@router.post("/{meeting_id}/reanalyze", status_code=status.HTTP_202_ACCEPTED)
+def reanalyze_meeting_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    # completed -> processing 원자적 전이. 이미 재분석이 진행 중(processing)이거나
+    # 애초에 completed가 아니면 전이가 실패해 None이 반환된다 - 중복 클릭/재시도로
+    # 재분석이 두 번 동시에 도는 것을 여기서 막는다 (try_transition_meeting_status 참고).
+    transitioned = meeting_crud.try_transition_meeting_status(
+        db, meeting_id, from_status="completed", to_status="processing",
+    )
+    if transitioned is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="완료된 회의만 재분석할 수 있습니다 (이미 재분석이 진행 중일 수 있습니다).",
+        )
+
+    background_tasks.add_task(
+        meeting_service.trigger_manual_reanalysis, str(meeting_id), meeting.stt_meeting_id,
+    )
+    return {"status": "accepted", "meeting_id": str(meeting_id)}
+
 # 발화 세그먼트 내용 수정
 @router.patch("/{meeting_id}/segments/{segment_id}", response_model=MeetingSegmentResponse)
 def update_meeting_segment_api(
@@ -1086,15 +1115,24 @@ def join_meeting_api(
     require_workspace_member(db, workspace_id, current_user_id)
     meeting = _get_meeting_or_404(db, meeting_id, workspace_id)
 
-    if meeting.status != "recording":
+    # [수정 - 리뷰 반영] "recording"만 허용하면, 일시정지 상태에서 연결이 끊긴
+    # 사람이 재연결하려고 이 엔드포인트를 호출할 때 409로 막혀버린다. 프론트가
+    # 재연결 시 새 ws_ticket을 여기서 받아오도록 이미 고쳐놨으므로, paused도 허용한다.
+    if meeting.status not in ("recording", "paused"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="녹음 중인 회의가 아닙니다.",
+            detail="녹음 중이거나 일시정지된 회의가 아닙니다.",
         )
 
-    # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가. 그 외(single_device,
-    # 한 대의 PC) 모드는 오디오는 이미 호스트 연결이 담당하므로 보기 전용으로만 참가시킨다.
-    view_only = meeting.recording_mode != "individual"
+    # individual(각자 PC) 모드는 기존처럼 각자 마이크로 참가.
+    # single_device(한 대의 PC) 모드는 원래 녹음을 시작한 사람(started_by)만
+    # 오디오 스트리밍 권한(view_only=False)을 가진다 - 연결이 끊겨서 이 엔드포인트로
+    # 재연결하는 경우에도 그 사람이어야 녹음이 계속 유지된다. 그 외 사람은 보기 전용.
+    if meeting.recording_mode == "individual":
+        view_only = False
+    else:
+        view_only = uuid.UUID(current_user_id) != meeting.started_by
+
     ws_ticket = create_ws_ticket(current_user_id, str(meeting_id), view_only=view_only)
     return MeetingJoinResponse(ws_ticket=ws_ticket)
 

@@ -12,14 +12,25 @@ from backend.db.modules import Meeting
 
 
 def assemble_transcript(db: Session, meeting: Meeting, *, uploaded_text: str | None = None) -> str:
-    """llm_extractor에 넘길 전체 원문 텍스트를 조립한다."""
+    """llm_extractor에 넘길 전체 원문 텍스트를 조립한다.
+
+    [수정 - 화자 귀속 요약 지원] 발화 번호([번호])만 붙이고 화자 라벨은 안 붙이고
+    있었는데, llm_extractor.EXTRACTION_PROMPT_TEMPLATE은 애초에 "각 발화 앞에
+    [번호] 형식의 발화 번호가 붙어있다"고 전제하고 chit_chat_segment_indexes를
+    뽑고 있어서 번호 자체가 없으면 그 기능이 안 맞았다. 번호와 화자 라벨을
+    같이 붙여서 두 문제를 한 번에 해결한다 - 요약이 "누가 말했는지"까지
+    포함할 수 있게 됨.
+    """
     if meeting.input_type == "document_upload":
         if not uploaded_text:
             raise ValueError("document_upload 회의는 uploaded_text가 필요합니다.")
         return uploaded_text
 
     segments = meeting_crud.get_segments(db, meeting.id)
-    return "\n".join(f"[{s.speaker_label or 'SPEAKER'}]: {s.content}" for s in segments)
+    return "\n".join(
+        f"[{i}][{s.speaker_label or 'SPEAKER'}]: {s.content}"
+        for i, s in enumerate(segments)
+    )
 
 
 def get_segments_for_indexing(

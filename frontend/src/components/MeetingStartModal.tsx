@@ -10,7 +10,6 @@ const CREATE_CATEGORY_VALUE = "__create__";
 interface MeetingStartModalProps {
   workspaceId: string;
   currentUserId: string;
-  defaultTitle: string;
   onClose: () => void;
   onStart: (
     title: string,
@@ -48,7 +47,6 @@ function generatePrettyDefaultTitle(t: any): string {
 export default function MeetingStartModal({
   workspaceId,
   currentUserId,
-  defaultTitle,
   onClose,
   onStart,
   t,
@@ -74,6 +72,14 @@ export default function MeetingStartModal({
   // 드롭다운 및 검색 상태
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // 드롭다운을 열었을 때 팝업 자체가 길어서 목록이 화면 밖으로 밀려나는 문제 -
+  // 열리자마자 이 영역으로 자동 스크롤해서 바로 보이게 한다
+  const attendeesDropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (isDropdownOpen) {
+      attendeesDropdownRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [isDropdownOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -351,7 +357,10 @@ export default function MeetingStartModal({
 
           {/* 인라인 열림 방식 (버튼을 가리지 않고 아래로 밀어냄) */}
           {isDropdownOpen && (
-            <div className="mt-2 flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft overflow-hidden transition-all">
+            <div
+              ref={attendeesDropdownRef}
+              className="mt-2 flex flex-col rounded-xl border border-recall-border bg-recall-bgSoft overflow-hidden transition-all"
+            >
               {/* 팀원 검색 입력창 */}
               <div className="p-2 border-b border-recall-border">
                 <input
@@ -363,8 +372,9 @@ export default function MeetingStartModal({
                 />
               </div>
 
-              {/* 약 2명 높이(max-h-24)로 제한하여 콤팩트하게 스크롤 제공 */}
-              <div className="max-h-24 overflow-y-auto p-1.5 space-y-0.5">
+              {/* 팀원이 몇 명만 넘어도 계속 스크롤해야 했던 문제 개선 - 대부분 팀 규모(6~7명)는
+                  스크롤 없이 한 번에 보이도록 높이를 넉넉히 잡고, 그 이상만 스크롤된다 */}
+              <div className="max-h-60 overflow-y-auto p-1.5 space-y-0.5">
                 {members === null ? (
                   <p className="p-2 text-center text-xs text-recall-textMuted">{t.common_loading}</p>
                 ) : filteredMembers.length === 0 ? (

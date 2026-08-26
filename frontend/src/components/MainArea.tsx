@@ -13,9 +13,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronDownIcon,
-  RepeatIcon,
 } from "./icons";
-import { useChannelRuntime, ChatMessage, DocItem, DecisionReminderToast } from "../hooks/useChannelRuntime";
+import { useChannelRuntime, ChatMessage, DocItem } from "../hooks/useChannelRuntime";
 import { useRoomFiles } from "../hooks/useRoomFiles";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
@@ -24,13 +23,10 @@ import { Contradiction, ContradictionSeverity } from "../services/contradiction"
 import { AppNotification } from "../services/notification";
 import { uploadMeetingAudioApi } from "../services/meeting";
 import { hashAvatarColor } from "../data/avatarColors";
-import { useAiChat } from "../hooks/useAiChat";
-import { Category } from "../services/category";
 import Avatar from "./Avatar";
 import ContradictionMessage from "./ContradictionMessage";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import LinkExistingDocumentModal from "./LinkExistingDocumentModal";
-import AiChatView from "./AiChatView";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
   const map = {
@@ -50,8 +46,6 @@ interface MainAreaProps {
   memberAvatarById: Record<string, string | null>;
   activeRecorderName: string | null;
   onOpenDecision: (decisionId: string) => void;
-  categories: Category[];
-  selectedCategoryId: string | null;
   t: any;
 }
 
@@ -70,7 +64,7 @@ function resolveSenderAvatar(
   };
 }
 
-type Tab = "message" | "docs" | "ai";
+type Tab = "message" | "docs";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
@@ -386,50 +380,6 @@ function ContradictionPanel({
   );
 }
 
-// Case0(결정 리마인더) - contradiction_alert처럼 해결 버튼이 있는 카드가 아니라,
-// 몇 초 후 자동으로 사라지는 가벼운 확인용 토스트로 보여준다.
-function DecisionReminderToastCard({
-  toast,
-  onDismiss,
-  onOpenDecision,
-  t,
-}: {
-  toast: DecisionReminderToast;
-  onDismiss: (id: string) => void;
-  onOpenDecision: (decisionId: string) => void;
-  t: any;
-}) {
-  useEffect(() => {
-    const timer = setTimeout(() => onDismiss(toast.id), 6000);
-    return () => clearTimeout(timer);
-  }, [toast.id]);
-
-  return (
-    <div className="pointer-events-auto flex items-start gap-2 rounded-xl border border-amber-500/30 bg-recall-bgSoft/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
-      <RepeatIcon size={13} className="mt-0.5 flex-shrink-0 text-amber-400" />
-      <div className="min-w-0 flex-1">
-        <p className="font-bold text-amber-400">{t.meeting_live_alert_reminder_title}</p>
-        <p className="text-recall-text">{toast.displayMessage || toast.statementText}</p>
-        {toast.decisionId && (
-          <button
-            onClick={() => onOpenDecision(toast.decisionId!)}
-            className="mt-1 text-[11px] text-recall-accent underline hover:opacity-80"
-          >
-            {t.meeting_live_alert_reminder_view_btn}
-          </button>
-        )}
-      </div>
-      <button
-        onClick={() => onDismiss(toast.id)}
-        className="flex-shrink-0 text-recall-textMuted hover:text-recall-text"
-        aria-label={t.btn_close}
-      >
-        <CloseIcon size={12} />
-      </button>
-    </div>
-  );
-}
-
 function MessageTab({
   messages,
   onSend,
@@ -439,8 +389,6 @@ function MessageTab({
   onOpenPreview,
   contradictions,
   onOpenDecision,
-  decisionReminders,
-  onDismissDecisionReminder,
   reminderNotifications,
   onMarkReminderRead,
   currentUser,
@@ -455,8 +403,6 @@ function MessageTab({
   onOpenPreview: (documentId: string, name: string) => void;
   contradictions: Contradiction[];
   onOpenDecision: (decisionId: string) => void;
-  decisionReminders: DecisionReminderToast[];
-  onDismissDecisionReminder: (id: string) => void;
   reminderNotifications: AppNotification[];
   onMarkReminderRead: (id: string) => void;
   currentUser: MainAreaProps["currentUser"];
@@ -579,20 +525,6 @@ function MessageTab({
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-recall-bg/85 backdrop-blur-sm">
           <UploadIcon size={22} className="text-recall-accent" />
           <p className="text-lg font-medium text-recall-text">{t.drop_overlay}</p>
-        </div>
-      )}
-
-      {decisionReminders.length > 0 && (
-        <div className="pointer-events-none absolute left-1/2 top-3 z-20 w-full max-w-sm -translate-x-1/2 space-y-2 px-3">
-          {decisionReminders.map((r) => (
-            <DecisionReminderToastCard
-              key={r.id}
-              toast={r}
-              onDismiss={onDismissDecisionReminder}
-              onOpenDecision={onOpenDecision}
-              t={t}
-            />
-          ))}
         </div>
       )}
 
@@ -877,8 +809,6 @@ export default function MainArea({
   memberAvatarById,
   activeRecorderName,
   onOpenDecision,
-  categories,
-  selectedCategoryId,
   t,
 }: MainAreaProps) {
   const [activeTab, setActiveTab] = useState<Tab>("message");
@@ -889,18 +819,26 @@ export default function MainArea({
     setActiveTab("message");
   }, [channel.id]);
 
-  const { chatMessages, sendChatMessage, deleteMessage, decisionReminders, dismissDecisionReminder } =
+  const { chatMessages, sendChatMessage, deleteMessage, contradictionSignal } =
     useChannelRuntime(workspaceId, channel.id, currentUser, memberNameById);
 
   const roomFiles = useRoomFiles(workspaceId, channel.id);
 
-  // 이 채팅방에 묶인 AI Chat - workspaceId는 같지만 roomId를 넘겨서 이 채팅방 전용 대화 목록을 쓴다.
-  const roomAiChat = useAiChat(workspaceId, selectedCategoryId, channel.id);
+  const { contradictions: workspaceContradictions, refresh: refreshContradictions } = useContradictions(workspaceId);
 
-  const { contradictions: workspaceContradictions } = useContradictions(workspaceId);
+  // 채팅방 WS로 새 모순 감지 이벤트가 오면, 8초 폴링을 기다리지 않고 바로 목록을 다시 받아와
+  // 패널에 즉시 반영한다 (라이브 회의 쪽 즉시 반영과 동일한 패턴).
+  useEffect(() => {
+    if (contradictionSignal > 0) refreshContradictions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contradictionSignal]);
 
+  // 채팅방 메시지 목록은 최근 N개만 불러오므로(getRoomMessagesApi), room_message_id를 지금 로드된
+  // chatMessages와 조인해서 "이 방 소속인지" 판단하면 오래된 발언에서 감지된 모순은 메시지가
+  // 목록에서 밀려나는 순간 영영 안 뜨게 된다. session_room_id(모순 레코드에 이미 저장돼 있는
+  // 발화 시점 채팅방 id)로 직접 비교해야 메시지 로드 여부와 무관하게 항상 잡힌다.
   const roomContradictions = workspaceContradictions.filter(
-    (c) => c.source_type === "room_message" && c.room_message_id && chatMessages.some((m) => m.id === c.room_message_id)
+    (c) => c.source_type === "room_message" && c.session_room_id === channel.id
   );
 
   const { reminders: allDecisionReminderNotifications, markRead: markReminderRead } =
@@ -954,7 +892,6 @@ export default function MainArea({
   const tabs: { id: Tab; label: string }[] = [
     { id: "message", label: t.chat_tab_message },
     { id: "docs", label: t.chat_tab_docs },
-    { id: "ai", label: t.chat_tab_ai },
   ];
 
   const participants = Object.entries(memberNameById).map(([id, name]) => ({ id, name }));
@@ -1013,8 +950,6 @@ export default function MainArea({
           onOpenPreview={(id, name) => setPreviewDoc({ id, name })}
           contradictions={roomContradictions}
           onOpenDecision={onOpenDecision}
-          decisionReminders={decisionReminders}
-          onDismissDecisionReminder={dismissDecisionReminder}
           reminderNotifications={roomReminders}
           onMarkReminderRead={markReminderRead}
           currentUser={currentUser}
@@ -1033,18 +968,6 @@ export default function MainArea({
           t={t}
         />
       )}
-      {activeTab === "ai" && (
-        <div className="flex flex-1 overflow-hidden rounded-xl border border-recall-border">
-          <AiChatView
-            workspaceId={workspaceId}
-            chat={roomAiChat}
-            categories={categories}
-            selectedCategoryId={selectedCategoryId}
-            t={t}
-          />
-        </div>
-      )}
-
       {showLinkModal && (
         <LinkExistingDocumentModal
           workspaceId={workspaceId}

@@ -4,52 +4,15 @@
 프로젝트 전역에서 사용하는 Literal 타입 정의.
 
 현재 기존 v1/v2 그래프와 Re:Call 그래프가 함께 존재하므로,
-기존 질문·문서 타입은 하위 호환을 위해 임시로 유지한다.
+기존 문서 타입은 하위 호환을 위해 임시로 유지한다.
 
 TODO:
-- classifier.py를 Re:Call 기준으로 마이그레이션
-- AgentState의 question_type, document_type 구조 마이그레이션
+- AgentState의 document_type 구조 마이그레이션
 - common_schema.py, document_schema.py의 DocumentType 의존성 제거
 - 기존 그래프 및 API 호환성 확인 후 legacy 타입 삭제
 """
 
 from typing import Final, Literal
-
-
-# =============================================================================
-# Legacy: 기존 v1/v2 질문 타입
-# =============================================================================
-
-# v1 그래프에서 사용하던 질문 분류값
-QuestionTypeV1 = Literal[
-    "task_from_rag",
-    "task_from_memory",
-    "knowledge_search",
-    "general_answer",
-    "summary_from_rag",
-]
-
-
-# v2 법률 서비스에서 사용하던 질문 분류값
-#
-# 현재 backend/graphs/nodes/classifier.py에서 직접 참조하고 있으므로
-# Re:Call용 classifier 마이그레이션 전까지 유지한다.
-QuestionTypeV2 = Literal[
-    "contract_risk_check",   # 계약서 위험 조항 검증
-    "statute_search",        # 법조문 검색
-    "precedent_search",      # 판례 검색
-    "legal_search",          # 법조문 및 판례 통합 검색
-    "general_answer",        # 일반 답변
-    "consultation_summary",  # 상담 요약 및 사건 카드 생성
-]
-
-
-# v1/v2 혼용 기간 동안 허용하는 통합 질문 타입
-QuestionType = QuestionTypeV1 | QuestionTypeV2
-
-
-# 기존 그래프의 기본 질문 타입
-DEFAULT_QUESTION_TYPE: Final[QuestionType] = "general_answer"
 
 
 # =============================================================================

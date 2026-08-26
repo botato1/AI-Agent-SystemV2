@@ -347,6 +347,15 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
 
+    // 회의 시작(버튼 클릭) → startMeetingApi → WS onopen을 거쳐 여기 도달하기까지 비동기
+    // 왕복이 여러 번 껴서, 브라우저 자동재생 정책상 AudioContext가 처음부터 suspended로
+    // 생성될 수 있다 - 이러면 에러 없이 조용히 오디오가 하나도 처리/전송되지 않는다.
+    // (OS/브라우저 마이크 권한 패널의 볼륨 미터는 이 컨텍스트와 무관하게 따로 동작하므로,
+    // 거기선 정상으로 보여도 실제로는 아무것도 안 보내지고 있을 수 있다.)
+    if (audioContext.state === "suspended") {
+      await audioContext.resume().catch(() => {});
+    }
+
     const workletBlob = new Blob([PCM_WORKLET_SOURCE], { type: "application/javascript" });
     const workletUrl = URL.createObjectURL(workletBlob);
     try {
@@ -535,9 +544,24 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
       reconnectTimerRef.current = setTimeout(connect, RECONNECT_RETRY_INTERVAL_MS);
     }
 
-    function connect() {
+    async function connect() {
       const isReconnectAttempt = reconnectDeadlineRef.current !== null;
-      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, meetingData.ws_ticket);
+
+      // ws_ticket은 1회용이라, 최초 연결에서 이미 소모된 티켓을 재연결 때 그대로 재사용하면
+      // 서버가 항상 거절한다(4401) - "재연결 중..."에서 영원히 못 벗어나던 원인이었다.
+      // 재연결 때는 /join으로 새 티켓을 받아서 붙는다. 백엔드가 원래 녹음 담당자(started_by)는
+      // view_only=False로 재발급해주므로, 호스트가 재연결해도 마이크 전송 권한이 유지된다.
+      let ticket = meetingData.ws_ticket;
+      if (isReconnectAttempt) {
+        const joinRes = await joinMeetingApi(workspaceId, meetingData.id);
+        if (joinRes.status !== "success" || !joinRes.wsTicket) {
+          scheduleReconnect();
+          return;
+        }
+        ticket = joinRes.wsTicket;
+      }
+
+      const wsUrl = buildWsUrl(apiBaseUrl, workspaceId, meetingData.id, ticket);
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
 
