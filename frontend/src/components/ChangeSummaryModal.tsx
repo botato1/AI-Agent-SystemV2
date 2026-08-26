@@ -4,7 +4,6 @@ import { CloseIcon, WarningIcon } from "./icons";
 interface ChangeSummaryModalProps {
   contradiction: Contradiction;
   changeSummary: ChangeSummaryDraft | null;
-  isLoading: boolean;
   onClose: () => void;
   t: any;
 }
@@ -14,7 +13,6 @@ interface ChangeSummaryModalProps {
 export default function ChangeSummaryModal({
   contradiction,
   changeSummary,
-  isLoading,
   onClose,
   t,
 }: ChangeSummaryModalProps) {

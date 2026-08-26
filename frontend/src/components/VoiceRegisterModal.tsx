@@ -286,5 +286,3 @@ export function VoiceRegisterModal({
     </div>
   );
 }
-
-export default VoiceRegisterModal;

@@ -9,8 +9,6 @@ import {
   deleteWorktreeFileApi,
 } from "../services/worktree";
 
-const PENDING_STATUSES = new Set(["pending", "processing"]);
-
 // 코드 폴더 업로드(워크트리) 실제 백엔드 연동
 export function useWorktrees(workspaceId: string, selectedCategoryId?: string | null) {
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
@@ -41,13 +39,13 @@ export function useWorktrees(workspaceId: string, selectedCategoryId?: string | 
     setSelectedWorktreeId(null);
   }, [selectedCategoryId]);
 
-  // 아직 처리 중인 워크트리가 있으면 완료될 때까지 목록을 주기적으로 재조회
+  // 목록을 주기적으로 재조회 - 다른 팀원이 새로 올린 워크트리는 내 로컬 목록에 아직 없어서
+  // "처리 중인 게 있을 때만" 폴링하는 조건으로는 못 잡는다(새로고침해야만 보이던 원인).
   useEffect(() => {
-    const hasPending = worktrees.some((w) => PENDING_STATUSES.has(w.status));
-    if (!hasPending) return;
+    if (!workspaceId) return;
     const timer = setInterval(loadWorktrees, 5000);
     return () => clearInterval(timer);
-  }, [worktrees, workspaceId]);
+  }, [workspaceId]);
 
   useEffect(() => {
     async function loadFiles() {

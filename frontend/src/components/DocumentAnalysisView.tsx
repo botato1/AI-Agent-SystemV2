@@ -9,6 +9,7 @@ import DocumentDetailPanel from "./DocumentDetailPanel";
 import DocumentOriginalViewer from "./DocumentOriginalViewer";
 import CategoryBadge from "./CategoryBadge";
 import { RepeatIcon, TrashIcon } from "./icons";
+import { markUploadingDocument, markUploadDocumentDone, useUploadingDocumentWorkspaceIds } from "../lib/uploadDocumentStatus";
 
 type AnalysisTab = "document" | "worktree";
 type DetailContentTab = "summary" | "original";
@@ -56,19 +57,22 @@ export default function DocumentAnalysisView({
   // 요약 정리 vs 원본 파일 보기 탭
   const [detailContentTab, setDetailContentTab] = useState<DetailContentTab>("summary");
 
-  const [isUploading, setIsUploading] = useState(false);
+  // 페이지를 벗어났다 돌아와도 "업로드 중" 상태가 끊기지 않도록 컴포넌트 로컬 state가
+  // 아니라 모듈 전역 상태로 관리한다 (lib/reanalyzeStatus.ts와 동일한 이유).
+  const uploadingWorkspaceIds = useUploadingDocumentWorkspaceIds();
+  const isUploading = uploadingWorkspaceIds.has(workspaceId);
 
   const handleFileChange = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
 
-    setIsUploading(true);
+    markUploadingDocument(workspaceId);
 
     try {
       await uploadDocument(fileList, selectedCategoryId ?? undefined);
     } catch (error) {
       console.error("파일 업로드 오류:", error);
     } finally {
-      setIsUploading(false);
+      markUploadDocumentDone(workspaceId);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }

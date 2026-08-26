@@ -24,6 +24,18 @@ from ..core.config import (
 # (너무 짧으면 목소리 특성보다 발음 내용에 휘둘림)
 _MIN_EMBED_SEC = 1.0
 
+# 미상끼리 같은 raw id로 묶을 최소 유사도(LiveSpeakerIdentifier.label_unassigned).
+#
+# 왜 이렇게 높은가 (2026-08-20 실측): 묶음 단위 판정 실험에서 같은 사람 유사도
+# (0.29~0.53)와 다른 사람 유사도(김나연↔이승주 0.588~0.632)가 겹쳐서, 문턱
+# 0.55로도 서로 다른 사람이 합쳐지는 참사가 났다(cpCER 평균 21.50%→65.68%).
+# 여기서는 그 실패를 반복하지 않기 위해 알려진 다른 사람 최고값(0.632)보다
+# 확실히 높게 잡는다 — 같은 사람을 여러 id로 쪼개는 게(안전, 프론트가 그냥
+# "화자 C"를 하나 더 보는 정도) 서로 다른 사람을 합치는 것(위험, 남의 발언이
+# 같은 사람으로 묶임)보다 낫다는 그날의 결론을 그대로 적용했다.
+# ⚠️ 실측 없이 정한 초안값이다 — 실제 회의로 확인 전까지는 이 값을 낮추지 말 것.
+_UNASSIGNED_MERGE_THRESHOLD = 0.75
+
 
 class SpeechBrainEmbedding:
     """speechbrain 화자 인코더를 pyannote Inference처럼 쓰게 감싼다.
@@ -163,6 +175,10 @@ class LiveSpeakerIdentifier:
         self._closed_set = bool(initial_profiles)
         self._max_speakers = max_speakers if max_speakers else MAX_SPEAKERS
         self._next_speaker_num = 1
+        # 닫힌 집합에서 등록자 누구와도 안 닮은(미상) 임베딩끼리 구분용 raw id를
+        # 매기는 보조 풀. 진짜 프로필(_profiles)과 완전히 분리 — label_unassigned() 참고.
+        self._unassigned_profiles: dict[str, np.ndarray] = {}
+        self._next_unassigned_num = 1
 
     @property
     def enrolled_names(self) -> list[str]:
@@ -224,6 +240,48 @@ class LiveSpeakerIdentifier:
         self._profiles[new_name] = self._profiles.pop(old_name)
         logger.info(f"✏️ 세션 화자 라벨 교체: {old_name} → {new_name}")
         return True
+
+    def label_unassigned(self, embedding: np.ndarray, update_profile: bool = True) -> str:
+        """
+        등록자 누구와도 안 닮은(미상) 임베딩에 구분용 raw id("SPEAKER_미상N")를 붙인다.
+
+        왜 (2026-08-21, 팀원 요청): 미상 세그먼트는 지금까지 전부 speaker=None으로
+        나가서, 프론트가 "같은 미상 화자가 여러 번 말했는지"조차 구분할 수 없었다.
+        진짜 프로필(_profiles)과 완전히 분리된 이 보조 풀에서만 구분자를 매긴다 —
+        신원 판정 로직(identify/match_closed_set)에는 손대지 않는다. 그 로직들은
+        turn 분할·병합처럼 이미 세밀하게 튜닝돼 있어(realtime_service.py 참고),
+        None의 의미를 바꾸면 그 로직들까지 연쇄적으로 영향을 받아 회귀 위험이 크다.
+        그래서 이 메서드는 **최종 세그먼트에 이름을 다 붙인 뒤, 후처리 단계에서만**
+        호출해서 쓴다(refine_service._refine 참고).
+
+        문턱(_UNASSIGNED_MERGE_THRESHOLD)을 높게 잡은 이유는 모듈 상단 주석 참고 —
+        다른 사람을 합치는 것보다 같은 사람을 여러 id로 쪼개는 게 안전하다는
+        2026-08-20 묶음 판정 실험의 결론을 그대로 적용했다.
+
+        update_profile=False 분기는 현재 유일한 호출부(assign_unassigned_ids)가
+        항상 True로만 부르기 때문에 지금은 도달하지 않는다(2026-08-26, 지수 리뷰).
+        identify()의 잠정(partial) 경로처럼 실시간 자막에도 이 raw id를 붙이게
+        될 때를 대비해 남겨뒀다 — 그 전까지는 죽은 코드가 맞다.
+        """
+        if self._unassigned_profiles:
+            best_label, best_score = max(
+                ((label, self._cosine_similarity(embedding, profile))
+                 for label, profile in self._unassigned_profiles.items()),
+                key=lambda kv: kv[1],
+            )
+            if best_score >= _UNASSIGNED_MERGE_THRESHOLD:
+                if update_profile:
+                    self._unassigned_profiles[best_label] = (
+                        0.9 * self._unassigned_profiles[best_label] + 0.1 * embedding
+                    )
+                return best_label
+        if not update_profile:
+            # 새 id를 확정하지 않는다(잠정 경로) — 다음 확정 호출이 실제로 만든다.
+            return f"SPEAKER_미상{self._next_unassigned_num}"
+        label = f"SPEAKER_미상{self._next_unassigned_num}"
+        self._next_unassigned_num += 1
+        self._unassigned_profiles[label] = embedding
+        return label
 
     def rank_profiles(self, embedding: np.ndarray) -> list[tuple[float, str]]:
         """등록 프로필을 유사도 내림차순으로. 1등뿐 아니라 2등까지 봐야 margin을 잴 수 있다."""

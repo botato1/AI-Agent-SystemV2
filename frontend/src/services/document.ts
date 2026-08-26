@@ -136,13 +136,6 @@ export interface GetDocumentFiguresResponse {
   error: string | null;
 }
 
-// image_url이 절대 URL(문서 처리 서버 origin)로 오는 경우와, 상대 경로로 오는 경우를 모두 지원
-export function resolveFigureUrl(imageUrl: string): string {
-  if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
-  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
-  return `${API_BASE_URL}${imageUrl}`;
-}
-
 // ----------------------------------------------------------------------
 // API 함수 목록
 // ----------------------------------------------------------------------
@@ -286,7 +279,6 @@ export async function uploadDocumentApi(
   workspaceId: string,
   file: File,
   roomId?: string,
-  documentType: "document" | "meeting" = "document",
   meetingId?: string,
   categoryId?: string
 ): Promise<UploadDocumentResponse> {
@@ -439,74 +431,6 @@ export async function getDocumentApi(
     return {
       status: "error",
       document: null,
-      message: "서버와 통신할 수 없습니다.",
-      error: "NETWORK_ERROR",
-    };
-  }
-}
-
-/**
- * 3-1. 문서 카테고리 변경 API (PATCH /api/workspaces/{workspace_id}/documents/{document_id})
- * - category_id만 수정 가능.
- */
-export async function updateDocumentCategoryApi(
-  workspaceId: string,
-  documentId: string,
-  categoryId: string
-): Promise<UpdateDocumentCategoryResponse> {
-  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
-  const token = localStorage.getItem("access_token");
-
-  if (!token) {
-    return {
-      status: "error",
-      document_id: null,
-      category_id: null,
-      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
-      error: "UNAUTHORIZED",
-    };
-  }
-
-  try {
-    const response = await authFetch(
-      `${API_BASE_URL}/api/workspaces/${workspaceId}/documents/${documentId}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category_id: categoryId }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || data.status === "error") {
-      let defaultMsg = "문서 카테고리 변경에 실패했습니다.";
-      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 수정할 수 있습니다.";
-      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 문서입니다.";
-
-      return {
-        status: "error",
-        document_id: null,
-        category_id: null,
-        message: data.message || defaultMsg,
-        error: data.error || `HTTP_${response.status}`,
-      };
-    }
-
-    return {
-      status: "success",
-      document_id: data.document_id,
-      category_id: data.category_id,
-      message: data.message || "카테고리가 변경되었습니다.",
-      error: null,
-    };
-  } catch (error) {
-    console.error("updateDocumentCategoryApi error:", error);
-    return {
-      status: "error",
-      document_id: null,
-      category_id: null,
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };

@@ -28,8 +28,6 @@ import {
 import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
 import { useNotifications } from "./useNotifications";
 
-const PENDING_STATUSES = new Set(["created", "recording", "paused", "processing"]);
-
 // 업로드된 회의(STT 요약/결정사항) 실제 백엔드 연동
 export function useRealMeetings(workspaceId: string, selectedCategoryId?: string | null) {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
@@ -72,52 +70,83 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     setSelectedMeetingId(null);
   }, [selectedCategoryId]);
 
-  // 아직 STT/후처리 중인 회의가 있으면 완료될 때까지 목록을 주기적으로 재조회
+  // 목록을 주기적으로 재조회 - 다른 팀원이 새로 시작한 회의는 내 로컬 목록에 아직 없어서
+  // "진행 중인 회의가 있을 때만" 폴링하는 조건으로는 절대 못 잡는다(새로고침해야만 보이던
+  // 원인). 그래서 이 페이지를 보고 있는 동안엔 로컬 목록 상태와 무관하게 항상 폴링한다.
   useEffect(() => {
-    const hasPending = meetings.some((m) => PENDING_STATUSES.has(m.status));
-    if (!hasPending) return;
+    if (!workspaceId) return;
     const timer = setInterval(loadMeetings, 5000);
     return () => clearInterval(timer);
-  }, [meetings, workspaceId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  async function loadDetail() {
+    if (!workspaceId || !selectedMeetingId) {
+      setSegments([]);
+      setSummary(null);
+      setDecisions([]);
+      setAttendees([]);
+      setSuggestedTasks([]);
+      setDocuments([]);
+      return;
+    }
+
+    setIsDetailLoading(true);
+    const [segRes, sumRes, decRes, attRes, suggestedRes, docRes] = await Promise.all([
+      getMeetingSegmentsApi(workspaceId, selectedMeetingId),
+      getMeetingSummaryApi(workspaceId, selectedMeetingId),
+      getMeetingDecisionsApi(workspaceId, selectedMeetingId),
+      getMeetingAttendeesApi(workspaceId, selectedMeetingId),
+      getSuggestedTasksApi(workspaceId, selectedMeetingId),
+      getMeetingDocumentsApi(workspaceId, selectedMeetingId),
+    ]);
+    setIsDetailLoading(false);
+
+    setSegments(segRes.status === "success" ? segRes.segments : []);
+    setSummary(sumRes.status === "success" ? sumRes.summary : null);
+    setDecisions(decRes.status === "success" ? decRes.decisions : []);
+    setAttendees(attRes.status === "success" ? attRes.attendees : []);
+    setSuggestedTasks(suggestedRes.status === "success" ? suggestedRes.tasks : []);
+    setDocuments(docRes.status === "success" ? docRes.documents : []);
+  }
 
   useEffect(() => {
-    async function loadDetail() {
-      if (!workspaceId || !selectedMeetingId) {
-        setSegments([]);
-        setSummary(null);
-        setDecisions([]);
-        setAttendees([]);
-        setSuggestedTasks([]);
-        setDocuments([]);
-        return;
-      }
+    loadDetail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, selectedMeetingId, selectedMeeting?.status]);
 
-      setIsDetailLoading(true);
-      const [segRes, sumRes, decRes, attRes, suggestedRes, docRes] = await Promise.all([
-        getMeetingSegmentsApi(workspaceId, selectedMeetingId),
-        getMeetingSummaryApi(workspaceId, selectedMeetingId),
-        getMeetingDecisionsApi(workspaceId, selectedMeetingId),
-        getMeetingAttendeesApi(workspaceId, selectedMeetingId),
-        getSuggestedTasksApi(workspaceId, selectedMeetingId),
-        getMeetingDocumentsApi(workspaceId, selectedMeetingId),
+  // 같은 회의를 다른 팀원과 같이 보고 있을 때 결정사항/참석자/첨부문서/추천 할 일이
+  // 새로고침 없이 반영되도록 백그라운드에서 조용히 재조회한다. segments/summary는
+  // 일부러 뺐다 - "전체 요약 수정"/"발화 일괄 수정" 중인 텍스트 draft가 prop이 바뀔 때마다
+  // useEffect로 덮어써지는 구조라(EditableFullSummary 등), 여기서 건드리면 입력 중인
+  // 내용이 통째로 날아간다.
+  useEffect(() => {
+    if (!workspaceId || !selectedMeetingId) return;
+
+    async function pollSecondaryDetail() {
+      const [decRes, attRes, suggestedRes, docRes] = await Promise.all([
+        getMeetingDecisionsApi(workspaceId, selectedMeetingId!),
+        getMeetingAttendeesApi(workspaceId, selectedMeetingId!),
+        getSuggestedTasksApi(workspaceId, selectedMeetingId!),
+        getMeetingDocumentsApi(workspaceId, selectedMeetingId!),
       ]);
-      setIsDetailLoading(false);
-
-      setSegments(segRes.status === "success" ? segRes.segments : []);
-      setSummary(sumRes.status === "success" ? sumRes.summary : null);
       setDecisions(decRes.status === "success" ? decRes.decisions : []);
       setAttendees(attRes.status === "success" ? attRes.attendees : []);
       setSuggestedTasks(suggestedRes.status === "success" ? suggestedRes.tasks : []);
       setDocuments(docRes.status === "success" ? docRes.documents : []);
     }
 
-    loadDetail();
-  }, [workspaceId, selectedMeetingId, selectedMeeting?.status]);
+    const timer = setInterval(pollSecondaryDetail, 8000);
+    return () => clearInterval(timer);
+  }, [workspaceId, selectedMeetingId]);
 
   // 정밀 재분석으로 요약이 갱신되면 서버가 ref_type="meeting", ref_id=meeting_id인
   // meeting_summary_ready 알림을 보낸다 - 지금 보고 있는 회의 것이면 요약을 다시 받아온다.
   const { notifications } = useNotifications(workspaceId);
   const handledSummaryNotificationIdsRef = useRef(new Set<string>());
+  // "재분석" 버튼을 누른 뒤 이 알림이 와야 실제로 끝난 걸 아는데, 훅 바깥(버튼이 있는
+  // 컴포넌트)에서도 그 시점을 알 수 있게 갱신될 때마다 타임스탬프를 노출해둔다.
+  const [summaryRefreshedAt, setSummaryRefreshedAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (!workspaceId || !selectedMeetingId) return;
@@ -135,6 +164,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
 
     getMeetingSummaryApi(workspaceId, selectedMeetingId).then((res) => {
       if (res.status === "success") setSummary(res.summary);
+      setSummaryRefreshedAt(Date.now());
     });
   }, [notifications, workspaceId, selectedMeetingId]);
 
@@ -359,6 +389,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     selectedMeeting,
     segments,
     summary,
+    summaryRefreshedAt,
     decisions,
     addDecision,
     updateDecision,
