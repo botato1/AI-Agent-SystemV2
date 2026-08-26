@@ -194,7 +194,7 @@ export default function AiChatView({
         </div>
 
         {/* 대화 내역 영역 */}
-        <div className="flex-1 overflow-y-auto space-y-4 px-2 py-2">
+        <div className="flex-1 overflow-y-auto space-y-3 px-2 py-2">
           {isLoadingMessages ? (
             <p className="text-sm text-recall-textMuted">{t.common_loading}</p>
           ) : messages.length === 0 ? (
@@ -220,23 +220,19 @@ export default function AiChatView({
                   }`}
                 >
                   {m.role === "assistant" ? (
-                    <div className="whitespace-pre-wrap px-1 py-1 text-sm leading-relaxed text-recall-text">
+                    <div className="whitespace-pre-wrap px-0.5 py-1 text-[15px] leading-relaxed text-recall-text">
                       {m.isPending ? <ThinkingDots /> : m.content}
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap rounded-2xl rounded-br-md bg-recall-accent px-4 py-3 text-sm leading-relaxed text-white shadow-sm">
+                    <div className="whitespace-pre-wrap rounded-2xl border border-recall-border bg-recall-bgSoft px-4 py-3 text-[15px] leading-relaxed text-recall-text shadow-sm">
                       {m.content}
                     </div>
                   )}
 
-                  {/* 근거자료 버튼 및 모델명 */}
-                  {m.role === "assistant" && !m.isPending && !m.errorText && (
+                  {/* 근거자료 보기 버튼 - 근거자료가 하나도 없는 답변은 버튼 자체를 숨긴다.
+                      sources는 대화 로드 시 메시지마다 미리 불러와둔다 (useAiChat 참고) */}
+                  {m.role === "assistant" && !m.isPending && !m.errorText && !!m.sources?.length && (
                     <div className="flex items-center gap-2 mt-0.5">
-                      {m.modelName && (
-                        <span className="text-[10px] text-recall-textMuted/70 uppercase">
-                          {m.modelName}
-                        </span>
-                      )}
                       <button
                         onClick={() => handleToggleSources(m.id)}
                         className="flex items-center gap-1 text-xs text-recall-textMuted hover:text-recall-accent transition"
