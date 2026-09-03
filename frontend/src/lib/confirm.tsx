@@ -58,7 +58,7 @@ export function ConfirmDialogContainer() {
         className="w-full max-w-sm rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-2xl text-recall-text"
         onClick={(e) => e.stopPropagation()}
       >
-        <p className="mb-4 text-sm leading-relaxed">{request.message}</p>
+        <p className="mb-4 whitespace-pre-wrap text-sm leading-relaxed">{request.message}</p>
         <div className="flex gap-2">
           <button
             onClick={() => settle(false)}

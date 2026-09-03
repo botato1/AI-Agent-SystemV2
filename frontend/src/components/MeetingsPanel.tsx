@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useRealMeetings } from "../hooks/useRealMeetings";
 import { useCategories } from "../hooks/useCategories";
-import { LiveMeetingStatus, LiveSegment, ContradictionAlert, ContradictionAlertAction, AudioQualityAlert } from "../hooks/useLiveMeeting";
+import { LiveMeetingStatus, LiveSegment, ContradictionAlert, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
 import { Meeting, MeetingStatus, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision } from "../services/meeting";
-import { ContradictionSeverity, ContradictionResolutionType } from "../services/contradiction";
+import { ContradictionSeverity } from "../services/contradiction";
 import {
   UploadIcon,
   TrashIcon,
@@ -16,7 +16,6 @@ import {
   StopIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  ChevronDownIcon,
   WarningIcon,
   AssistIcon,
   PencilIcon,
@@ -33,6 +32,7 @@ import ContradictionMessage from "./ContradictionMessage";
 import ContradictionEditForm from "./ContradictionEditForm";
 import ContradictionApplyForm from "./ContradictionApplyForm";
 import { showConfirm } from "../lib/confirm";
+import { buildApplyConfirmMessage, getContradictionPreviewContent } from "../lib/parseContradictionMessage";
 import ChangeSummaryModal from "./ChangeSummaryModal";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import MeetingAttendeesModal from "./MeetingAttendeesModal";
@@ -43,7 +43,9 @@ import MeetingAudioPlayer, { MeetingAudioPlayerHandle } from "./MeetingAudioPlay
 import Avatar from "./Avatar";
 import { hashAvatarColor } from "../data/avatarColors";
 import { getVoiceProfileListApi } from "../services/voice";
-import { getMeetingExportsApi, MeetingExportRecord, SplitSegmentParams } from "../services/meeting";
+import { getMeetingExportsApi, MeetingExportRecord, SplitSegmentParams, reanalyzeMeetingApi } from "../services/meeting";
+import { showToast } from "../lib/toast";
+import { markReanalyzing, markReanalyzeDone, useReanalyzingMeetingIds } from "../lib/reanalyzeStatus";
 import { getDocumentFileApi } from "../services/document";
 
 function severityBadge(severity: ContradictionSeverity, t: any) {
@@ -100,8 +102,22 @@ function formatTimeOnly(iso?: string | null): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+// "SPEAKER_00"(닫힌 집합 원시 라벨)과 "SPEAKER_미상1"(이름 매칭 실패 시 STT가 붙이는
+// 구분용 id) 둘 다 잡아야 한다 - 끝의 숫자만 캡처하고 그 사이 문구(미상 등)는 무시한다.
+const RAW_SPEAKER_LABEL_PATTERN = /^SPEAKER[_\s]?(?:[^\d]*)?(\d+)$/i;
+
 function isRawSpeakerLabel(label: string | null | undefined): label is string {
-  return !!label && /^SPEAKER[_\s]?\d+$/i.test(label.trim());
+  return !!label && RAW_SPEAKER_LABEL_PATTERN.test(label.trim());
+}
+
+// 디비게이션이 이름 매핑 전에 붙이는 "SPEAKER_00"/"SPEAKER_미상1" 같은 원시 라벨을
+// "화자 A" 식으로 보기 좋게 바꾼다.
+function formatSpeakerLabel(label: string, t: any): string {
+  const match = label.trim().match(RAW_SPEAKER_LABEL_PATTERN);
+  if (!match) return label;
+  const num = parseInt(match[1], 10);
+  const letter = String.fromCharCode(65 + (num % 26));
+  return `${t.speaker_label_prefix} ${letter}`;
 }
 
 function AssignSpeakerControl({
@@ -204,8 +220,12 @@ function SegmentRow({
   onBulkEditChange?: (value: string) => void;
   t: any;
 }) {
-  const name = speakerLabel || t.speaker_unknown;
   const isIdentified = !!speakerLabel && !isRawSpeakerLabel(speakerLabel);
+  const name = speakerLabel
+    ? isRawSpeakerLabel(speakerLabel)
+      ? formatSpeakerLabel(speakerLabel, t)
+      : speakerLabel
+    : t.speaker_unknown;
   const canAssign = !speakerLabel && !!segmentId && !!onAssignSpeaker;
   const canEditContent = !!segmentId && !!onEditContent;
   const canSplit = !!segmentId && !!onSplit;
@@ -469,7 +489,6 @@ interface MeetingsPanelProps {
   liveAudioQualityAlerts: AudioQualityAlert[];
   onClearAudioQualityAlert: (alertId: string) => void;
   agendaReminder: AgendaReminderPopup | null;
-  onClearAgendaReminder: () => void;
   liveError: string | null;
   joinableMeeting: Meeting | null;
   isViewer: boolean;
@@ -488,7 +507,6 @@ interface MeetingsPanelProps {
   onLeaveLive: () => void;
   onResetLive: () => void;
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
-  onEditLiveSegment: (segmentId: string, content: string) => Promise<boolean>;
   onRenameLive: (title: string) => void;
   // 홈 화면 "최근 회의록"에서 특정 회의를 클릭해서 들어왔을 때, 그 회의를 바로 선택해서 보여주기 위한 값 -
   // 소비하고 나면 상위(App)에서 null로 리셋해줘야 뒤로 갔다 다시 들어와도 강제로 재선택되지 않는다.
@@ -706,11 +724,9 @@ function EditableShortSummaryField({
 function EditableTitleField({
   title,
   onSave,
-  t,
 }: {
   title: string;
   onSave: (title: string) => void;
-  t: any;
 }) {
   const [draft, setDraft] = useState(title);
 
@@ -1111,7 +1127,7 @@ function UnmappedSpeakerChips({
   if (labels.length === 0) return null;
 
   function handleClick(label: string) {
-    const name = window.prompt(t.meeting_speaker_name_prompt(label), "");
+    const name = window.prompt(t.meeting_speaker_name_prompt(formatSpeakerLabel(label, t)), "");
     if (!name || !name.trim()) return;
     onAssign({ [label]: name.trim() });
   }
@@ -1125,7 +1141,7 @@ function UnmappedSpeakerChips({
           onClick={() => handleClick(label)}
           className="rounded-full border border-recall-border px-2 py-0.5 text-xs text-recall-textMuted hover:border-recall-accent hover:text-recall-accent"
         >
-          {label} +
+          {formatSpeakerLabel(label, t)} +
         </button>
       ))}
     </div>
@@ -1236,7 +1252,6 @@ export default function MeetingsPanel({
   liveAudioQualityAlerts,
   onClearAudioQualityAlert,
   agendaReminder,
-  onClearAgendaReminder,
   liveError,
   joinableMeeting,
   isViewer,
@@ -1248,7 +1263,6 @@ export default function MeetingsPanel({
   onLeaveLive,
   onResetLive,
   onMapLiveSpeakers,
-  onEditLiveSegment,
   onRenameLive,
   initialMeetingId,
   onInitialMeetingIdConsumed,
@@ -1267,6 +1281,7 @@ export default function MeetingsPanel({
     selectedMeeting: selectedRealMeeting,
     segments,
     summary,
+    summaryRefreshedAt,
     decisions,
     addDecision,
     updateDecision,
@@ -1361,7 +1376,6 @@ export default function MeetingsPanel({
     refresh: refreshContradictions,
     pendingSummaryFor,
     changeSummary,
-    isChangeSummaryLoading,
     closeChangeSummary,
   } = useContradictions(workspaceId);
 
@@ -1445,6 +1459,32 @@ export default function MeetingsPanel({
   const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string } | null>(null);
   const [showAttendeesModal, setShowAttendeesModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  // STT 재분석 요청 - 202 응답은 "접수됐다"는 뜻일 뿐이라, 실제로 끝날 때까지(몇 분 걸릴
+  // 수 있음) 버튼을 계속 도는 상태로 둔다. "진행 중" 여부는 다른 페이지로 이동했다 돌아와도
+  // 끊기지 않도록 컴포넌트 로컬 state가 아니라 모듈 전역 상태(reanalyzeStatus)로 관리한다 -
+  // 언마운트되면 로컬 state는 사라지지만, 실제 재분석은 서버에서 계속 진행 중이기 때문.
+  // 완료는 기존 meeting_summary_ready 알림 → summaryRefreshedAt 갱신으로 감지한다.
+  const reanalyzingIds = useReanalyzingMeetingIds();
+  const [justCompletedReanalysisId, setJustCompletedReanalysisId] = useState<string | null>(null);
+
+  async function handleReanalyze(meetingId: string) {
+    markReanalyzing(meetingId);
+    const res = await reanalyzeMeetingApi(workspaceId, meetingId);
+    if (res.status !== "success") {
+      markReanalyzeDone(meetingId);
+      showToast(res.message);
+    }
+    // 성공 시엔 여기서 끄지 않는다 - 실제 완료 알림이 올 때까지 계속 돈다.
+  }
+
+  useEffect(() => {
+    if (summaryRefreshedAt === null || !selectedMeetingId || !reanalyzingIds.has(selectedMeetingId)) return;
+    const finishedId = selectedMeetingId;
+    markReanalyzeDone(finishedId);
+    setJustCompletedReanalysisId(finishedId);
+    setTimeout(() => setJustCompletedReanalysisId((prev) => (prev === finishedId ? null : prev)), 4000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryRefreshedAt]);
   const [showStartModal, setShowStartModal] = useState(false);
   const [topTab, setTopTab] = useState<"meetings" | "exports">("meetings");
   const categoriesState = useCategories(workspaceId);
@@ -1518,22 +1558,17 @@ export default function MeetingsPanel({
     prevContradictionCountRef.current = contradictions.length;
   }, [contradictions.length]);
 
-  // 회의를 바꿔 볼 때마다 패널을 열지/접을지 다시 정한다 - 진행 중인 회의는 실시간 배너가
-  // 이미 알려주고 있으니 접어두고, 다 끝난 회의를 나중에 열어볼 땐 미해결 모순이나 안 읽은
-  // 리마인더가 있으면 처음부터 펼쳐서 놓치고 지나가지 않게 한다.
+  // 회의를 바꿔 볼 때마다 패널을 열어둔다 - 진행 중인 회의도 처음부터 펼쳐서 회의 도움을
+  // 바로 볼 수 있게 한다 (예전엔 진행 중인 회의는 접어뒀었는데, 실시간 배너만으론 놓치기
+  // 쉽다는 피드백으로 항상 펼치는 쪽으로 바꿨다).
   const autoDecidedMeetingIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selectedMeetingId || isContradictionsLoading) return;
     if (autoDecidedMeetingIdRef.current === selectedMeetingId) return;
     autoDecidedMeetingIdRef.current = selectedMeetingId;
 
-    if (isViewingLive) {
-      setIsContradictionListOpen(false);
-    } else {
-      const hasUnresolved = contradictions.length > 0 || meetingReminders.some((r) => !r.is_read);
-      setIsContradictionListOpen(hasUnresolved);
-    }
-  }, [selectedMeetingId, isViewingLive, isContradictionsLoading, contradictions.length, meetingReminders]);
+    setIsContradictionListOpen(true);
+  }, [selectedMeetingId, isContradictionsLoading]);
 
   useEffect(() => {
     if (isLiveActive && liveMeeting) {
@@ -1557,11 +1592,6 @@ export default function MeetingsPanel({
   function handleUpload(file: File, title: string) {
     uploadAudio(file, title);
     setShowUploadModal(false);
-  }
-
-  function defaultMeetingTitle(): string {
-    const d = new Date();
-    return t.meeting_default_title(d.getMonth() + 1, d.getDate());
   }
 
   // 지금 사이드바에서 특정 카테고리를 보고 있으면, 새로 시작하는 회의도 거기 소속으로 만든다
@@ -1943,6 +1973,21 @@ export default function MeetingsPanel({
                 </p>
               </div>
               <div className="flex flex-shrink-0 gap-1.5">
+                {selectedRealMeeting.status === "completed" && (
+                  <button
+                    onClick={() => handleReanalyze(selectedRealMeeting.id)}
+                    disabled={reanalyzingIds.has(selectedRealMeeting.id)}
+                    title={t.meeting_reanalyze_hint}
+                    className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-text hover:bg-white/5 transition disabled:opacity-50"
+                  >
+                    <RepeatIcon size={12} className={reanalyzingIds.has(selectedRealMeeting.id) ? "animate-spin" : ""} />
+                    {reanalyzingIds.has(selectedRealMeeting.id)
+                      ? t.meeting_reanalyze_in_progress
+                      : justCompletedReanalysisId === selectedRealMeeting.id
+                      ? t.meeting_reanalyze_done
+                      : t.meeting_reanalyze_btn}
+                  </button>
+                )}
                 <button
                   onClick={() => setShowAttendeesModal(true)}
                   className="flex items-center gap-1 rounded-lg border border-recall-border px-2.5 py-1.5 text-xs text-recall-text hover:bg-white/5 transition"
@@ -1968,7 +2013,24 @@ export default function MeetingsPanel({
               </div>
             )}
 
-            {selectedRealMeeting.status === "created" || selectedRealMeeting.status === "processing" ? (
+            {(selectedRealMeeting.status === "recording" || selectedRealMeeting.status === "paused") && !isViewingLive ? (
+              // 참석자가 아닌 사람이 목록에서 진행 중인 회의를 눌러 들어온 경우 - 여기서는
+              // segments/summary가 아직 없는 스냅샷이라 그대로 탭을 보여주면 텅 비어 보인다.
+              // 실시간으로 참가/보기로 바로 연결해준다 (선택 화면의 배너와 같은 동작).
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+                <p className="text-sm font-semibold text-recall-text">
+                  {selectedRealMeeting.recording_mode === "individual"
+                    ? t.meeting_joinable_notice(selectedRealMeeting.title)
+                    : t.meeting_viewable_notice(selectedRealMeeting.title)}
+                </p>
+                <button
+                  onClick={() => onJoinLive(selectedRealMeeting.id)}
+                  className="rounded-xl bg-recall-accent px-4 py-2 text-xs font-semibold text-white hover:opacity-90 transition"
+                >
+                  {selectedRealMeeting.recording_mode === "individual" ? t.meeting_join_btn : t.meeting_view_live_btn}
+                </button>
+              </div>
+            ) : selectedRealMeeting.status === "created" || selectedRealMeeting.status === "processing" ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl border border-recall-border bg-white/5">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-recall-border border-t-recall-accent" />
                 <p className="text-xs text-recall-textMuted">{t.meeting_processing}</p>
@@ -2133,7 +2195,6 @@ export default function MeetingsPanel({
                               <EditableTitleField
                                 title={selectedRealMeeting.title}
                                 onSave={(title) => renameMeeting(selectedRealMeeting.id, title)}
-                                t={t}
                               />
                             ) : (
                               <p className="text-sm font-bold text-recall-text">{selectedRealMeeting.title}</p>
@@ -2468,8 +2529,9 @@ export default function MeetingsPanel({
                         contradiction={c}
                         onCancel={() => setApplyingContradictionId(null)}
                         onApply={async ({ newDecisionText, newDecisionReason }) => {
+                          const { existingContent } = getContradictionPreviewContent(c);
                           const confirmed = await showConfirm(
-                            t.contradiction_apply_confirm,
+                            buildApplyConfirmMessage(t, existingContent, newDecisionText),
                             t.contradiction_apply,
                             t.task_cancel
                           );
@@ -2524,7 +2586,12 @@ export default function MeetingsPanel({
                                     setApplyingContradictionId(c.id);
                                     return;
                                   }
-                                  const ok = await showConfirm(t.contradiction_apply_confirm, t.contradiction_apply, t.task_cancel);
+                                  const { existingContent, newStatement } = getContradictionPreviewContent(c);
+                                  const ok = await showConfirm(
+                                    buildApplyConfirmMessage(t, existingContent, newStatement),
+                                    t.contradiction_apply,
+                                    t.task_cancel
+                                  );
                                   if (ok) resolve(c.id, "change_acknowledged");
                                 }}
                                 className="flex-1 rounded bg-recall-accent px-1.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
@@ -2569,7 +2636,6 @@ export default function MeetingsPanel({
         <ChangeSummaryModal
           contradiction={pendingSummaryFor}
           changeSummary={changeSummary}
-          isLoading={isChangeSummaryLoading}
           onClose={closeChangeSummary}
           t={t}
         />
@@ -2622,7 +2688,6 @@ export default function MeetingsPanel({
         <MeetingStartModal
           workspaceId={workspaceId}
           currentUserId={currentUserId}
-          defaultTitle={defaultMeetingTitle()}
           onClose={() => setShowStartModal(false)}
           categories={categoriesState.categories}
           suggestedCategoryId={categoriesState.suggestedCategoryId}

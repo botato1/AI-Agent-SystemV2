@@ -347,6 +347,15 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
 
+    // 회의 시작(버튼 클릭) → startMeetingApi → WS onopen을 거쳐 여기 도달하기까지 비동기
+    // 왕복이 여러 번 껴서, 브라우저 자동재생 정책상 AudioContext가 처음부터 suspended로
+    // 생성될 수 있다 - 이러면 에러 없이 조용히 오디오가 하나도 처리/전송되지 않는다.
+    // (OS/브라우저 마이크 권한 패널의 볼륨 미터는 이 컨텍스트와 무관하게 따로 동작하므로,
+    // 거기선 정상으로 보여도 실제로는 아무것도 안 보내지고 있을 수 있다.)
+    if (audioContext.state === "suspended") {
+      await audioContext.resume().catch(() => {});
+    }
+
     const workletBlob = new Blob([PCM_WORKLET_SOURCE], { type: "application/javascript" });
     const workletUrl = URL.createObjectURL(workletBlob);
     try {

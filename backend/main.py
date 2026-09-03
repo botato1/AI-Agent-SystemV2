@@ -12,7 +12,6 @@ from backend.routers.rag_router import router as rag_router
 from backend.routers.document_ws_router import router as document_ws_router
 from backend.routers.document_router import router as document_router
 from backend.routers.task_router import router as task_router
-from backend.routers.stt_router import router as stt_router
 from backend.routers.auth_router import router as auth_router
 from backend.routers.workspace_router import router as workspace_router
 from backend.routers.meeting_router import router as meeting_router, decisions_router as decisions_router
@@ -40,7 +39,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://192.168.0.23:5173", "http://61.81.98.82:3000","http://192.168.0.7:5173"],
+    allow_origins=["http://localhost:5173", "http://61.81.98.82:3000"],
+    allow_origin_regex=r"http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,7 +70,6 @@ app.include_router(rag_router)
 app.include_router(document_ws_router)
 app.include_router(document_router)
 app.include_router(task_router)
-app.include_router(stt_router)
 app.include_router(workspace_router)
 app.include_router(meeting_router)
 app.include_router(decisions_router)

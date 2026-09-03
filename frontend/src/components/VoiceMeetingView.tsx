@@ -15,7 +15,6 @@ interface VoiceMeetingViewProps {
   audioQualityAlerts: AudioQualityAlert[];
   onClearAudioQualityAlert: (alertId: string) => void;
   agendaReminder: AgendaReminderPopup | null;
-  onClearAgendaReminder: () => void;
   errorMessage: string | null;
   joinableMeeting: Meeting | null;
   isViewer: boolean;
@@ -34,7 +33,6 @@ interface VoiceMeetingViewProps {
   onLeave: () => void;
   onReset: () => void;
   onMapLiveSpeakers: (mapping: Record<string, string>) => void;
-  onEditLiveSegment: (segmentId: string, content: string) => Promise<boolean>;
   onRenameLive: (title: string) => void;
   initialMeetingId?: string | null;
   onInitialMeetingIdConsumed?: () => void;
@@ -59,7 +57,6 @@ export default function VoiceMeetingView({
   audioQualityAlerts,
   onClearAudioQualityAlert,
   agendaReminder,
-  onClearAgendaReminder,
   errorMessage,
   joinableMeeting,
   isViewer,
@@ -71,7 +68,6 @@ export default function VoiceMeetingView({
   onLeave,
   onReset,
   onMapLiveSpeakers,
-  onEditLiveSegment,
   onRenameLive,
   initialMeetingId,
   onInitialMeetingIdConsumed,
@@ -101,7 +97,6 @@ export default function VoiceMeetingView({
         liveAudioQualityAlerts={audioQualityAlerts}
         onClearAudioQualityAlert={onClearAudioQualityAlert}
         agendaReminder={agendaReminder}
-        onClearAgendaReminder={onClearAgendaReminder}
         liveError={errorMessage}
         joinableMeeting={joinableMeeting}
         isViewer={isViewer}
@@ -113,7 +108,6 @@ export default function VoiceMeetingView({
         onLeaveLive={onLeave}
         onResetLive={onReset}
         onMapLiveSpeakers={onMapLiveSpeakers}
-        onEditLiveSegment={onEditLiveSegment}
         onRenameLive={onRenameLive}
         initialMeetingId={initialMeetingId}
         onInitialMeetingIdConsumed={onInitialMeetingIdConsumed}

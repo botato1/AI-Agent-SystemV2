@@ -10,7 +10,6 @@ import CreateTaskModal from "./CreateTaskmodal";
 
 interface DashboardViewProps {
   workspaceId: string;
-  userName: string;
   tasks: Task[];
   onCreateTask: (task: Omit<Task, "id">) => void;
   onUpdateTask?: (updatedTask: Task) => void;
@@ -198,7 +197,6 @@ function DecisionsTab({
 
 export default function DashboardView({
   workspaceId,
-  userName,
   tasks,
   onCreateTask,
   onUpdateTask,

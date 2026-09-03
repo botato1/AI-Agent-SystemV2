@@ -496,3 +496,41 @@ def find_speaker_runs(
         start = boundary
     runs.append((start, len(audio), labels[-1]))
     return runs
+
+
+def assign_unassigned_ids(
+    segments: list[dict], audio: np.ndarray, sample_rate: int, inference,
+) -> None:
+    """
+    화자 미상(speaker=None)인 세그먼트에 구분용 raw id를 붙인다 (제자리 수정).
+
+    왜 (2026-08-21, 팀원 요청): 프론트가 "화자 A/B" 식으로 표시하려면 미상이어도
+    최소한의 구분자가 필요한데, 지금까지는 미상이면 전부 None이라 같은 미상 화자가
+    여러 번 말해도 구분이 안 됐다.
+
+    반드시 **모든 이름 배정·턴 분할이 끝난 뒤(최종 세그먼트 단계)**에만 부른다.
+    build_speaker_timeline이나 split_turns_by_timeline 내부에서 쓰면 안 된다 —
+    그 로직들의 "None=미상"이라는 전제가 곳곳에 배어 있어(예: 짧은 미상 구간은
+    이웃에 흡수, SPEAKER_UNKNOWN_AS_BOUNDARY 처리), None을 문자열로 바꾸면 그
+    로직들이 연쇄적으로 다르게 동작한다 — 세밀하게 튜닝된 부분이라 회귀 위험이 크다
+    (realtime_service.py, EXPERIMENTS.md 참고). 그래서 이 함수는 그 로직이 전부
+    끝난 뒤 "표시용 라벨"만 덧붙이는 순수 후처리로 분리했다.
+
+    LiveSpeakerIdentifier.label_unassigned()의 문턱(_UNASSIGNED_MERGE_THRESHOLD)이
+    보수적으로 높게 잡혀 있어, 다른 사람을 합치는 위험보다 같은 사람을 여러 id로
+    쪼개는 쪽을 택한다 — 2026-08-20 묶음 판정 실험의 결론 그대로.
+    """
+    from .speaker_id_service import LiveSpeakerIdentifier
+
+    pool = LiveSpeakerIdentifier(inference)  # 프로필 없음 — label_unassigned 전용
+    min_len = int(_MIN_WINDOW_SEC * sample_rate)
+
+    for seg in segments:
+        if seg.get("speaker") is not None:
+            continue
+        start = max(0, int(seg["start"] * sample_rate))
+        end = min(len(audio), int(seg["end"] * sample_rate))
+        if end - start < min_len:
+            continue  # 너무 짧으면 임베딩이 불안정 — None으로 남겨둔다(기존 동작 유지)
+        embedding = pool.extract_embedding(audio[start:end])
+        seg["speaker"] = pool.label_unassigned(embedding, update_profile=True)

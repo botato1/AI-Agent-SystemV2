@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import Sidebar, { PlaceholderKey } from "./components/Sidebar";
 import MainArea from "./components/MainArea";
 import VoiceMeetingView from "./components/VoiceMeetingView";
@@ -50,13 +50,6 @@ import {
   deleteRoomApi,
 } from "./services/room";
 
-interface RegisteredAccount {
-  username: string;
-  email?: string;
-  password: string;
-  user: User;
-}
-
 type Selection = { type: "channel"; channel: Channel } | { type: "placeholder"; key: PlaceholderKey };
 
 const PLACEHOLDER_LABELS: Record<
@@ -69,7 +62,6 @@ export default function App() {
   const t = translations[lang];
 
   // 로그인/회원가입 상태
-  const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
 
@@ -231,11 +223,13 @@ export default function App() {
     loadRealWorkspaces();
   }, [currentUser]);
 
-  // 2-1. 워크스페이스 선택/전환 또는 사이드바 카테고리 선택 시 실시간 채팅방(rooms) 목록 조회
+  // 2-1. 워크스페이스 선택/전환 또는 사이드바 카테고리 선택 시 실시간 채팅방(rooms) 목록 조회.
+  // 다른 팀원이 새로 만든 채팅방은 별도 실시간 채널이 없어서, 새로고침 없이 보이려면
+  // 백그라운드에서 주기적으로 조용히 재조회해야 한다 (알림벨/할 일 목록과 동일한 방식).
   useEffect(() => {
-    async function loadRooms() {
-      if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId) return;
 
+    async function loadRooms() {
       const res = await getRoomListApi(currentWorkspaceId, selectedCategoryId ?? undefined);
 
       if (res.status === "success") {
@@ -247,17 +241,21 @@ export default function App() {
     }
 
     loadRooms();
+    const timer = setInterval(loadRooms, 8000);
+    return () => clearInterval(timer);
   }, [currentWorkspaceId, selectedCategoryId]);
 
-  // 2-2. 워크스페이스 선택/전환 시 멤버 목록 조회 (채팅 메시지 발신자 이름 표시용)
+  // 2-2. 워크스페이스 선택/전환 시 멤버 목록 조회 (채팅 메시지 발신자 이름 표시용).
+  // 새로 초대된 팀원은 이 목록에 없으면 이름 대신 user_id가 그대로 노출되므로,
+  // 자주는 아니어도 백그라운드에서 주기적으로 재조회해 새로고침 없이 반영한다.
   useEffect(() => {
-    async function loadMembers() {
-      if (!currentWorkspaceId) {
-        setMemberNameById({});
-        setMemberAvatarById({});
-        return;
-      }
+    if (!currentWorkspaceId) {
+      setMemberNameById({});
+      setMemberAvatarById({});
+      return;
+    }
 
+    async function loadMembers() {
       const res = await getWorkspaceMembersApi(currentWorkspaceId);
 
       if (res.status === "success") {
@@ -276,6 +274,8 @@ export default function App() {
     }
 
     loadMembers();
+    const timer = setInterval(loadMembers, 30000);
+    return () => clearInterval(timer);
   }, [currentWorkspaceId]);
 
   // 💡 현재 선택된 워크스페이스 객체 추출
@@ -312,11 +312,6 @@ export default function App() {
   // 중에 다른 곳 갔다 돌아오면 질문/생성중 표시가 잠깐 안 보이던 게 이것 때문이었음.
   // 다른 화면 전환에도 안 없어지도록 여기(App)로 끌어올려서 항상 마운트 상태로 유지한다.
   const aiChat = useAiChat(currentWorkspaceId, selectedCategoryId);
-
-  // 회원가입
-  const handleSignUp = (account: RegisteredAccount) => {
-    setRegisteredAccounts((prev) => [...prev, account]);
-  };
 
   // 로그인
   const handleLogIn = (user: User) => {
@@ -554,8 +549,6 @@ export default function App() {
   if (!currentUser) {
     return (
       <AuthView
-        registeredAccounts={registeredAccounts}
-        onSignUp={handleSignUp}
         onLogIn={handleLogIn}
         inviteToken={inviteToken}
         t={t}
@@ -646,8 +639,6 @@ export default function App() {
           memberAvatarById={memberAvatarById}
           activeRecorderName={activeRecorderName}
           onOpenDecision={openDecision}
-          categories={categoriesState.categories}
-          selectedCategoryId={selectedCategoryId}
           t={t}
         />
       ) : selection.key === "home" ? (
@@ -692,7 +683,6 @@ export default function App() {
           audioQualityAlerts={liveMeeting.audioQualityAlerts}
           onClearAudioQualityAlert={liveMeeting.clearAudioQualityAlert}
           agendaReminder={liveMeeting.agendaReminder}
-          onClearAgendaReminder={liveMeeting.clearAgendaReminder}
           errorMessage={liveMeeting.errorMessage}
           joinableMeeting={liveMeeting.joinableMeeting}
           isViewer={liveMeeting.isViewer}
@@ -704,7 +694,6 @@ export default function App() {
           onLeave={liveMeeting.leave}
           onReset={liveMeeting.reset}
           onMapLiveSpeakers={liveMeeting.mapSpeakerNames}
-          onEditLiveSegment={liveMeeting.editSegmentContent}
           onRenameLive={liveMeeting.renameMeeting}
           initialMeetingId={pendingMeetingId}
           onInitialMeetingIdConsumed={() => setPendingMeetingId(null)}
@@ -718,7 +707,6 @@ export default function App() {
       ) : selection.key === "dashboard" ? (
         <DashboardView
           workspaceId={currentWorkspaceId}
-          userName={currentUser.name}
           tasks={realTasks.tasks}
           onCreateTask={realTasks.createTask}
           onUpdateTask={realTasks.updateTask}

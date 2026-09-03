@@ -14,7 +14,6 @@ export {
   MoreHorizontal as MoreIcon,
   Pencil as PencilIcon,
   Trash2 as TrashIcon,
-  Star as StarIcon,
   ChevronDown as ChevronDownIcon,
   ChevronUp as ChevronUpIcon,
   ChevronRight as ChevronRightIcon,
@@ -28,9 +27,6 @@ export {
   AlertTriangle as WarningIcon,
   HandHelping as AssistIcon,
   CheckCircle2 as CheckIcon,
-  ArrowUp as PriorityHighIcon,
-  Minus as PriorityMediumIcon,
-  ArrowDown as PriorityLowIcon,
   ChevronLeft as ChevronLeftIcon,
   User as PersonIcon,
   Link as LinkIcon,
@@ -44,4 +40,5 @@ export {
   Headphones as HeadphoneIcon,
   Scissors as SplitIcon,
   GripVertical as GripIcon,
+  Lightbulb as InsightIcon,
 } from "lucide-react";

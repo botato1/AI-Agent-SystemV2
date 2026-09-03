@@ -166,68 +166,6 @@ export async function getContradictionListApi(
 }
 
 /**
- * 2. 모순 단건 조회 API (GET /api/workspaces/{workspace_id}/contradictions/{contradiction_id})
- */
-export async function getContradictionApi(
-  workspaceId: string,
-  contradictionId: string
-): Promise<GetContradictionResponse> {
-  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
-  const token = localStorage.getItem("access_token");
-
-  if (!token) {
-    return {
-      status: "error",
-      contradiction: null,
-      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
-      error: "UNAUTHORIZED",
-    };
-  }
-
-  try {
-    const response = await authFetch(
-      `${API_BASE_URL}/api/workspaces/${workspaceId}/contradictions/${contradictionId}`,
-      { method: "GET" }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || data.status === "error") {
-      let defaultMsg = "모순 정보를 불러오지 못했습니다.";
-      if (response.status === 401) {
-        defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
-      } else if (response.status === 403) {
-        defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
-      } else if (response.status === 404) {
-        defaultMsg = "존재하지 않는 워크스페이스이거나 모순입니다.";
-      }
-
-      return {
-        status: "error",
-        contradiction: null,
-        message: data.message || defaultMsg,
-        error: data.error || `HTTP_${response.status}`,
-      };
-    }
-
-    return {
-      status: "success",
-      contradiction: data.contradiction || data,
-      message: data.message || "성공",
-      error: null,
-    };
-  } catch (error) {
-    console.error("getContradictionApi error:", error);
-    return {
-      status: "error",
-      contradiction: null,
-      message: "서버와 통신할 수 없습니다.",
-      error: "NETWORK_ERROR",
-    };
-  }
-}
-
-/**
  * 3. 모순 해결 API (POST /api/workspaces/{workspace_id}/contradictions/{contradiction_id}/resolve)
  *
  * 주의: 실제 응답은 갱신된 모순 객체 하나뿐이다 (resolution/change_summary_draft_id 없음).

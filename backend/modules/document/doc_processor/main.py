@@ -5,9 +5,7 @@ from pathlib import Path
 
 from doc_processor.core.pipeline import DocumentPipeline
 from doc_processor.output.assembler import assemble
-from doc_processor.output.json_builder import save_json
 from doc_processor.output.rag_exporter import save_rag
-from doc_processor.output.txt_exporter import save_txt
 
 
 def parse_args() -> argparse.Namespace:
