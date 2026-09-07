@@ -19,7 +19,7 @@ pip install --upgrade pip
 # deepfilternet은 torch를 의존성으로 선언하지 않는다(설치 후 import 시점에
 # ModuleNotFoundError로 드러남). 오디오 한 건 향상시키는 데 GPU 속도가 꼭
 # 필요하진 않으므로 가볍고 빠른 CPU 휠을 쓴다.
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # 여기서 numpy가 어떻게 바뀌는지는 이 venv 안에서만 유효하다 — 공유 venv엔
 # 영향 없음. 그래도 무슨 일이 벌어지는지 보고 싶으면 --dry-run으로 먼저 확인.
