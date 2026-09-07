@@ -714,37 +714,59 @@ class DocumentPipeline:
                 task["content"] = page_content_map.get(task["page_no"], task["content"])
                 self._ocr_stats.attempt_count += 1
                 raw = engine.run(task["image"], fig_type=task["fig_type"])
-                if not raw.strip():
-                    print(f"    [VL-{source_name}] 결과 없음 (page={task['page_no']})")
+                has_text = bool(raw.strip())
+                if not has_text:
+                    # VL 파싱 실패(GPU 미지원 등)해도 원본 이미지/캡션은 보존한다 —
+                    # 통째로 버리면 사용자가 원본 차트/표조차 못 보게 됨.
+                    print(f"    [VL-{source_name}] 결과 없음 (page={task['page_no']}) — 이미지만 보존")
                     self._ocr_stats.empty_count += 1
-                    continue
-                self._ocr_stats.table_tsr_count += 1
-                self._ocr_stats.useful_count += 1
-                self._ocr_stats.accumulate_quality_score(1.0)
+                else:
+                    self._ocr_stats.table_tsr_count += 1
+                    self._ocr_stats.useful_count += 1
+                    self._ocr_stats.accumulate_quality_score(1.0)
+                    self._ocr_stats.success_count += 1
                 result: dict = {
                     "text":          raw,
-                    "confidence":    1.0,
-                    "quality_score": 1.0,
+                    "confidence":    1.0 if has_text else 0.0,
+                    "quality_score": 1.0 if has_text else 0.0,
                     "sources":       [source_name],
                     "paddle_lines":  [],
                     "surya_lines":   [],
                     "vl_fig_type":   task["fig_type"],
                 }
-                self._ocr_stats.success_count += 1
                 self._append_ocr_result(
                     task["content"], result, task["bbox"], task["page_no"], cropped_image=task["image"]
                 )
 
-        # ── Pass 1: PaddleOCR-VL-1.6 (표) ─────────────────────────────────
+        # ── Pass 1: 표 — GPU(PaddleOCR-VL-1.6) 우선, 실패 시 CPU(PP-StructureV3) 대체,
+        #    그마저 실패하면 "이미지만 보존" (파이프라인이 죽지 않도록 최종 방어) ──
         if table_tasks:
-            print(f"\n[VL] Paddle-VL 로드 → 표 {len(table_tasks)}건 처리")
-            paddle_engine = PaddleVL16Engine()
-            _process_tasks(paddle_engine, table_tasks, "paddle-vl-1.6")
+            print(f"\n[VL] 표 {len(table_tasks)}건 처리")
+            engine_name = "paddle-vl-1.6"
+            try:
+                paddle_engine = PaddleVL16Engine()
+            except Exception as e:
+                print(f"[VL] PaddleOCR-VL-1.6 로드 실패 ({e}) — CPU 대체(PP-StructureV3)로 전환")
+                try:
+                    from doc_processor.ocr.paddle_structure_engine import PaddleStructureEngine
+                    paddle_engine = PaddleStructureEngine()
+                    engine_name = "pp-structure-v3"
+                except Exception as e2:
+                    print(f"[VL] PP-StructureV3도 로드 실패 ({e2}) — 표 이미지만 보존")
+
+                    class _NullEngine:
+                        def run(self, image, fig_type: str = "table_image") -> str:
+                            return ""
+
+                    paddle_engine = _NullEngine()
+                    engine_name = "table-image-only"
+            _process_tasks(paddle_engine, table_tasks, engine_name)
             del paddle_engine
-            _unload_paddle_vl()
+            if engine_name == "paddle-vl-1.6":
+                _unload_paddle_vl()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            print("[VL] Paddle-VL 언로드 완료")
+            print("[VL] 표 처리 완료")
 
         # ── Pass 2: Qwen3-VL-8B (차트 + 다이어그램/인포그래픽) ───────────────
         if chart_tasks or diagram_tasks:
