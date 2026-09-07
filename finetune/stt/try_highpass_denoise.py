@@ -31,7 +31,12 @@ from stt.core.config import MEETINGS_DIR  # noqa: E402
 
 
 def sh(cmd: str) -> str:
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  ⚠️ 명령 실패(exit {r.returncode}): {cmd}", file=sys.stderr)
+        if r.stderr:
+            print(r.stderr, file=sys.stderr)
+    return r.stdout
 
 
 def highpass(wav_path: str, out_path: str, cutoff_hz: float) -> None:
@@ -100,9 +105,11 @@ def main():
     ap.add_argument("--cutoffs", nargs="+", type=float, default=[150, 200, 250])
     args = ap.parse_args()
 
+    script_abs = os.path.abspath(args.script)
+
     print(f"기준(원본) cpCER:")
-    print(sh(f"cd {_REPO_ROOT} && python finetune/stt/meeteval_score.py "
-             f"--meetings {args.meeting}:{args.script}"))
+    print(sh(f"cd {_HERE} && python meeteval_score.py "
+             f"--meetings {args.meeting}:{script_abs}"))
 
     test_ids = []
     for cutoff in args.cutoffs:
@@ -114,8 +121,8 @@ def main():
         time.sleep(2)
 
     print("\n\n==================== 결과 ====================")
-    pairs = " ".join(f"{tid}:{args.script}" for _, tid in test_ids)
-    print(sh(f"cd {_REPO_ROOT} && python finetune/stt/meeteval_score.py --meetings {pairs}"))
+    pairs = " ".join(f"{tid}:{script_abs}" for _, tid in test_ids)
+    print(sh(f"cd {_HERE} && python meeteval_score.py --meetings {pairs}"))
 
     print("정리하려면: rm -rf " + " ".join(
         os.path.join(MEETINGS_DIR, tid) for _, tid in test_ids))
