@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createAiChatSessionApi,
   getAiChatSessionsApi,
@@ -35,7 +35,17 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
 
-  // 대화 목록 불러오기 - 최근 활동순으로 내려오므로 첫 번째를 기본 선택
+  // sendMessage처럼 await 너머에서 "지금도 그 세션을 보고 있는지" 확인해야 하는
+  // 곳에서 쓰는, 항상 최신값을 가리키는 ref (state는 클로저에 캡처된 시점 값이라 못 씀).
+  const activeSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  // 대화 목록 불러오기 - 최근 활동순으로 내려오므로 첫 번째를 기본 선택.
+  // 단, 이미 선택된 대화가 목록에 여전히 존재하면 그 선택을 유지한다 - 그렇지 않으면
+  // 메시지 전송 후 제목/정렬을 갱신하려고 부르는 것뿐인데 사용자가 보고 있던 대화가
+  // 매번 목록 맨 앞으로 강제로 튕겨나가 버린다.
   async function loadSessions() {
     if (!workspaceId) return;
 
@@ -47,7 +57,9 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
 
     if (res.status === "success") {
       setSessions(res.sessions);
-      setActiveSessionId(res.sessions[0]?.id ?? null);
+      setActiveSessionId((prev) =>
+        prev && res.sessions.some((s) => s.id === prev) ? prev : res.sessions[0]?.id ?? null
+      );
     }
   }
 
@@ -66,6 +78,10 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
 
   // 선택된 대화가 바뀌면 그 대화의 메시지 기록을 불러옴
   useEffect(() => {
+    // 요청을 보낸 뒤 activeSessionId가 다시 바뀌면(빠른 세션 전환) 늦게 도착한
+    // 이전 세션의 응답이 지금 보고 있는 세션의 메시지 목록을 덮어쓰지 않도록 막는다.
+    let cancelled = false;
+
     async function loadMessages() {
       if (!workspaceId || !activeSessionId) {
         setMessages([]);
@@ -74,6 +90,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
 
       setIsLoadingMessages(true);
       const res = await getAiChatMessagesApi(workspaceId, activeSessionId);
+      if (cancelled) return;
       setIsLoadingMessages(false);
 
       if (res.status === "success") {
@@ -95,6 +112,9 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     }
 
     loadMessages();
+    return () => {
+      cancelled = true;
+    };
   }, [workspaceId, activeSessionId]);
 
   function selectSession(sessionId: string) {
@@ -170,27 +190,37 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     const res = await sendAiChatMessageApi(workspaceId, sessionId, trimmed);
     setIsSending(false);
 
+    // 응답을 기다리는 동안 사용자가 다른 대화로 옮겨갔다면, 지금 화면에 떠 있는
+    // messages 배열은 이 요청과 무관한 대화의 것이다 - 거기에 답변을 끼워넣으면
+    // (assistantTempId를 못 찾아 조용히 무시되거나, 최악의 경우 엉뚱한 대화에 답이
+    // 나타나는) 버그가 생긴다. 답변 자체는 이미 서버에 저장돼 있으니, 그 대화로
+    // 돌아왔을 때 loadMessages가 다시 불러와 보여준다.
+    const stillOnSameSession = activeSessionIdRef.current === sessionId;
+
     if (res.status === "success" && res.assistantMessage) {
       const assistant = res.assistantMessage;
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantTempId
-            ? {
-                id: assistant.id,
-                role: assistant.role,
-                content: assistant.content,
-                modelName: assistant.model_name,
-                isPending: false,
-              }
-            : m
-        )
-      );
-      fetchSources(assistant.id);
+      if (stillOnSameSession) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantTempId
+              ? {
+                  id: assistant.id,
+                  role: assistant.role,
+                  content: assistant.content,
+                  modelName: assistant.model_name,
+                  isPending: false,
+                }
+              : m
+          )
+        );
+        fetchSources(assistant.id);
+      }
 
-      // 첫 질문으로 대화 제목이 자동 생성되므로, 목록도 다시 불러와 제목/정렬을 맞춘다
+      // 첫 질문으로 대화 제목이 자동 생성되므로, 목록도 다시 불러와 제목/정렬을 맞춘다.
+      // loadSessions는 이제 이미 선택된 대화를 강제로 바꾸지 않으므로 안전하다.
       loadSessions();
-    } else {
+    } else if (stillOnSameSession) {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantTempId
