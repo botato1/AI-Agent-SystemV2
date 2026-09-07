@@ -58,7 +58,10 @@ def make_test_meeting(base_meeting: str, cutoff_hz: float) -> str:
     base_dir = os.path.join(MEETINGS_DIR, base_meeting)
     if os.path.isdir(test_dir):
         shutil.rmtree(test_dir)
-    shutil.copytree(base_dir, test_dir)
+    # copy2(기본값)는 다른 사용자 소유 파일의 메타데이터까지 복사하려다 NAS에서
+    # PermissionError로 죽는다(prepare_refine_rerun.py의 backup()과 같은 함정).
+    # 내용만 있으면 되므로 copyfile로 강제한다.
+    shutil.copytree(base_dir, test_dir, copy_function=shutil.copyfile)
     for stray in ("profiles.npz.bak", "transcript.json.bak"):
         p = os.path.join(test_dir, stray)
         if os.path.isfile(p):
