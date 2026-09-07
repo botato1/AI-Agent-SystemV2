@@ -60,6 +60,23 @@ def analyze(path: str) -> None:
           f"고역(3400-8000Hz): {high:.1f} dB")
     print(f"저역-음성대역 차:      {low - speech:+.1f} dB  (0에 가까우면 저역 소음이 심함)")
 
+    # 무음(가장 조용한 프레임) 구간만 모아서 소음 자체의 주파수 특성을 본다.
+    # 협대역 피크(예: 60Hz 전원 험)면 특정 주파수가 튀고,
+    # 광대역(에어컨/팬)이면 넓게 퍼져서 뚜렷한 피크가 없다.
+    quiet_thresh = np.percentile(rms_db, 20)
+    quiet_frame_idx = np.where(rms_db <= quiet_thresh)[0]
+    if len(quiet_frame_idx) > 0:
+        quiet_power = power[:, np.clip(quiet_frame_idx, 0, power.shape[1] - 1)].mean(axis=1)
+        low_mask = (f >= 20) & (f < 500)
+        low_f = f[low_mask]
+        low_p_db = 10 * np.log10(quiet_power[low_mask] + 1e-12)
+        top5 = np.argsort(low_p_db)[-5:][::-1]
+        peaks = ", ".join(f"{low_f[i]:.0f}Hz({low_p_db[i]:.1f}dB)" for i in top5)
+        spread = low_p_db.max() - low_p_db.min()
+        print(f"무음구간 20-500Hz 상위 피크: {peaks}")
+        print(f"무음구간 20-500Hz 최대-최소 편차: {spread:.1f} dB "
+              f"(크면=특정 주파수가 튐→협대역 험, 작으면=광대역 소음)")
+
 
 if __name__ == "__main__":
     for p in sys.argv[1:]:
