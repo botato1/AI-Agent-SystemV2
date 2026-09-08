@@ -42,6 +42,23 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
+  // deleteSession에서 "삭제 후 남을 목록"을 계산할 때, 이벤트 핸들러 호출 시점의
+  // sessions state가 아니라 항상 최신 목록을 참조하기 위한 ref.
+  const sessionsRef = useRef<AIChatSession[]>([]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  // messages/sessions를 로컬에서 직접 바꾸는 곳(전송 중 낙관적 업데이트, 세션 생성/삭제 등)이
+  // 실행될 때마다 증가시키는 "세대" 카운터. loadMessages/loadSessions는 네트워크 응답이
+  // 돌아왔을 때 자신이 기록해둔 세대와 지금 세대가 같을 때만 결과를 반영한다 - 그래야
+  // 늦게 도착한 예전 응답이 그 사이에 사용자가 방금 만든/바꾼 더 최신 상태를 덮어쓰지 않는다.
+  // (예: 새 세션 생성 직후 그 세션의 메시지 목록 GET이 아직 진행 중인데, 첫 메시지를
+  //  낙관적으로 화면에 추가하면 - 그 GET이 나중에 "비어있음" 응답으로 돌아와 방금 추가한
+  //  메시지를 지워버리던 문제.)
+  const messagesOpIdRef = useRef(0);
+  const sessionsOpIdRef = useRef(0);
+
   // 대화 목록 불러오기 - 최근 활동순으로 내려오므로 첫 번째를 기본 선택.
   // 단, 이미 선택된 대화가 목록에 여전히 존재하면 그 선택을 유지한다 - 그렇지 않으면
   // 메시지 전송 후 제목/정렬을 갱신하려고 부르는 것뿐인데 사용자가 보고 있던 대화가
@@ -49,13 +66,14 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
   async function loadSessions() {
     if (!workspaceId) return;
 
+    const opId = ++sessionsOpIdRef.current;
     setIsLoadingSessions(true);
     const res = roomId
       ? await getRoomAiChatSessionsApi(workspaceId, roomId)
       : await getAiChatSessionsApi(workspaceId);
     setIsLoadingSessions(false);
 
-    if (res.status === "success") {
+    if (res.status === "success" && opId === sessionsOpIdRef.current) {
       setSessions(res.sessions);
       setActiveSessionId((prev) =>
         prev && res.sessions.some((s) => s.id === prev) ? prev : res.sessions[0]?.id ?? null
@@ -84,16 +102,18 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
 
     async function loadMessages() {
       if (!workspaceId || !activeSessionId) {
+        messagesOpIdRef.current++;
         setMessages([]);
         return;
       }
 
+      const opId = ++messagesOpIdRef.current;
       setIsLoadingMessages(true);
       const res = await getAiChatMessagesApi(workspaceId, activeSessionId);
       if (cancelled) return;
       setIsLoadingMessages(false);
 
-      if (res.status === "success") {
+      if (res.status === "success" && opId === messagesOpIdRef.current) {
         setMessages(
           res.messages.map((m) => ({
             id: m.id,
@@ -129,8 +149,10 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
       : await createAiChatSessionApi(workspaceId, categoryId);
     if (res.status === "success" && res.session) {
       const session = res.session;
+      sessionsOpIdRef.current++;
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
+      messagesOpIdRef.current++;
       setMessages([]);
       return session.id;
     }
@@ -159,9 +181,14 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
       return;
     }
 
-    const remaining = sessions.filter((s) => s.id !== sessionId);
+    // 삭제 직전에 이미 날아가 있던 loadSessions() 요청(예: 방금 전 메시지 전송 후
+    // 제목/정렬 갱신용으로 fire-and-forget 호출된 것)이 이 삭제보다 늦게 응답으로
+    // 돌아오면, 삭제되기 전의 목록으로 되돌려버려 "삭제했는데 다시 나타나는" 현상이
+    // 생긴다 - 세대를 올려서 그 늦은 응답을 무시하게 만든다.
+    sessionsOpIdRef.current++;
+    const remaining = sessionsRef.current.filter((s) => s.id !== sessionId);
     setSessions(remaining);
-    if (activeSessionId === sessionId) {
+    if (activeSessionIdRef.current === sessionId) {
       setActiveSessionId(remaining[0]?.id ?? null);
     }
   }
@@ -180,6 +207,12 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     const userTempId = crypto.randomUUID();
     const assistantTempId = crypto.randomUUID();
 
+    // 방금 새로 만든 세션이면, createSession()이 activeSessionId를 바꾼 순간 그 세션의
+    // (아직 비어있는) 메시지 목록을 불러오는 GET이 백그라운드에서 이미 시작됐을 수 있다.
+    // 그 GET이 지금 추가하는 첫 메시지보다 늦게 "비어있음"으로 응답하면 방금 추가한
+    // 메시지를 지워버리므로("첫 대화가 안 보이고 다음 대화부터 나옴" 버그의 원인),
+    // 세대를 올려 그 늦은 응답이 무시되게 한다.
+    messagesOpIdRef.current++;
     setMessages((prev) => [
       ...prev,
       { id: userTempId, role: "user", content: trimmed },
@@ -201,6 +234,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
       const assistant = res.assistantMessage;
 
       if (stillOnSameSession) {
+        messagesOpIdRef.current++;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantTempId
@@ -221,6 +255,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
       // loadSessions는 이제 이미 선택된 대화를 강제로 바꾸지 않으므로 안전하다.
       loadSessions();
     } else if (stillOnSameSession) {
+      messagesOpIdRef.current++;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantTempId
