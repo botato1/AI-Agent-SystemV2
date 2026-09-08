@@ -167,6 +167,15 @@ def main():
         print(f"  cpCER {a['cp']:.2f}%  미상 {a['missed']}  오배정 {a['wrong']}  "
               f"| 명단 밖 오수락 {named}/{total}")
 
+    # B조건(홀드아웃 제외)이 매 floor의 마지막 refine_with라서, 루프가 끝나면
+    # profiles.npz가 홀드아웃 제외 상태로 남는다 — 복원 안 하면 이후 이 회의로
+    # 뭘 재든 홀드아웃 인물이 영구히 명단 밖 취급된다(2026-09-08 실측 오류로 발견:
+    # 이 복원이 없어서 8b5f84b7/ded1105f/ba8f38c4 전부 다음날 오염된 프로필로
+    # 시험이 진행됐었다). 전원 후보로 되돌려놓는다.
+    if rows:
+        print("\n정리: profiles.npz를 전원 후보로 복원 중...")
+        refine_with(args.meeting, args.names)
+
     print(f"\n{'=' * 78}")
     print(f"{'하한':>6s}{'cpCER':>9s}{'화자대가':>9s}{'미상':>6s}{'오배정':>7s}{'명단밖 오수락':>14s}")
     print("-" * 78)
