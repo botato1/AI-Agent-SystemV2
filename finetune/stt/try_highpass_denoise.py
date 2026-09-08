@@ -3,6 +3,13 @@
 cpCER이 실제로 좋아지는지 확인한다. 새 라이브러리 설치 없이 scipy만 쓴다
 (DeepFilterNet/pyrnnoise는 설치 단계에서 막혔었다 — IDEAS.md #8 참고).
 
+**2026-09-08 정정**: 첫 버전은 audio.wav 자체를 필터링해서 화자분리까지
+다시 돌게 했는데, 그때 나온 "화자 붕괴" 결과는 profiles.npz 미복원 버그 +
+하한 혼동으로 오염된 측정이었다(IDEAS.md #8 참고). 이번엔 `try_hybrid_denoise.py`
+와 같은 방식 — 원본 audio.wav는 화자분리용으로 그대로 두고, 필터링된 버전을
+`audio_highpass{N}.wav`로 추가해 `refine_service.py`의 `transcribe_audio_file`
+훅으로 전사에만 쓴다.
+
 절대 원본 회의 폴더를 건드리지 않는다 — 복사본을 새 회의ID로 만들어 그 안에서만
 필터링·재분석한다.
 
@@ -76,8 +83,10 @@ def make_test_meeting(base_meeting: str, cutoff_hz: float) -> str:
         if os.path.isfile(p):
             os.remove(p)
 
-    audio_path = os.path.join(test_dir, "audio.wav")
-    highpass(audio_path, audio_path, cutoff_hz)
+    audio_path = os.path.join(test_dir, "audio.wav")          # 화자분리용 — 원본 그대로
+    filtered_name = f"audio_highpass{int(cutoff_hz)}.wav"
+    filtered_path = os.path.join(test_dir, filtered_name)     # 전사용 — 필터링본
+    highpass(audio_path, filtered_path, cutoff_hz)
 
     meta_path = os.path.join(test_dir, "transcript.json")
     with open(meta_path, encoding="utf-8") as f:
@@ -88,6 +97,7 @@ def make_test_meeting(base_meeting: str, cutoff_hz: float) -> str:
         meta.pop("realtime_segments", None)
     meta.pop("refined", None)
     meta.pop("refined_at", None)
+    meta["transcribe_audio_file"] = filtered_name
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
