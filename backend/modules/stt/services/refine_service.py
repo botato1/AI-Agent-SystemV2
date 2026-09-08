@@ -385,6 +385,21 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
         logger.info(f"↩️ [{meeting_id}] 오디오가 너무 짧아 재분석 생략 ({duration_sec:.1f}s)")
         return meta
 
+    # 실험용 훅: 화자분리·타임라인은 원본 오디오로, 전사만 별도 오디오(예: 잡음 제거된
+    # 버전)로 하고 싶을 때 transcript.json에 이 필드를 넣으면 된다. 실제 회의는 이
+    # 필드가 없으므로 운영 경로는 지금과 동일하다(transcribe_audio가 audio와 같은 값).
+    # 잡음 제거를 회의 오디오 전체에 걸고 화자분리까지 다시 돌리면 화자가 쪼개져
+    # 붕괴하는 문제를 우회하려는 시도 — NEXT.md 7번/IDEAS.md #8 참고.
+    transcribe_audio_file = meta.get("transcribe_audio_file")
+    if transcribe_audio_file:
+        transcribe_audio, _ = sf.read(
+            os.path.join(meeting_dir, transcribe_audio_file), dtype="float32",
+        )
+        if transcribe_audio.ndim > 1:
+            transcribe_audio = transcribe_audio.mean(axis=1)
+    else:
+        transcribe_audio = audio
+
     logger.info(f"🔬 [{meeting_id}] 정밀 재분석 시작 (오디오 {duration_sec:.0f}초)")
     loop = asyncio.get_event_loop()
 
@@ -461,7 +476,7 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     enrolled_names = list(np.load(profiles_path).files) if enrolled_count else []
     refined_segments = await _transcribe_turns(
         app_state, meeting_id, turns,
-        audio_of=lambda _turn: (audio, sample_rate),  # 공용 마이크는 회의 오디오 하나뿐
+        audio_of=lambda _turn: (transcribe_audio, sample_rate),
         initial_prompt=build_context_hint(enrolled_names),
     )
     _mark("턴별전사")
