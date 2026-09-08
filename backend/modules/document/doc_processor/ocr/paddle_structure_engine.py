@@ -81,7 +81,7 @@ class PaddleStructureEngine:
     def __init__(self) -> None:
         from paddleocr import PPStructureV3
 
-        self._pipeline = PPStructureV3(
+        _kwargs = dict(
             device="cpu",
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
@@ -89,6 +89,20 @@ class PaddleStructureEngine:
             use_formula_recognition=False,
             use_chart_recognition=False,
         )
+        try:
+            # PaddleEngine과 동일하게 한국어 인식 모델을 명시 — 지정 안 하면
+            # 기본 인식 모델(중국어/영어 위주)이 쓰여서 한글이 깨진 문자로
+            # 나옴 (예: "电", "邵" 같은 한자가 섞여 나오는 증상).
+            self._pipeline = PPStructureV3(
+                text_recognition_model_name="korean_PP-OCRv5_mobile_rec",
+                **_kwargs,
+            )
+        except TypeError:
+            try:
+                self._pipeline = PPStructureV3(lang="korean", **_kwargs)
+            except TypeError:
+                print("[PP-StructureV3] 한국어 모델 지정 파라미터를 찾지 못해 기본 모델로 로드 (인식 품질 저하 가능)")
+                self._pipeline = PPStructureV3(**_kwargs)
 
     def run(self, image: Image.Image, fig_type: str = "table_image") -> str:
         try:
