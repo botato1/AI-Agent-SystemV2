@@ -575,6 +575,15 @@ def update_decision(db: Session, decision_id: uuid.UUID, **fields) -> Optional[D
     db.refresh(row)
     return row
 
+
+def delete_decision(db: Session, decision_id: uuid.UUID) -> bool:
+    row = get_decision(db, decision_id)
+    if not row:
+        return False
+    row.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return True
+
 def list_meetings_needing_reminder(db: Session, reminder_minutes: int) -> list[Meeting]:
     """지금부터 reminder_minutes 이내에 시작하는 예약 회의 목록."""
     now = datetime.now(timezone.utc)

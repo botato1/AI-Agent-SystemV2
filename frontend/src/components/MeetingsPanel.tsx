@@ -617,11 +617,13 @@ function DecisionItem({
   decision,
   isEditing,
   onSave,
+  onDelete,
   t,
 }: {
   decision: Decision;
   isEditing: boolean;
   onSave: (input: { title: string; decisionText: string; reason: string | null }) => Promise<boolean>;
+  onDelete: () => void;
   t: any;
 }) {
   const [title, setTitle] = useState(decision.title);
@@ -655,13 +657,25 @@ function DecisionItem({
   if (isEditing) {
     return (
       <li className="space-y-1.5 rounded-lg bg-white/5 p-2">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={commit}
-          placeholder={t.meeting_decision_title_placeholder}
-          className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs font-bold text-recall-text outline-none focus:border-recall-accent"
-        />
+        <div className="flex items-start gap-1.5">
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={commit}
+            placeholder={t.meeting_decision_title_placeholder}
+            className="w-full rounded-lg border border-recall-border bg-recall-bgMain px-2 py-1 text-xs font-bold text-recall-text outline-none focus:border-recall-accent"
+          />
+          <button
+            onClick={() => {
+              if (window.confirm(t.meeting_decision_delete_confirm)) onDelete();
+            }}
+            title={t.meeting_decision_delete_aria}
+            aria-label={t.meeting_decision_delete_aria}
+            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:border-recall-danger hover:text-recall-danger"
+          >
+            <CloseIcon size={12} />
+          </button>
+        </div>
         <textarea
           value={decisionText}
           onChange={(e) => setDecisionText(e.target.value)}
@@ -1285,6 +1299,7 @@ export default function MeetingsPanel({
     decisions,
     addDecision,
     updateDecision,
+    removeDecision,
     attendees,
     suggestedTasks,
     approveSuggestedTask,
@@ -2120,6 +2135,7 @@ export default function MeetingsPanel({
                                   decision={d}
                                   isEditing={isMeetingEditMode}
                                   onSave={(input) => updateDecision(d.id, input)}
+                                  onDelete={() => removeDecision(d.id)}
                                   t={t}
                                 />
                               ))}
@@ -2267,6 +2283,7 @@ export default function MeetingsPanel({
                                     decision={d}
                                     isEditing={isMeetingEditMode}
                                     onSave={(input) => updateDecision(d.id, input)}
+                                    onDelete={() => removeDecision(d.id)}
                                     t={t}
                                   />
                                 ))}
