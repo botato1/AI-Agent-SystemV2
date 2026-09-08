@@ -984,6 +984,28 @@ def update_meeting_decision_api(
     updated = meeting_crud.update_decision(db, decision_id, **update_fields)
     return DecisionResponse.model_validate(updated)
 
+
+# 결정사항 삭제
+@router.delete("/{meeting_id}/decisions/{decision_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_meeting_decision_api(
+    workspace_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_meeting_or_404(db, meeting_id, workspace_id)
+
+    decision = meeting_crud.get_decision(db, decision_id)
+    if not decision or decision.meeting_id != meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="결정사항을 찾을 수 없습니다.",
+        )
+
+    meeting_crud.delete_decision(db, decision_id)
+
 # 실시간 녹음 일시정지
 @router.post("/{meeting_id}/pause", response_model=MeetingResponse)
 def pause_meeting_api(
