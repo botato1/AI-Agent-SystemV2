@@ -23,7 +23,7 @@ Re:Call은 회의록, 문서, 음성 파일 등 업무 과정에서 발생하는
 | AI Chat (RAG) | 회의록/문서/결정사항을 대상으로 하이브리드 검색(의미+키워드) 및 리랭킹 기반으로 질문에 답변합니다. |
 | 실시간 STT | 회의 음성을 실시간으로 텍스트 변환하고 화자를 분리합니다. |
 | 각자 PC / 한 대의 PC 모드 | 참가자별 개별 접속(원격 회의)과 한 기기 공용 진행(오프라인 회의)을 모두 지원하며, 참가자 간 음성 통화 중계를 제공합니다. |
-| 문서 분석 & OCR | PDF, 이미지, DOCX 등 업로드 문서의 레이아웃을 분석하고 텍스트/표/차트를 추출합니다. |
+| 문서 분석 & OCR | PDF는 레이아웃을 분석해 텍스트/표/차트를 추출합니다. DOCX/TXT는 순수 텍스트만 추출합니다(표/이미지 제외). 이미지 파일(jpg/png) 직접 업로드는 지원하지 않습니다. |
 | 회의 자료 연결 | 회의별로 참고 문서를 직접 첨부·조회·삭제할 수 있습니다. |
 | 워크스페이스 관리 | 팀/프로젝트 단위로 회의·문서·결정사항을 격리해서 관리합니다. |
 
@@ -223,7 +223,7 @@ POST .../{id}/resolve 또는 /dismiss — 처리(변경 인지함 / 기준 유�
 | PATCH | `/api/workspaces/{workspace_id}/contradictions/{id}` | 모순 감지 내용 수정 |
 | POST | `/api/workspaces/{workspace_id}/contradictions/{id}/resolve` | 모순 해결 처리 |
 | POST | `/api/workspaces/{workspace_id}/rooms/{room_id}/ai-chat/sessions/{session_id}/messages` | AI Chat 질의 |
-| POST | `/api/stt/schedule` | STT 처리 예약/실행 |
+| POST | `/api/stt/upload` (STT 서버, 8002) | 음성 파일 업로드 → STT 처리 |
 
 <br />
 
@@ -261,7 +261,6 @@ AI-Agent-SystemV2/
 │   │   ├── chat_router.py
 │   │   ├── room_ws_router.py
 │   │   ├── task_router.py
-│   │   ├── stt_router.py
 │   │   ├── worktree_router.py
 │   │   ├── notification_router.py
 │   │   ├── dashboard_router.py
@@ -274,10 +273,8 @@ AI-Agent-SystemV2/
 │   │   ├── judgment_service.py
 │   │   ├── rag_service.py
 │   │   ├── similarity_service.py
-│   │   ├── chat_service.py
 │   │   ├── ollama_service.py
-│   │   ├── stt_stream_client.py
-│   │   └── stt_upload_service.py
+│   │   └── stt_stream_client.py
 │   ├── graphs/
 │   │   ├── contradiction_graph.py
 │   │   ├── meeting_postprocess_graph.py
@@ -308,9 +305,16 @@ AI-Agent-SystemV2/
 │       ├── App.tsx
 │       └── main.tsx
 │
+├── finetune/                  # LoRA 파인튜닝 파이프라인 (학습/변환/Ollama 등록)
+│
 ├── docker-compose.yml
+├── Dockerfile
+├── Dockerfile.stt
+├── Dockerfile.document
 ├── requirements.txt
 ├── .env.example
+├── LICENSE
+├── CONTRIBUTING.md
 └── README.md
 ```
 
