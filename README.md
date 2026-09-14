@@ -84,7 +84,8 @@ PostgreSQL (관계형 데이터)  ──  ChromaDB (임베딩 / RAG 검색)  ─
 | Category | Stack |
 | --- | --- |
 | Agent Workflow | LangGraph  |
-| LLM | Ollama |
+| LLM | Qwen2.5-7B-Instruct (경량), Qwen3-8B (고성능) |
+| LLM Serving | Ollama |
 | Vector Database | ChromaDB |
 | Search | 하이브리드 검색 (bge-m3 의미 검색 + BM25 키워드 검색) |
 | Reranking | bge-reranker-v2-m3 |
@@ -93,11 +94,11 @@ PostgreSQL (관계형 데이터)  ──  ChromaDB (임베딩 / RAG 검색)  ─
 
 | Category | Stack |
 | --- | --- |
-| Layout Analysis | YOLO 기반 커스텀 레이아웃 분류기 |
+| Layout Analysis | YOLO 기반 레이아웃 분류기 (yolo26-document-layout) |
 | Text / Table Extraction | PyMuPDF, pdfplumber |
-| OCR (표) | PaddleOCR-VL |
-| Chart / Diagram 이해 | Qwen3-VL |
-| Fallback | Gemini API |
+| OCR (본문 텍스트) | PaddleOCR (PP-OCRv5, CPU) |
+| OCR (표) | PaddleOCR-VL-1.6 |
+| Chart / Diagram 이해 | Qwen3-VL-8B |
 
 ### Voice Processing
 
@@ -127,11 +128,11 @@ PostgreSQL (관계형 데이터)  ──  ChromaDB (임베딩 / RAG 검색)  ─
 
 | 처리 영역 | 사용 기술 | 설명 |
 | --- | --- | --- |
-| Layout | YOLO 분류기 | 문서의 레이아웃 구조(제목/본문/표/이미지 등)를 분석합니다. |
-| Text | PyMuPDF | PDF 내부 텍스트를 추출합니다. |
-| Table | pdfplumber, PaddleOCR-VL | 텍스트 기반 표와 이미지 기반 표를 각각 추출합니다. |
-| Chart / Diagram | Qwen3-VL | 차트/다이어그램/인포그래픽 내용을 해석합니다. |
-| Fallback | Gemini API | 위 엔진이 실패하거나 신뢰도가 낮을 때 보조로 사용합니다. |
+| Layout | YOLO (yolo26-document-layout) | 문서의 레이아웃 구조(제목/본문/표/이미지 등)를 분석해 뒤 단계 OCR 엔진을 라우팅합니다. |
+| Text | PyMuPDF | PDF 내부 텍스트 레이어를 추출합니다. |
+| Text (이미지 기반) | PaddleOCR (PP-OCRv5, CPU) | 텍스트 레이어가 없는 스캔/이미지 문서를 OCR로 인식합니다. |
+| Table | pdfplumber, PaddleOCR-VL-1.6 | 텍스트 기반 표와 이미지 기반 표를 각각 추출합니다. |
+| Chart / Diagram | Qwen3-VL-8B | 차트/다이어그램/인포그래픽 내용을 해석합니다. |
 | Postprocess | 자체 로직 | 자간/줄바꿈/세로쓰기/표 정리 등 텍스트 후처리를 거쳐 RAG용 청크로 변환합니다. |
 
 <br />
