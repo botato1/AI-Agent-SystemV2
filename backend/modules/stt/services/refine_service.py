@@ -351,6 +351,119 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     return meta
 
 
+async def _diarize_and_segment(
+    app_state, audio: np.ndarray, sample_rate: int,
+    enrolled_count: int, expected_speakers: int | None,
+) -> tuple[list[dict], int]:
+    """1단계: 전체 화자분리 → 겹치지 않게 정리된 턴 목록.
+
+    (정리된 턴 목록, 정리 전 원본 화자분리 턴 개수)를 돌려준다 — 개수는
+    호출부 로그에서 "화자분리 결과 N개 → 정리 후 M개"로 쓰인다.
+    """
+    waveform = {"waveform": torch.from_numpy(audio.reshape(1, -1)), "sample_rate": sample_rate}
+    diarization_tracks = await run_diarization(
+        app_state.diarize_pipeline,
+        waveform,
+        max_speakers=(
+            enrolled_count if enrolled_count >= MIN_SPEAKERS else expected_speakers
+        ),
+    )
+    # 같은 화자의 인접 턴을 합치고 → 서로 겹치는 턴을 걷어낸다.
+    # 겹침을 안 걷어내면 공용 마이크(오디오 하나)에서 같은 소리를 두 번 전사해
+    # 회의록에 같은 말이 두 번 들어간다 (_resolve_overlapping_turns 참고).
+    turns = _resolve_overlapping_turns(_merge_adjacent_turns(diarization_tracks))
+    return turns, len(diarization_tracks)
+
+
+async def _build_timeline_and_split(
+    loop: asyncio.AbstractEventLoop, app_state, audio: np.ndarray, sample_rate: int,
+    profiles_path: str, enrolled_count: int, turns: list[dict],
+) -> tuple[list[dict], dict | None]:
+    """2단계: 등록 프로필이 있으면 **전사하기 전에** 화자 타임라인을 만들어 턴을 다시 나눈다.
+
+    화자분리 턴 하나에 두 사람이 들어 있으면 전사한 뒤에는 손쓸 수 없다 —
+    "더 오래 말한 쪽"으로 통째로 귀속시킬 수밖에 없고 앞뒤 절반이 남의 이름을 단다.
+    타임라인은 0.5초 해상도라 화자분리보다 경계를 세밀하게 알므로, 그걸로 먼저
+    나누면 전사 자체가 화자별로 분리돼 나온다.
+
+    돌려주는 타임라인은 호출부가 이름 배정에도 재사용한다(두 번 만들면 비용도
+    두 배고, 두 결과가 어긋나면 "나눈 경계"와 "붙인 이름"이 안 맞는다). 등록
+    프로필이 없거나 비어 있으면 턴을 그대로, 타임라인은 None으로 돌려준다.
+    """
+    if not enrolled_count:
+        return turns, None
+    profile_data = np.load(profiles_path)
+    profiles = {name: profile_data[name] for name in profile_data.files}
+    if not profiles:
+        return turns, None
+    # SPEAKER_TIMELINE_CLUSTERED=1이면 묶음 단위 판정(실험적, 기본 꺼짐 —
+    # speaker_timeline.build_speaker_timeline_clustered 문서 참고). cpCER로
+    # 검증 전까지는 창별 독립 판정(build_speaker_timeline)이 배포 경로다.
+    timeline_fn = (
+        build_speaker_timeline_clustered if SPEAKER_TIMELINE_CLUSTERED
+        else build_speaker_timeline
+    )
+    timeline = await loop.run_in_executor(
+        None, timeline_fn,
+        audio, profiles, app_state.speaker_embedding_inference, sample_rate,
+    )
+    return split_turns_by_timeline(turns, timeline), timeline
+
+
+async def _handle_overlaps(
+    loop: asyncio.AbstractEventLoop, app_state, meeting_id: str, refined_segments: list[dict],
+    audio: np.ndarray, sample_rate: int, profiles_path: str,
+    enrolled_names: list[str], meta: dict,
+) -> list[dict]:
+    """5단계: 겹쳐 말한 구간을 찾아 화자별로 갈라 전사하고, 안 풀린 겹침엔 표시만 남긴다.
+
+    모델에 직접 묻는다. 화자분리 결과에서 역산하던 방식은 오탐이 많아 폐기했다 —
+    그 방식이 겹침이라고 한 11개 구간이 실제로는 하나도 겹침이 아니었고,
+    멀쩡한 발언까지 "겹쳤다"고 표시하고 있었다(overlap_detect 상단 참고).
+    """
+    # load_overlap_inference()를 인자 자리에서 부르면 **이벤트 루프에서** 모델을 로드한다
+    # (인자가 먼저 평가되므로). 첫 회의에서 수 초간 서버 전체가 멈추므로 실행기 안에서 부른다.
+    overlap_spans = await loop.run_in_executor(
+        None, lambda: find_overlap_spans_from_audio(audio, load_overlap_inference(), sample_rate),
+    )
+    if not overlap_spans:
+        return refined_segments
+    # 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
+    refined_segments = await _split_overlaps(
+        app_state, meeting_id, refined_segments, overlap_spans,
+        audio, sample_rate, profiles_path, enrolled_names, meta,
+    )
+    # **아직 안 풀린** 겹침에만 표시를 단다(이름은 그대로). 지울 근거가 실측에서
+    # 안 나왔다 — overlap_detect.mark_overlapped_segments의 설명 참고.
+    # 분리로 이미 갈라낸 세그먼트는 대상이 아니다 — 해결해놓고 "안 풀렸다"고
+    # 표시하면 소비자가 그 발언을 불필요하게 걸러낸다.
+    mark_overlapped_segments(
+        [seg for seg in refined_segments if not seg.get("separated")], overlap_spans,
+    )
+    return refined_segments
+
+
+async def _assign_unassigned_ids_stage(
+    loop: asyncio.AbstractEventLoop, app_state, refined_segments: list[dict],
+    audio: np.ndarray, sample_rate: int, enrolled_count: int,
+) -> None:
+    """5-c단계: 이름을 못 붙인(미상) 세그먼트에 구분용 raw id를 준다(제자리 수정).
+
+    등록된 진짜 화자 판정(화자분리~이름배정)이 전부 끝난 뒤의 순수 후처리다 —
+    assign_unassigned_ids 문서 참고: 턴 분할 로직에는 영향을 주지 않는다.
+    """
+    if not enrolled_count:
+        return
+    # GPU 추론(pool.extract_embedding)이 세그먼트 수만큼 반복되므로 이벤트 루프에서
+    # 직접 부르면 그동안 서버 전체(다른 실시간 세션 포함)가 멈춘다 — run_diarization/
+    # build_speaker_timeline/find_overlap_spans_from_audio/correct_transcript와 같은
+    # 이유로 executor에 넘긴다(지수 리뷰, 2026-08-26).
+    await loop.run_in_executor(
+        None, assign_unassigned_ids,
+        refined_segments, audio, sample_rate, app_state.speaker_embedding_inference,
+    )
+
+
 async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | None:
     meeting_dir = os.path.join(MEETINGS_DIR, meeting_id)
     meta_path = os.path.join(meeting_dir, "transcript.json")
@@ -427,48 +540,19 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     profiles_path = os.path.join(meeting_dir, "profiles.npz")
     enrolled_count = len(np.load(profiles_path).files) if os.path.isfile(profiles_path) else 0
     expected_speakers = meta.get("expected_speakers")
-    waveform = {"waveform": torch.from_numpy(audio.reshape(1, -1)), "sample_rate": sample_rate}
-    diarization_tracks = await run_diarization(
-        app_state.diarize_pipeline,
-        waveform,
-        max_speakers=(
-            enrolled_count if enrolled_count >= MIN_SPEAKERS else expected_speakers
-        ),
+    turns, raw_track_count = await _diarize_and_segment(
+        app_state, audio, sample_rate, enrolled_count, expected_speakers,
     )
-    # 같은 화자의 인접 턴을 합치고 → 서로 겹치는 턴을 걷어낸다.
-    # 겹침을 안 걷어내면 공용 마이크(오디오 하나)에서 같은 소리를 두 번 전사해
-    # 회의록에 같은 말이 두 번 들어간다 (_resolve_overlapping_turns 참고).
-    turns = _resolve_overlapping_turns(_merge_adjacent_turns(diarization_tracks))
     _mark("화자분리")
 
-    # 2. 등록 프로필이 있으면 **전사하기 전에** 화자 타임라인을 만들어 턴을 다시 나눈다.
-    #
-    #    화자분리 턴 하나에 두 사람이 들어 있으면 전사한 뒤에는 손쓸 수 없다 —
-    #    "더 오래 말한 쪽"으로 통째로 귀속시킬 수밖에 없고 앞뒤 절반이 남의 이름을 단다.
-    #    타임라인은 0.5초 해상도라 화자분리보다 경계를 세밀하게 알므로, 그걸로 먼저
-    #    나누면 전사 자체가 화자별로 분리돼 나온다.
-    #    같은 타임라인을 아래 이름 배정에도 재사용한다(두 번 만들면 비용도 두 배고,
-    #    두 결과가 어긋나면 "나눈 경계"와 "붙인 이름"이 안 맞는다).
-    timeline = None
-    if enrolled_count:
-        profile_data = np.load(profiles_path)
-        profiles = {name: profile_data[name] for name in profile_data.files}
-        if profiles:
-            # SPEAKER_TIMELINE_CLUSTERED=1이면 묶음 단위 판정(실험적, 기본 꺼짐 —
-            # speaker_timeline.build_speaker_timeline_clustered 문서 참고). cpCER로
-            # 검증 전까지는 창별 독립 판정(build_speaker_timeline)이 배포 경로다.
-            timeline_fn = (
-                build_speaker_timeline_clustered if SPEAKER_TIMELINE_CLUSTERED
-                else build_speaker_timeline
-            )
-            timeline = await loop.run_in_executor(
-                None, timeline_fn,
-                audio, profiles, app_state.speaker_embedding_inference, sample_rate,
-            )
-            turns = split_turns_by_timeline(turns, timeline)
+    # 2. 화자 타임라인 — 등록 프로필이 있을 때만 턴을 다시 나눈다. 아래 4단계(이름배정)에서
+    #    같은 타임라인을 재사용한다.
+    turns, timeline = await _build_timeline_and_split(
+        loop, app_state, audio, sample_rate, profiles_path, enrolled_count, turns,
+    )
     _mark("화자타임라인")
 
-    logger.info(f"🔬 [{meeting_id}] 화자 턴 {len(diarization_tracks)}개 → 정리 후 {len(turns)}개, 턴별 전사 시작")
+    logger.info(f"🔬 [{meeting_id}] 화자 턴 {raw_track_count}개 → 정리 후 {len(turns)}개, 턴별 전사 시작")
 
     # 3. 턴별 정밀 전사 (각자 PC 모드와 같은 헬퍼를 씀 — 차이는 오디오 출처뿐)
     # 최종 회의록이 되는 경로라 인식 힌트를 여기에도 적용한다. 등록 프로필이 있으면
@@ -486,43 +570,17 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
         _assign_speakers_from_timeline(refined_segments, timeline)
     _mark("이름배정")
 
-    # 5. 겹쳐 말한 구간 처리.
-    #    모델에 직접 묻는다. 화자분리 결과에서 역산하던 방식은 오탐이 많아 폐기했다 —
-    #    그 방식이 겹침이라고 한 11개 구간이 실제로는 하나도 겹침이 아니었고,
-    #    멀쩡한 발언까지 "겹쳤다"고 표시하고 있었다(overlap_detect 상단 참고).
-    # load_overlap_inference()를 인자 자리에서 부르면 **이벤트 루프에서** 모델을 로드한다
-    # (인자가 먼저 평가되므로). 첫 회의에서 수 초간 서버 전체가 멈추므로 실행기 안에서 부른다.
-    overlap_spans = await loop.run_in_executor(
-        None, lambda: find_overlap_spans_from_audio(audio, load_overlap_inference(), sample_rate),
+    # 5. 겹쳐 말한 구간 처리 (탐지 + 분리 + 미해결분 표시).
+    refined_segments = await _handle_overlaps(
+        loop, app_state, meeting_id, refined_segments,
+        audio, sample_rate, profiles_path, enrolled_names, meta,
     )
-    _mark("겹침탐지(모델 첫 로드 포함 가능)")
-    if overlap_spans:
-        # 5-a. 분리가 켜져 있으면 겹친 구간을 화자별로 갈라 각각 전사 — 포기하지 않고 살린다
-        refined_segments = await _split_overlaps(
-            app_state, meeting_id, refined_segments, overlap_spans,
-            audio, sample_rate, profiles_path, enrolled_names, meta,
-        )
-        # 5-b. **아직 안 풀린** 겹침에만 표시를 단다(이름은 그대로). 지울 근거가 실측에서
-        #      안 나왔다 — overlap_detect.mark_overlapped_segments의 설명 참고.
-        #      분리로 이미 갈라낸 세그먼트는 대상이 아니다 — 해결해놓고 "안 풀렸다"고
-        #      표시하면 소비자가 그 발언을 불필요하게 걸러낸다.
-        mark_overlapped_segments(
-            [seg for seg in refined_segments if not seg.get("separated")], overlap_spans,
-        )
-    _mark("겹침분리")
+    _mark("겹침탐지·분리(모델 첫 로드 포함 가능)")
 
-    # 5-c. 이름을 못 붙인(미상) 세그먼트에도 구분용 raw id를 준다(2026-08-21, 팀원
-    # 요청) — 등록된 진짜 화자 판정(위 1~4단계)이 전부 끝난 뒤의 순수 후처리다.
-    # assign_unassigned_ids 문서 참고: 턴 분할 로직에는 영향을 주지 않는다.
-    if enrolled_count:
-        # GPU 추론(pool.extract_embedding)이 세그먼트 수만큼 반복되므로 이벤트 루프에서
-        # 직접 부르면 그동안 서버 전체(다른 실시간 세션 포함)가 멈춘다 — 위 run_diarization/
-        # build_speaker_timeline/find_overlap_spans_from_audio/correct_transcript와 같은
-        # 이유로 executor에 넘긴다(지수 리뷰, 2026-08-26).
-        await loop.run_in_executor(
-            None, assign_unassigned_ids,
-            refined_segments, audio, sample_rate, app_state.speaker_embedding_inference,
-        )
+    # 5-c. 이름을 못 붙인(미상) 세그먼트에도 구분용 raw id를 준다(2026-08-21, 팀원 요청).
+    await _assign_unassigned_ids_stage(
+        loop, app_state, refined_segments, audio, sample_rate, enrolled_count,
+    )
     _mark("미상id배정")
 
     # 6. LLM이 문맥으로 읽고 오인식 단어를 고친다.
