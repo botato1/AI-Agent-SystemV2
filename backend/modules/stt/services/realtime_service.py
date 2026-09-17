@@ -80,6 +80,37 @@ def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
     return prefix
 
 
+def _absorb_short_turns(
+    turns: list[tuple[int, int, str | None]], min_samples: int,
+) -> list[tuple[int, int, str | None]]:
+    """너무 짧은 턴은 이웃 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
+    라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
+    때문에 긴 발화를 쪼개는 건 얻는 것보다 잃는 게 크다.
+
+    기본은 앞 턴에 흡수. 첫 턴이 짧으면 흡수할 앞이 없으므로 대신 **다음 턴에**
+    흡수시킨다 (2026-08-20, 팀 제보) — 안 그러면 화자 전환 직후 첫 몇 글자가
+    통째로 별도 턴이 되어 미상으로 방치된다("개발."만 분리돼 화자미상, "진행
+    상황..."만 이승주로 붙은 사례). 턴은 서로 붙어 있어(경계 사이 간격 없음)
+    자연스러운 침묵으로 나뉜 게 아니라 강제로 잘린 조각이므로 흡수가 맞다.
+    """
+    merged: list[tuple[int, int, str | None]] = []
+    i = 0
+    while i < len(turns):
+        start, end, label = turns[i]
+        too_short = (end - start) < min_samples
+        if too_short and merged:
+            prev_start, _, prev_label = merged[-1]
+            merged[-1] = (prev_start, end, prev_label)
+        elif too_short and not merged and i + 1 < len(turns):
+            _, next_end, next_label = turns[i + 1]
+            merged.append((start, next_end, next_label))
+            i += 1   # 다음 턴은 이미 흡수했으므로 건너뛴다
+        else:
+            merged.append((start, end, label))
+        i += 1
+    return merged
+
+
 class RealtimeSTTSession:
     """
     실시간 회의 오디오를 VAD 기준으로 청크 분할해 전사하는 세션.
@@ -429,31 +460,7 @@ class RealtimeSTTSession:
         # 내부 표식은 밖으로 내보내지 않는다 — 호출부는 None(미상)으로 받는다
         turns = [(a, b, None if c == _UNKNOWN_SPEAKER else c) for a, b, c in turns]
 
-        # 너무 짧은 턴은 이웃 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
-        # 라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
-        # 때문에 긴 발화를 쪼개는 건 얻는 것보다 잃는 게 크다.
-        #
-        # 기본은 앞 턴에 흡수. 첫 턴이 짧으면 흡수할 앞이 없으므로 대신 **다음 턴에**
-        # 흡수시킨다 (2026-08-20, 팀 제보) — 안 그러면 화자 전환 직후 첫 몇 글자가
-        # 통째로 별도 턴이 되어 미상으로 방치된다("개발."만 분리돼 화자미상, "진행
-        # 상황..."만 이승주로 붙은 사례). 턴은 서로 붙어 있어(경계 사이 간격 없음)
-        # 자연스러운 침묵으로 나뉜 게 아니라 강제로 잘린 조각이므로 흡수가 맞다.
-        merged: list[tuple[int, int, str | None]] = []
-        i = 0
-        while i < len(turns):
-            start, end, label = turns[i]
-            too_short = (end - start) < _MIN_SPLIT_TURN_SAMPLES
-            if too_short and merged:
-                prev_start, _, prev_label = merged[-1]
-                merged[-1] = (prev_start, end, prev_label)
-            elif too_short and not merged and i + 1 < len(turns):
-                _, next_end, next_label = turns[i + 1]
-                merged.append((start, next_end, next_label))
-                i += 1   # 다음 턴은 이미 흡수했으므로 건너뛴다
-            else:
-                merged.append((start, end, label))
-            i += 1
-        return merged
+        return _absorb_short_turns(turns, _MIN_SPLIT_TURN_SAMPLES)
 
     def _scan_speaker_changes(self, audio: np.ndarray) -> list[tuple[int, int, str | None]]:
         """
