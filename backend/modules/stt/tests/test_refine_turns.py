@@ -90,8 +90,9 @@ class TestResolveOverlappingTurns:
     def test_trimmed_remainder_below_min_is_dropped(self):
         # 겹침을 걷어내고 남은 조각이 MIN_TRIMMED_TURN_SEC보다 짧으면 버린다 —
         # 잘려나간 끄트머리는 전사해봐야 헛것이 나오는 부스러기이기 때문.
+        # B는 대부분 A 안에 있고, A의 끝(10.0)보다 아주 살짝만(MIN 미만) 삐져나온다.
         tail = MIN_TRIMMED_TURN_SEC - 0.01
-        turns = [_turn("A", 0.0, 10.0), _turn("B", 10.0 - tail, 12.0 - tail)]
+        turns = [_turn("A", 0.0, 10.0), _turn("B", 9.0, 10.0 + tail)]
         result = _resolve_overlapping_turns(turns)
         assert len(result) == 1
         assert result[0]["speaker"] == "A"
