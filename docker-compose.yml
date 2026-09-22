@@ -111,6 +111,29 @@ services:
               capabilities: [gpu]
     restart: always
 
+  # 문서 처리(OCR/VL) 서버
+  # 실제 운영에서는 GPU 자원 경합을 피하려고 별도 물리 서버(RTX 5090)에서 독립 배포하지만,
+  # 로컬 개발/재현 시에는 이 compose 파일 하나로 같이 띄울 수 있게 포함해둠.
+  document:
+    build:
+      context: .
+      dockerfile: Dockerfile.document
+    container_name: ai-agent-document
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    volumes:
+      - /mnt/nas_2026_spring/dobby/shared/data/uploads/documents:/app/document/storage/uploads/documents
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: always
+
   # Ollama LLM
   ollama:
     image: ollama/ollama:latest
