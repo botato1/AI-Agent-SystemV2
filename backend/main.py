@@ -39,7 +39,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://61.81.98.82:3000"],
+    allow_origins=["http://localhost:5173", "http://61.81.98.82:3000", "https://app.re-call.cloud"],
     allow_origin_regex=r"http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
