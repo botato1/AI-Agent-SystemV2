@@ -126,15 +126,17 @@ def main():
             top_count = Counter(labels).most_common(1)[0][1]
             same_person_consistency[person] = top_count / len(labels)
 
-        # ② 타인 오염 — 서로 다른 두 사람의 "대표 라벨"(가장 흔한 라벨)이 겹치면 오염
-        majority_label = {
-            person: Counter(labels).most_common(1)[0][0]
-            for person, labels in labels_by_person.items() if labels
+        # ② 타인 오염 — 서로 다른 두 사람이 **하나라도** 같은 라벨을 받으면 오염.
+        # (최빈값끼리만 비교하면 놓친다 — 동점 등으로 최빈값이 우연히 갈려도
+        # 실제로는 한쪽 발화 일부가 다른 사람 클러스터에 섞였을 수 있다.)
+        label_sets = {
+            person: set(labels) for person, labels in labels_by_person.items() if labels
         }
         contaminated_pairs = [
-            (p1, p2) for i, p1 in enumerate(majority_label)
-            for p2 in list(majority_label)[i + 1:]
-            if majority_label[p1] == majority_label[p2] and majority_label[p1] is not None
+            (p1, p2, label_sets[p1] & label_sets[p2])
+            for i, p1 in enumerate(label_sets)
+            for p2 in list(label_sets)[i + 1:]
+            if label_sets[p1] & label_sets[p2]
         ]
 
         rows.append((threshold, same_person_consistency, contaminated_pairs, labels_by_person))
@@ -145,6 +147,8 @@ def main():
         print(f"  동일인 일치율 평균: {avg_consistency:.0%}  |  타인 오염 쌍: {len(contaminated_pairs)}개")
         for person, labels in labels_by_person.items():
             print(f"    {person}: {labels}")
+        for p1, p2, shared in contaminated_pairs:
+            print(f"    ⚠️ 오염: {p1} ↔ {p2} 공유 라벨 {shared}")
 
     print(f"\n{'=' * 70}\n요약\n{'=' * 70}")
     print(f"{'문턱':>6s}{'동일인 일치율(평균)':>18s}{'타인 오염 쌍':>12s}")
