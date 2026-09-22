@@ -134,3 +134,15 @@ services:
               count: 1
               capabilities: [gpu]
     restart: always
+
+  # Cloudflare Tunnel — 외부(행사장 등)에서 접속용
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ai-agent-cloudflared
+    command: tunnel run
+    volumes:
+      - /home/s202010092/.cloudflared:/etc/cloudflared
+    depends_on:
+      - frontend
+      - fastapi
+    restart: always
