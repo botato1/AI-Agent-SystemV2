@@ -14,6 +14,7 @@ import {
   getMeetingDecisionsApi,
   createMeetingDecisionApi,
   updateMeetingDecisionApi,
+  deleteMeetingDecisionApi,
   getMeetingAttendeesApi,
   getMeetingDocumentsApi,
   deleteMeetingDocumentApi,
@@ -315,6 +316,17 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     return false;
   }
 
+  async function removeDecision(decisionId: string): Promise<boolean> {
+    if (!selectedMeetingId) return false;
+    const res = await deleteMeetingDecisionApi(workspaceId, selectedMeetingId, decisionId);
+    if (res.status === "success") {
+      setDecisions((prev) => prev.filter((d) => d.id !== decisionId));
+      return true;
+    }
+    alert(`결정사항 삭제 실패: ${res.message}`);
+    return false;
+  }
+
   async function approveSuggestedTask(taskId: string): Promise<boolean> {
     const res = await updateTaskStatusApi(workspaceId, taskId, "open");
     if (res.status === "success") {
@@ -393,6 +405,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     decisions,
     addDecision,
     updateDecision,
+    removeDecision,
     attendees,
     documents,
     suggestedTasks,

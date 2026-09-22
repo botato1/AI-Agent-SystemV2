@@ -80,7 +80,10 @@ def list_sessions(
     )
     if category_id is not None:
         query = query.filter(AiChatSession.category_id == category_id)
-    return query.all()
+    # 정렬 기준이 없으면 DB가 반환하는 순서가 쿼리마다 들쭉날쭉해서, 프론트에서
+    # "목록 위치가 갑자기 바뀐다"고 느끼는 원인이 됐다 - 최근에 답변이 온 대화가
+    # 위로 오도록 updated_at 내림차순으로 명시한다 (오래된 대화일수록 아래로).
+    return query.order_by(AiChatSession.updated_at.desc()).all()
 
 def update_session_category(db: Session, session_id: uuid.UUID, category_id: uuid.UUID) -> Optional[AiChatSession]:
     row = get_session(db, session_id)

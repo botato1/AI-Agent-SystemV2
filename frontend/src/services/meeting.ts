@@ -157,6 +157,12 @@ export interface GetMeetingDecisionsResponse {
   error: string | null;
 }
 
+export interface DeleteMeetingDecisionResponse {
+  status: "success" | "error";
+  message: string;
+  error: string | null;
+}
+
 export interface MeetingDecisionResponse {
   status: "success" | "error";
   decision: Decision | null;
@@ -956,6 +962,62 @@ export async function updateMeetingDecisionApi(
     return {
       status: "error",
       decision: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 6-3. 회의 결정사항 삭제 API (DELETE /api/workspaces/{workspace_id}/meetings/{meeting_id}/decisions/{decision_id})
+ */
+export async function deleteMeetingDecisionApi(
+  workspaceId: string,
+  meetingId: string,
+  decisionId: string
+): Promise<DeleteMeetingDecisionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/decisions/${decisionId}`,
+      { method: "DELETE" }
+    );
+
+    if (response.status === 204) {
+      return {
+        status: "success",
+        message: "결정사항이 삭제되었습니다.",
+        error: null,
+      };
+    }
+
+    const textData = await response.text();
+    const data = textData ? JSON.parse(textData) : {};
+
+    let defaultMsg = "결정사항 삭제에 실패했습니다.";
+    if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+    else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 삭제할 수 있습니다.";
+    else if (response.status === 404) defaultMsg = "존재하지 않는 결정사항입니다.";
+
+    return {
+      status: "error",
+      message: data.message || defaultMsg,
+      error: data.error || `HTTP_${response.status}`,
+    };
+  } catch (error) {
+    console.error("deleteMeetingDecisionApi error:", error);
+    return {
+      status: "error",
       message: "서버와 통신할 수 없습니다.",
       error: "NETWORK_ERROR",
     };
