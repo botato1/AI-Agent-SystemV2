@@ -183,7 +183,12 @@ def is_confident(avg_logprob: float | None, no_speech_prob: float | None) -> boo
 # VAD 기반 청크 분할 설정 (시간이 아니라 '말이 끊기는 지점' 기준으로 자름)
 REALTIME_SAMPLE_RATE = 16000
 REALTIME_MIN_CHUNK_SEC = 2      # 너무 짧은 청크는 흘려보내지 않음
-REALTIME_MAX_CHUNK_SEC = 28     # 침묵이 안 와도 이 길이가 되면 강제로 자름
+# 침묵이 안 와도 이 길이가 되면 강제로 자름. env로 스윕 가능 — 실측(2026-09-22):
+# maybe_stream_partial()이 매초 버퍼 전체를 다시 훑어서(아래 REALTIME_PARTIAL_INTERVAL_SEC),
+# 청크가 길어질수록 매 스캔의 연산량도 같이 늘어난다(거의 제곱 비용). 28초 기준
+# 실측 지연이 평균 4.6초·최대 6.3초까지 나왔다 — realtime_service.py의
+# maybe_stream_partial 문서, finetune/stt/replay_meeting_ws.py로 재현 가능.
+REALTIME_MAX_CHUNK_SEC = int(os.getenv("REALTIME_MAX_CHUNK_SEC", "28"))
 REALTIME_SILENCE_MS = 500       # 이만큼 침묵이 지속되면 발화 구간 종료로 판단
 REALTIME_FLUSH_CHECK_INTERVAL_SEC = 0.3  # VAD 기반 flush 판정 주기 (매 프레임 돌리면 CPU 낭비)
 REALTIME_FLUSH_MIN_TAIL_SEC = 0.5        # 회의 종료 시 이보다 짧은 잔여 버퍼는 버림 (노이즈 수준)
