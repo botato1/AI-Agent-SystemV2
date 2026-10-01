@@ -331,8 +331,15 @@ export default function Sidebar({
 
   return (
     <div
-      className={`fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text select-none transition-transform duration-200 ease-out md:static md:z-auto md:translate-x-0 ${
-        isMobileOpen ? "translate-x-0" : "-translate-x-full"
+      // CSS에서 transform 값은 translateX(0)처럼 실질적으로 아무 효과가 없어도 그 요소를
+      // 새 쌓임 맥락(stacking context)으로 만들어버린다. md 이상에서도 md:translate-x-0를
+      // 항상 걸어두면 데스크톱에서도 사이드바가 쌓임 맥락이 돼서, 그 안의 알림 드롭다운
+      // (z-50)이 "사이드바 안에서만" 맨 위일 뿐 사이드바 바깥 본문과 비교해선 더 이상
+      // 제대로 위에 뜨지 못해 본문과 뒤섞여 보이는 버그가 있었다. md 미만(모바일)에서만
+      // translate 클래스가 적용되게 해서, 데스크톱에선 transform 자체가 아예 안 붙어
+      // 쌓임 맥락이 생기지 않게 한다 (= 예전처럼 전역 z-index 비교로 정상 작동).
+      className={`fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text select-none transition-transform duration-200 ease-out md:static md:z-auto ${
+        isMobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
       }`}
     >
       {/* 1. 상단 워크스페이스 선택 영역 */}
