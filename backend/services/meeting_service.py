@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
+from backend.routers import notification_ws_router
 from backend.modules.rag.document_loader import load_document
 from backend.modules.post_meeting import llm_extractor
 from backend.services import judgment_service
@@ -205,6 +206,9 @@ def regenerate_summary_from_refined_transcript(
                 commit=False,
             )
         db.commit()
+        notification_ws_router.broadcast_notification_event_sync(
+            meeting.workspace_id, {"event": "notification_created"},
+        )
 
         print(f"[meeting_service] 재분석본 기준 요약 갱신 완료: meeting_id={meeting_id}")
     except Exception as e:
@@ -624,5 +628,8 @@ def run_meeting_postprocess_and_notify(*, meeting_id: str, workspace_id: str, ca
                 message=f"'{title}' 회의 요약이 준비됐습니다.",
                 ref_type="meeting", ref_id=uuid.UUID(meeting_id),
             )
+        notification_ws_router.broadcast_notification_event_sync(
+            uuid.UUID(workspace_id), {"event": "notification_created"},
+        )
     finally:
         db.close()

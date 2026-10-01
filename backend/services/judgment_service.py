@@ -13,6 +13,7 @@ import uuid
 
 from backend.db.crud import meeting_crud, notification_crud, workspace_crud
 from backend.db.session import SessionLocal
+from backend.routers import notification_ws_router
 from backend.modules.judgment import decision_judgment, document_judgment, priority
 from backend.modules.llm.ollama_client import OLLAMA_MODEL_LIGHT, _call_ollama
 
@@ -173,6 +174,9 @@ def _judge_single_statement(
                 ref_id=uuid.UUID(popup["contradiction_id"]),
                 room_id=session_kwargs.get("session_room_id"),
             )
+        notification_ws_router.broadcast_notification_event_sync(
+            workspace_id, {"event": "notification_created"},
+        )
         return {
             "contradiction_id": popup["contradiction_id"],
             "message": popup["message"],
@@ -194,6 +198,9 @@ def _judge_single_statement(
             ref_id=source_id,
             room_id=session_kwargs.get("session_room_id"),
         )
+    notification_ws_router.broadcast_notification_event_sync(
+        workspace_id, {"event": "notification_created"},
+    )
 
     if popup["type"] in _ALSO_PUSH_LIVE_POPUP_TYPES:
         # Case 0 - 알림함(Notification, 위에서 생성 완료)과 별개로 실시간 push용

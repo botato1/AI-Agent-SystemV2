@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.crud import meeting_crud, notification_crud
 from backend.db.modules import Meeting
+from backend.routers import notification_ws_router
 from backend.modules.post_meeting import decision_transition, indexer, llm_extractor, text_assembler
 
 
@@ -167,6 +168,9 @@ def run(
             ref_type="meeting",
             ref_id=meeting.id,
             commit=True,
+        )
+        notification_ws_router.broadcast_notification_event_sync(
+            meeting.workspace_id, {"event": "notification_created"},
         )
 
         meeting.status = "completed"

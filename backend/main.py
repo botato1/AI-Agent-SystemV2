@@ -23,6 +23,7 @@ from backend.routers.worktree_router import router as worktree_router
 from backend.routers.ai_chat_router import router as ai_chat_router, standalone_router as ai_chat_standalone_router
 from backend.routers.notification_router import router as notification_router
 from backend.routers.notification_router import router as notification_router, preferences_router as notification_preferences_router
+from backend.routers.notification_ws_router import router as notification_ws_router
 from backend.routers.dashboard_router import router as dashboard_router
 from backend.routers.webhook_router import router as webhook_router
 from backend.routers.category_router import router as category_router, item_router as category_item_router
@@ -83,6 +84,7 @@ app.include_router(ai_chat_router)
 app.include_router(ai_chat_standalone_router)
 app.include_router(notification_router)
 app.include_router(notification_preferences_router)
+app.include_router(notification_ws_router)
 app.include_router(dashboard_router)
 app.include_router(webhook_router)
 app.include_router(category_router)
