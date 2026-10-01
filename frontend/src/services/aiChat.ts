@@ -15,6 +15,14 @@ export interface AIChatSession {
   deleted_at: string | null;
   // 카테고리 지원 배포 이전에 생성된 세션은 null - "미분류" 취급한다.
   category_id: string | null;
+  is_pinned: boolean;
+}
+
+export interface UpdateAiChatSessionResponse {
+  status: "success" | "error";
+  session: AIChatSession | null;
+  message: string;
+  error: string | null;
 }
 
 export interface UpdateAiChatSessionCategoryResponse {
@@ -330,6 +338,133 @@ export async function updateAiChatSessionCategoryApi(
 }
 
 /**
+ * 3-2. 대화(세션) 이름변경 API (PATCH /api/workspaces/{workspace_id}/ai-chat/sessions/{session_id})
+ * - updateAiChatSessionCategoryApi와 같은 엔드포인트, title 필드만 보낸다.
+ */
+export async function renameAiChatSessionApi(
+  workspaceId: string,
+  sessionId: string,
+  title: string
+): Promise<UpdateAiChatSessionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      session: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/ai-chat/sessions/${sessionId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "대화 이름 변경에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "본인이 만든 대화만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 대화입니다.";
+
+      return {
+        status: "error",
+        session: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      session: data.session || data,
+      message: "이름이 변경되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("renameAiChatSessionApi error:", error);
+    return {
+      status: "error",
+      session: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 3-3. 대화(세션) 고정/해제 API (PATCH /api/workspaces/{workspace_id}/ai-chat/sessions/{session_id}/pin)
+ */
+export async function pinAiChatSessionApi(
+  workspaceId: string,
+  sessionId: string,
+  isPinned: boolean
+): Promise<UpdateAiChatSessionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      session: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/ai-chat/sessions/${sessionId}/pin`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_pinned: isPinned }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "대화 고정 설정에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "본인이 만든 대화만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 대화입니다.";
+
+      return {
+        status: "error",
+        session: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      session: data.session || data,
+      message: "고정 설정이 변경되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("pinAiChatSessionApi error:", error);
+    return {
+      status: "error",
+      session: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
  * 2-1. 채팅방 내 AI Chat 대화 목록 조회 API
  * (GET /api/workspaces/{workspace_id}/rooms/{room_id}/ai-chat/sessions)
  * - standalone과 동일하지만 room_id가 항상 이 채팅방으로 고정된다.
@@ -513,6 +648,136 @@ export async function updateRoomAiChatSessionCategoryApi(
     };
   } catch (error) {
     console.error("updateRoomAiChatSessionCategoryApi error:", error);
+    return {
+      status: "error",
+      session: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 3-4. 채팅방 내 대화(세션) 이름변경 API
+ * (PATCH /api/workspaces/{workspace_id}/rooms/{room_id}/ai-chat/sessions/{session_id})
+ */
+export async function renameRoomAiChatSessionApi(
+  workspaceId: string,
+  roomId: string,
+  sessionId: string,
+  title: string
+): Promise<UpdateAiChatSessionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      session: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/rooms/${roomId}/ai-chat/sessions/${sessionId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "대화 이름 변경에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "본인이 만든 대화만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스/채팅방이거나 본인 소유 세션이 아닙니다.";
+
+      return {
+        status: "error",
+        session: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      session: data.session || data,
+      message: "이름이 변경되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("renameRoomAiChatSessionApi error:", error);
+    return {
+      status: "error",
+      session: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
+/**
+ * 3-5. 채팅방 내 대화(세션) 고정/해제 API
+ * (PATCH /api/workspaces/{workspace_id}/rooms/{room_id}/ai-chat/sessions/{session_id}/pin)
+ */
+export async function pinRoomAiChatSessionApi(
+  workspaceId: string,
+  roomId: string,
+  sessionId: string,
+  isPinned: boolean
+): Promise<UpdateAiChatSessionResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      session: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/rooms/${roomId}/ai-chat/sessions/${sessionId}/pin`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_pinned: isPinned }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "대화 고정 설정에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "본인이 만든 대화만 수정할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스/채팅방이거나 본인 소유 세션이 아닙니다.";
+
+      return {
+        status: "error",
+        session: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      session: data.session || data,
+      message: "고정 설정이 변경되었습니다.",
+      error: null,
+    };
+  } catch (error) {
+    console.error("pinRoomAiChatSessionApi error:", error);
     return {
       status: "error",
       session: null,

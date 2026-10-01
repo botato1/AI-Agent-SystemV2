@@ -416,7 +416,6 @@ function MessageTab({
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const shouldScrollToBottomRef = useRef(false);
   const isAtBottomRef = useRef(true);
   const lastMessageIdRef = useRef<string | null>(null);
   const [newMessagePreview, setNewMessagePreview] = useState<ChatMessage | null>(null);
@@ -435,21 +434,24 @@ function MessageTab({
     if (atBottom) setNewMessagePreview(null);
   }
 
-  // 메시지 전송은 서버 응답을 기다린 뒤에야 목록에 반영되므로(낙관적 업데이트 아님),
-  // 전송 시점엔 스크롤 예약만 해두고 실제 스크롤은 messages가 갱신된 뒤 useEffect에서 실행한다.
-  useEffect(() => {
-    if (shouldScrollToBottomRef.current) {
-      shouldScrollToBottomRef.current = false;
-      scrollToBottom();
-    }
-  }, [messages]);
-
-  // 옛날 메시지를 보고 있는 동안 상대방이 새 메시지를 보내면, 카톡처럼 입력창 위에 짧게 미리보기 표시
+  // 새 메시지가 추가되면: 내가 보낸 거면 무조건, 아니면 이미 바닥에 있었을 때만 바닥으로
+  // 스크롤하고, 그게 아니면(옛날 메시지 보는 중 상대가 보낸 경우) 미리보기만 띄운다.
+  //
+  // 예전엔 "내가 보냈다"는 사실을 handleSend()에서 shouldScrollToBottomRef라는 1회성
+  // 플래그로만 기록해뒀다가 messages가 바뀔 때 소비했는데, 메시지 전송이 서버 응답을
+  // 기다려야 반영되는 구조라(낙관적 업데이트 아님) 빠르게 연달아 보내면 먼저 도착한
+  // 응답의 effect가 그 플래그를 이미 꺼버려서, 뒤이어 도착한 두 번째 메시지는 스크롤이
+  // 안 되는 버그가 있었다. 플래그 대신 메시지 자체의 isMine 값으로 판단하면 이 경쟁
+  // 상태가 사라진다.
   useEffect(() => {
     const last = messages[messages.length - 1];
     if (!last || last.id === lastMessageIdRef.current) return;
     lastMessageIdRef.current = last.id;
-    if (!last.isMine && !isAtBottomRef.current) {
+
+    if (last.isMine || isAtBottomRef.current) {
+      scrollToBottom();
+      setNewMessagePreview(null);
+    } else {
       setNewMessagePreview(last);
     }
   }, [messages]);
@@ -485,8 +487,6 @@ function MessageTab({
 
   function handleSend(text: string) {
     if (text) {
-      // 위로 스크롤해서 옛날 메시지 보다가 새로 채팅 치면, 방금 보낸 메시지를 바로 볼 수 있게 맨 아래로 이동
-      shouldScrollToBottomRef.current = true;
       onSend(text);
     }
 
@@ -555,7 +555,7 @@ function MessageTab({
           {messages.map((m) => (
             <div
               key={m.id}
-              className="flex items-start gap-2"
+              className={`flex items-start gap-2 ${m.isMine ? "flex-row-reverse" : ""}`}
               onContextMenu={(e) => {
                 if (!m.isMine) return;
                 e.preventDefault();
@@ -563,8 +563,16 @@ function MessageTab({
               }}
             >
               <Avatar user={resolveSenderAvatar(m, currentUser, memberAvatarById)} size={28} />
-              <div className="min-w-0 flex-1">
-                <p className="flex items-baseline gap-1.5 text-base font-medium text-recall-text">
+              <div
+                className={`flex min-w-0 max-w-[75%] flex-col gap-0.5 ${
+                  m.isMine ? "items-end" : "items-start"
+                }`}
+              >
+                <p
+                  className={`flex items-baseline gap-1.5 text-base font-medium text-recall-text ${
+                    m.isMine ? "flex-row-reverse" : ""
+                  }`}
+                >
                   {m.author}
                   <span className="text-xs font-normal text-recall-textMuted">{formatMessageTime(m.createdAt)}</span>
                 </p>
@@ -586,7 +594,17 @@ function MessageTab({
                     );
                   }
 
-                  return <p className="text-base text-recall-textMuted">{m.text}</p>;
+                  return (
+                    <p
+                      className={`whitespace-pre-wrap text-base ${
+                        m.isMine
+                          ? "rounded-2xl rounded-tr-sm bg-recall-accent/15 px-3 py-1.5 text-recall-text"
+                          : "rounded-2xl rounded-tl-sm bg-recall-bgSoft px-3 py-1.5 text-recall-textMuted"
+                      }`}
+                    >
+                      {m.text}
+                    </p>
+                  );
                 })()}
               </div>
             </div>

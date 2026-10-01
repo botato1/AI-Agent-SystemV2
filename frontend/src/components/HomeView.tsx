@@ -707,7 +707,7 @@ export default function HomeView({
           </svg>
         </div>
 
-        <div className="w-full px-12">
+        <div className="w-full px-4 sm:px-8 md:px-12">
           <p className="pt-4 text-xs font-semibold uppercase tracking-wide text-recall-textMuted">{t.home_banner_eyebrow}</p>
           <p className="mt-1 text-2xl font-bold text-recall-text">Re:Call</p>
           <p className="mt-1.5 max-w-xl text-sm text-recall-textMuted">{t.home_tagline}</p>
@@ -723,7 +723,7 @@ export default function HomeView({
         <div className="pb-6" />
       </div>
 
-      <div className="w-full px-8 py-6">
+      <div className="w-full px-4 py-6 sm:px-8">
         {/* 🌟 15% 진함 정도의 딱 알맞고 은은한 그라데이션 배경 + 전진 배치된 버튼 */}
         <div
           onClick={() => onNavigate("voiceMeeting")}
@@ -751,11 +751,13 @@ export default function HomeView({
           </button>
         </div>
 
-        {/* 3열 대시보드 레이아웃 */}
-        <div className="grid grid-cols-12 gap-4">
-          
+        {/* 3열 대시보드 레이아웃 - lg(1024px) 미만에서는 1열로 쌓인다. md(768px)에서 사이드바가
+            고정으로 자리잡기 시작하는데, 그 직후 폭에서 바로 3열까지 펼치면 칸이 너무 좁아져
+            글자가 한 글자씩 쪼개져 보이므로, 사이드바 폭을 감안해 더 넓은 lg에서 3열로 전환한다 */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+
           {/* 1열 (왼쪽): 예정된 회의 + 확인이 필요한 부분 */}
-          <div className="col-span-3 space-y-4">
+          <div className="space-y-4 lg:col-span-3">
             
             {/* 예정된 회의 */}
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-4 shadow-sm">
@@ -862,51 +864,52 @@ export default function HomeView({
               {!visibleContradiction ? (
                 <p className="py-6 text-center text-xs text-recall-textMuted">{t.home_review_empty}</p>
               ) : (
+                // 화살표를 카드 양옆이 아니라 아래에 둔다 - 옆에 두면 안 그래도 좁은 1열 칸에서
+                // 텍스트가 쓸 수 있는 폭이 버튼 2개(56px)만큼 더 줄어들어 한두 글자씩 쪼개져
+                // 보였다. 카드가 칸 전체 폭을 쓰게 하면 그 문제가 사라진다.
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={goToPrevReview}
-                      disabled={clampedReviewIndex === 0}
-                      aria-label={t.home_review_prev}
-                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
-                    >
-                      <ChevronLeftIcon size={14} />
-                    </button>
+                  <div className="flex flex-col gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
+                    <p className="text-xs text-recall-text leading-relaxed font-medium">
+                      {visibleContradiction.display_message || visibleContradiction.statement_text_snapshot}
+                    </p>
 
-                    <div className="flex flex-1 flex-col gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
-                      <p className="text-xs text-recall-text leading-relaxed font-medium">
-                        {visibleContradiction.display_message || visibleContradiction.statement_text_snapshot}
-                      </p>
+                    <p className="text-[11px] text-recall-textMuted">
+                      {visibleContradiction.reference_source_name || t.home_review_default_source} ·{" "}
+                      {formatShortDate(visibleContradiction.detected_at)}
+                    </p>
 
-                      <p className="text-[11px] text-recall-textMuted">
-                        {visibleContradiction.reference_source_name || t.home_review_default_source} ·{" "}
-                        {formatShortDate(visibleContradiction.detected_at)}
-                      </p>
-
-                      <div className="pt-1 border-t border-amber-500/10">
-                        <button
-                          onClick={() => setCompareContradictionId(visibleContradiction.id)}
-                          className="w-full rounded-lg border border-recall-border bg-recall-bgSoft py-1.5 text-xs font-semibold text-recall-text hover:bg-white/10 transition text-center"
-                        >
-                          {t.contradiction_compare_title}
-                        </button>
-                      </div>
+                    <div className="pt-1 border-t border-amber-500/10">
+                      <button
+                        onClick={() => setCompareContradictionId(visibleContradiction.id)}
+                        className="w-full rounded-lg border border-recall-border bg-recall-bgSoft py-1.5 text-xs font-semibold text-recall-text hover:bg-white/10 transition text-center"
+                      >
+                        {t.contradiction_compare_title}
+                      </button>
                     </div>
-
-                    <button
-                      onClick={goToNextReview}
-                      disabled={clampedReviewIndex === unresolvedContradictions.length - 1}
-                      aria-label={t.home_review_next}
-                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
-                    >
-                      <ChevronRightIcon size={14} />
-                    </button>
                   </div>
 
                   {unresolvedContradictions.length > 1 && (
-                    <p className="text-center text-[11px] text-recall-textMuted">
-                      {clampedReviewIndex + 1} / {unresolvedContradictions.length}
-                    </p>
+                    <div className="flex items-center justify-center gap-3">
+                      <button
+                        onClick={goToPrevReview}
+                        disabled={clampedReviewIndex === 0}
+                        aria-label={t.home_review_prev}
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
+                      >
+                        <ChevronLeftIcon size={14} />
+                      </button>
+                      <p className="text-[11px] text-recall-textMuted">
+                        {clampedReviewIndex + 1} / {unresolvedContradictions.length}
+                      </p>
+                      <button
+                        onClick={goToNextReview}
+                        disabled={clampedReviewIndex === unresolvedContradictions.length - 1}
+                        aria-label={t.home_review_next}
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-recall-border text-recall-textMuted transition hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
+                      >
+                        <ChevronRightIcon size={14} />
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -915,7 +918,7 @@ export default function HomeView({
           </div>
 
           {/* 2열 (중앙): 최근 회의록 */}
-          <div className="col-span-5">
+          <div className="lg:col-span-5">
             <div className="rounded-2xl border border-recall-border bg-recall-bg p-5 shadow-sm h-full flex flex-col justify-between">
               <div>
                 <div className="mb-4 flex items-center justify-between border-b border-recall-border/60 pb-3">
@@ -994,7 +997,7 @@ export default function HomeView({
           </div>
 
           {/* 3열 (오른쪽): 현재시각+날씨 / 바로 가기 / 이번 주 요약 */}
-          <div className="col-span-4 space-y-4">
+          <div className="space-y-4 lg:col-span-4">
             
             <ClockAndWeatherWidget t={t} />
 

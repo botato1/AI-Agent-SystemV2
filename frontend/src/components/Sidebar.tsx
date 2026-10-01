@@ -4,6 +4,7 @@ import { Channel, User, Workspace } from "../types";
 import { Theme } from "../hooks/useTheme";
 import { Category } from "../services/category";
 import { getCategoryColor } from "../utils/categoryColor";
+import { showConfirm } from "../lib/confirm";
 import ProfilePopup from "./ProfilePopup";
 import NotificationBell from "./NotificationBell";
 import InviteMemberModal from "./InviteMemberModal";
@@ -24,9 +25,34 @@ import {
   ChevronUpIcon,
   ChevronRightIcon,
   CheckIcon,
+  PinIcon,
+  CloseIcon,
 } from "./icons";
 
 export type PlaceholderKey = "home" | "dashboard" | "docAnalysis" | "voiceMeeting" | "graph" | "aiChat";
+
+// 자주 쓰는 카테고리를 사용자가 직접 고정해서 맨 위에 두는 기능 - 워크스페이스별로 브라우저에
+// 저장해서 새로고침해도 유지된다. "최근에 누른 게 자동으로 맨 위로" 가는 방식은 번갈아 쓰는
+// 카테고리들의 위치가 클릭할 때마다 계속 바뀌어서 위치를 외우기 어렵다는 문제가 있어, 고정한
+// 것만 위치가 바뀌고 나머지는 원래 순서를 유지하는 수동 고정 방식으로 바꿨다.
+const CATEGORY_PIN_STORAGE_PREFIX = "recall:pinned_categories:";
+
+function loadPinnedCategories(workspaceId: string): string[] {
+  try {
+    const raw = localStorage.getItem(CATEGORY_PIN_STORAGE_PREFIX + workspaceId);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedCategories(workspaceId: string, ids: string[]) {
+  try {
+    localStorage.setItem(CATEGORY_PIN_STORAGE_PREFIX + workspaceId, JSON.stringify(ids));
+  } catch {
+    // 저장 공간이 꽉 찼거나 접근 불가해도 고정 기능 자체는 세션 중엔 계속 동작해야 하므로 무시
+  }
+}
 
 interface SidebarProps {
   workspaces: Workspace[];
@@ -41,6 +67,8 @@ interface SidebarProps {
   selectedCategoryId: string | null;
   onSelectCategory: (id: string | null) => void;
   onCreateCategory: (name: string) => void;
+  onRenameCategory: (id: string, name: string) => void;
+  onDeleteCategory: (id: string) => void;
   activePlaceholder: PlaceholderKey | null;
   voiceMeetingStatus: "recording" | "paused" | null;
   onSelectChannel: (channel: Channel) => void;
@@ -56,9 +84,15 @@ interface SidebarProps {
   onToggleTheme: () => void;
   lang: any;
   t: any;
+  // 모바일(md 미만)에서는 사이드바가 기본 숨김 + 오버레이로 여닫히고, 데스크톱에서는 이
+  // 값과 무관하게 항상 보인다 (아래 className에서 md: 접두사로 처리).
+  isMobileOpen: boolean;
+  onCloseMobile: () => void;
 }
 
 export default function Sidebar({
+  isMobileOpen,
+  onCloseMobile,
   workspaces,
   currentWorkspaceId,
   onSelectWorkspace,
@@ -71,6 +105,8 @@ export default function Sidebar({
   selectedCategoryId,
   onSelectCategory,
   onCreateCategory,
+  onRenameCategory,
+  onDeleteCategory,
   activePlaceholder,
   voiceMeetingStatus,
   onSelectChannel,
@@ -92,6 +128,83 @@ export default function Sidebar({
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
   const addCategoryRef = useRef<HTMLDivElement>(null);
+
+  const [pinnedCategoryIds, setPinnedCategoryIds] = useState<string[]>(() =>
+    loadPinnedCategories(currentWorkspaceId)
+  );
+  useEffect(() => {
+    setPinnedCategoryIds(loadPinnedCategories(currentWorkspaceId));
+  }, [currentWorkspaceId]);
+
+  function handleSelectCategory(id: string | null) {
+    // 카테고리를 고르면, "더보기"를 펼쳐서 찾아 눌렀더라도 매번 수동으로 접을 필요 없이
+    // 바로 접어준다.
+    if (id) setIsCategoryListExpanded(false);
+    onSelectCategory(id);
+  }
+
+  function togglePinCategory(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setPinnedCategoryIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      savePinnedCategories(currentWorkspaceId, next);
+      return next;
+    });
+  }
+
+  // 카테고리 이름변경/삭제는 우클릭 메뉴로 처리한다 - 호버 아이콘을 더 늘리면(핀에 이어
+  // 연필/휴지통까지) 좁은 사이드바 한 줄에 아이콘이 너무 빽빽해지고, 이 앱에 이미 우클릭
+  // 컨텍스트 메뉴 패턴이 있어서(채팅 메시지 삭제, MainArea.tsx) 그걸 재사용한다.
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [categoryDraftName, setCategoryDraftName] = useState("");
+  const [categoryContextMenu, setCategoryContextMenu] = useState<{ id: string; x: number; y: number } | null>(
+    null
+  );
+  const categoryContextMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!categoryContextMenu) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (categoryContextMenuRef.current && !categoryContextMenuRef.current.contains(e.target as Node)) {
+        setCategoryContextMenu(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [categoryContextMenu]);
+
+  function startRenameCategory(cat: Category) {
+    setEditingCategoryId(cat.id);
+    setCategoryDraftName(cat.name);
+    setCategoryContextMenu(null);
+  }
+
+  function commitRenameCategory() {
+    if (editingCategoryId && categoryDraftName.trim()) {
+      onRenameCategory(editingCategoryId, categoryDraftName.trim());
+    }
+    setEditingCategoryId(null);
+  }
+
+  async function handleDeleteCategoryFromMenu(cat: Category) {
+    setCategoryContextMenu(null);
+    const ok = await showConfirm(
+      t.settings_category_delete_confirm(cat.name),
+      t.settings_account_delete_confirm_btn,
+      t.task_cancel
+    );
+    if (ok) onDeleteCategory(cat.id);
+  }
+
+  // 고정한 카테고리만 맨 앞으로 오도록 재정렬한다. 고정 안 한 것끼리는 원래 순서를 그대로
+  // 유지한다 (Array.sort는 동률일 때 상대 순서를 보존하므로 안정적으로 유지됨) - 그래야
+  // 번갈아 쓰는 카테고리들 위치가 클릭할 때마다 바뀌지 않는다.
+  const orderedCategories = [...categories].sort((a, b) => {
+    const aPinned = pinnedCategoryIds.includes(a.id);
+    const bPinned = pinnedCategoryIds.includes(b.id);
+    if (aPinned === bPinned) return 0;
+    return aPinned ? -1 : 1;
+  });
 
   useEffect(() => {
     if (!isAddingCategory) return;
@@ -217,12 +330,23 @@ export default function Sidebar({
   }
 
   return (
-    <div className="flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text select-none">
+    <div
+      // CSS에서 transform 값은 translateX(0)처럼 실질적으로 아무 효과가 없어도 그 요소를
+      // 새 쌓임 맥락(stacking context)으로 만들어버린다. md 이상에서도 md:translate-x-0를
+      // 항상 걸어두면 데스크톱에서도 사이드바가 쌓임 맥락이 돼서, 그 안의 알림 드롭다운
+      // (z-50)이 "사이드바 안에서만" 맨 위일 뿐 사이드바 바깥 본문과 비교해선 더 이상
+      // 제대로 위에 뜨지 못해 본문과 뒤섞여 보이는 버그가 있었다. md 미만(모바일)에서만
+      // translate 클래스가 적용되게 해서, 데스크톱에선 transform 자체가 아예 안 붙어
+      // 쌓임 맥락이 생기지 않게 한다 (= 예전처럼 전역 z-index 비교로 정상 작동).
+      className={`fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-shrink-0 flex-col bg-recall-bg text-recall-text select-none transition-transform duration-200 ease-out md:static md:z-auto ${
+        isMobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
+      }`}
+    >
       {/* 1. 상단 워크스페이스 선택 영역 */}
-      <div ref={workspaceMenuRef} className="relative px-3 pb-3 pt-4">
+      <div ref={workspaceMenuRef} className="relative flex items-center gap-1 px-3 pb-3 pt-4">
         <button
           onClick={() => setIsWorkspaceMenuOpen((v) => !v)}
-          className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-white/5 transition"
+          className="flex min-w-0 flex-1 items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-white/5 transition"
         >
           <span className="truncate text-base font-semibold">{currentWorkspace?.name}</span>
           <ChevronDownIcon
@@ -231,6 +355,13 @@ export default function Sidebar({
               isWorkspaceMenuOpen ? "rotate-180" : ""
             }`}
           />
+        </button>
+        <button
+          onClick={onCloseMobile}
+          title={t.sidebar_collapse_sidebar}
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-recall-textMuted hover:bg-white/5 md:hidden"
+        >
+          <CloseIcon size={16} />
         </button>
 
         {isWorkspaceMenuOpen && (
@@ -381,7 +512,7 @@ export default function Sidebar({
             </div>
           )}
           <button
-            onClick={() => onSelectCategory(null)}
+            onClick={() => handleSelectCategory(null)}
             className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
               selectedCategoryId === null
                 ? "bg-recall-accent/15 text-recall-text font-medium"
@@ -392,39 +523,104 @@ export default function Sidebar({
             <span className="truncate">{t.sidebar_category_all || "All"}</span>
           </button>
           {(() => {
-            const CAP = 6;
-            const selectedIndex = categories.findIndex((c) => c.id === selectedCategoryId);
+            const CAP = 3;
+            const selectedIndex = orderedCategories.findIndex((c) => c.id === selectedCategoryId);
             // 접힌 상태에서도 지금 선택 중인 카테고리는 목록에서 안 사라지게 포함시킨다.
             const needsSelectedPin = !isCategoryListExpanded && selectedIndex >= CAP;
             const visibleCategories = isCategoryListExpanded
-              ? categories
+              ? orderedCategories
               : needsSelectedPin
-              ? [categories[selectedIndex], ...categories.slice(0, CAP - 1)]
-              : categories.slice(0, CAP);
-            const hiddenCount = categories.length - visibleCategories.length;
+              ? [orderedCategories[selectedIndex], ...orderedCategories.slice(0, CAP - 1)]
+              : orderedCategories.slice(0, CAP);
+            const hiddenCount = orderedCategories.length - visibleCategories.length;
 
             return (
               <>
                 {visibleCategories.map((cat) => {
                   const index = categories.indexOf(cat);
+                  const isPinned = pinnedCategoryIds.includes(cat.id);
+                  const isEditing = editingCategoryId === cat.id;
                   return (
-                    <button
+                    <div
                       key={cat.id}
-                      onClick={() => onSelectCategory(cat.id)}
-                      className={`mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-base transition ${
+                      onContextMenu={(e) => {
+                        if (cat.is_default) return;
+                        e.preventDefault();
+                        setCategoryContextMenu({ id: cat.id, x: e.clientX, y: e.clientY });
+                      }}
+                      className={`group mb-0.5 flex w-full items-center rounded-lg transition ${
                         selectedCategoryId === cat.id
                           ? "bg-recall-accent/15 text-recall-text font-medium"
                           : "text-recall-textMuted hover:bg-white/5 hover:text-recall-text"
                       }`}
                     >
-                      <span
-                        className="h-2 w-2 flex-shrink-0 rounded-full"
-                        style={{ backgroundColor: getCategoryColor(index) }}
-                      />
-                      <span className="truncate">{cat.name}</span>
-                    </button>
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          value={categoryDraftName}
+                          onChange={(e) => setCategoryDraftName(e.target.value)}
+                          onFocus={(e) => e.target.select()}
+                          onBlur={commitRenameCategory}
+                          onKeyDown={(e) => e.key === "Enter" && commitRenameCategory()}
+                          className="min-w-0 flex-1 rounded-lg border border-recall-border bg-transparent px-2.5 py-1.5 text-base text-recall-text focus:outline-none focus:border-recall-accent"
+                        />
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handleSelectCategory(cat.id)}
+                            className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left text-base"
+                          >
+                            <span
+                              className="h-2 w-2 flex-shrink-0 rounded-full"
+                              style={{ backgroundColor: getCategoryColor(index) }}
+                            />
+                            <span className="truncate">
+                              {cat.is_default ? t.meeting_category_default_label : cat.name}
+                            </span>
+                          </button>
+                          <button
+                            onClick={(e) => togglePinCategory(cat.id, e)}
+                            title={isPinned ? "고정 해제" : "맨 위에 고정"}
+                            className={`mr-1.5 flex-shrink-0 rounded p-1 transition ${
+                              isPinned
+                                ? "text-recall-accent"
+                                : "text-recall-textMuted opacity-0 hover:text-recall-text group-hover:opacity-100"
+                            }`}
+                          >
+                            <PinIcon size={12} className={isPinned ? "fill-current" : ""} />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   );
                 })}
+                {categoryContextMenu &&
+                  (() => {
+                    const menuCategory = categories.find((c) => c.id === categoryContextMenu.id);
+                    if (!menuCategory) return null;
+                    return (
+                      <div
+                        ref={categoryContextMenuRef}
+                        style={{ position: "fixed", top: categoryContextMenu.y, left: categoryContextMenu.x }}
+                        className="z-50 w-32 rounded-lg border border-recall-border bg-recall-bgSoft p-1.5 shadow-lg"
+                      >
+                        <button
+                          onClick={() => startRenameCategory(menuCategory)}
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-text hover:bg-white/5"
+                        >
+                          <PencilIcon size={13} />
+                          {t.chat_option_rename}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCategoryFromMenu(menuCategory)}
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-recall-danger hover:bg-white/5"
+                        >
+                          <TrashIcon size={13} />
+                          {t.chat_option_delete}
+                        </button>
+                      </div>
+                    );
+                  })()}
                 {categories.length > CAP && (
                   <button
                     onClick={() => setIsCategoryListExpanded((v) => !v)}
@@ -659,8 +855,19 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* 3. 하단 알림 및 사용자 프로필 영역 */}
-      <div className="flex items-center gap-1.5 border-t border-recall-border px-3 pt-2">
+      {/* 3. 하단 사용자 프로필 및 알림 영역 - 디스코드/슬랙처럼 프로필과 보조 아이콘을 한 줄에
+          나란히 두되, 서로 완전히 독립된 버튼으로 둔다 (하나가 다른 하나를 덮거나 클릭
+          영역이 겹치지 않음) */}
+      <div className="flex items-center gap-1.5 border-t border-recall-border px-2 pb-2 pt-2">
+        <ProfilePopup
+          user={user}
+          onOpenProfile={onOpenProfile}
+          onOpenSettings={onOpenSettings}
+          onLogout={onLogout}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          t={t}
+        />
         <NotificationBell
           workspaceId={currentWorkspaceId}
           channels={channels}
@@ -668,15 +875,6 @@ export default function Sidebar({
           onSelectPlaceholder={onSelectPlaceholder}
         />
       </div>
-      <ProfilePopup
-        user={user}
-        onOpenProfile={onOpenProfile}
-        onOpenSettings={onOpenSettings}
-        onLogout={onLogout}
-        theme={theme}
-        onToggleTheme={onToggleTheme}
-        t={t}
-      />
 
       {/* 팀원 초대 모달 */}
       {invitingWorkspace && (

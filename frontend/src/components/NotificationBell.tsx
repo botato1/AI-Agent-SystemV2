@@ -103,7 +103,7 @@ export default function NotificationBell({
   onSelectChannel,
   onSelectPlaceholder,
 }: NotificationBellProps) {
-  const { notifications, unreadCount, isLoading, markRead } = useNotifications(workspaceId);
+  const { notifications, unreadCount, isLoading, markRead, deleteNotification } = useNotifications(workspaceId);
   const [isOpen, setIsOpen] = useState(false);
   // 카톡 알림처럼, 새로 도착한 알림은 잠깐 화면 구석에 떴다가 몇 초 뒤 사라진다 -
   // 벨을 직접 안 열어봐도 회의 임박 등 시간에 민감한 알림을 놓치지 않게 하기 위함.
@@ -159,9 +159,10 @@ export default function NotificationBell({
     toastTimersRef.current.delete(id);
     setToastQueue((prev) => prev.filter((t) => t.id !== id));
   }
-  // 이번 세션에서 클릭해서 읽음 처리된 것들만 잠깐 보여주고 치운다. 예전부터 읽혀있던
-  // 알림은(서버가 처음부터 is_read=true로 내려준 것) 애초에 목록에 안 보이게 한다.
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  // 이번 세션에서 클릭해서 읽음 처리된 것들만 잠깐 보여주고 치운다 (실제 삭제는 아니고
+  // 화면에서만 페이드아웃). 예전부터 읽혀있던 알림은(서버가 처음부터 is_read=true로
+  // 내려준 것) 애초에 목록에 안 보이게 한다.
+  const [fadedIds, setFadedIds] = useState<Set<string>>(new Set());
   const hideTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -186,19 +187,29 @@ export default function NotificationBell({
   function scheduleHide(id: string) {
     if (hideTimersRef.current.has(id)) return;
     const timer = setTimeout(() => {
-      setHiddenIds((prev) => new Set(prev).add(id));
+      setFadedIds((prev) => new Set(prev).add(id));
       hideTimersRef.current.delete(id);
     }, HIDE_AFTER_READ_MS);
     hideTimersRef.current.set(id, timer);
   }
 
+  // 진짜 삭제 API가 생겨서, 이제 "지우기"는 로컬에서 숨기는 게 아니라 서버 row 자체를
+  // 지운다. 낙관적으로 목록에서 바로 빠지므로 페이드아웃 타이머는 취소만 해주면 된다.
   function dismiss(n: AppNotification) {
     const timer = hideTimersRef.current.get(n.id);
     if (timer) clearTimeout(timer);
     hideTimersRef.current.delete(n.id);
-    setHiddenIds((prev) => new Set(prev).add(n.id));
-    // 안 읽은 채로 지우면 읽음 카운트랑 안 맞으니, 지울 때 읽음 처리도 같이 한다
-    if (!n.is_read) markRead(n.id);
+    deleteNotification(n.id);
+  }
+
+  function dismissAll() {
+    if (visibleNotifications.length === 0) return;
+    visibleNotifications.forEach((n) => {
+      const timer = hideTimersRef.current.get(n.id);
+      if (timer) clearTimeout(timer);
+      hideTimersRef.current.delete(n.id);
+      deleteNotification(n.id);
+    });
   }
 
   function handleItemClick(n: AppNotification) {
@@ -223,7 +234,9 @@ export default function NotificationBell({
   }
 
   // 예전부터 읽혀있던 알림(이번 세션에서 안 읽음->읽음으로 안 바뀐 것)은 처음부터 숨긴다
-  const visibleNotifications = notifications.filter((n) => (n.is_read ? hideTimersRef.current.has(n.id) : true) && !hiddenIds.has(n.id));
+  const visibleNotifications = notifications.filter(
+    (n) => (n.is_read ? hideTimersRef.current.has(n.id) : true) && !fadedIds.has(n.id)
+  );
 
   return (
     <div ref={containerRef} className="relative">
@@ -244,7 +257,17 @@ export default function NotificationBell({
         <div className="absolute bottom-full left-0 z-50 mb-2 flex max-h-96 w-80 flex-col rounded-xl border border-recall-border bg-recall-bgSoft shadow-2xl">
           <div className="flex items-center justify-between border-b border-recall-border px-3 py-2.5">
             <p className="text-sm font-semibold text-recall-text">알림</p>
-            {unreadCount > 0 && <p className="text-xs text-recall-textMuted">{unreadCount}개 안 읽음</p>}
+            <div className="flex items-center gap-2.5">
+              {unreadCount > 0 && <p className="text-xs text-recall-textMuted">{unreadCount}개 안 읽음</p>}
+              {visibleNotifications.length > 0 && (
+                <button
+                  onClick={dismissAll}
+                  className="text-xs text-recall-textMuted hover:text-recall-text hover:underline"
+                >
+                  전체 삭제
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto">
