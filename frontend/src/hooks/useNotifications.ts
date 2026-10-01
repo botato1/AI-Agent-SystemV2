@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
+import { AppNotification, markNotificationReadApi, deleteNotificationApi } from "../services/notification";
 import {
-  AppNotification,
-  getNotificationListApi,
-  markNotificationReadApi,
-} from "../services/notification";
+  subscribeNotificationList,
+  setNotificationListCache,
+  refreshNotificationList,
+} from "./notificationListStore";
 
-const POLL_INTERVAL_MS = 15000;
-
-// 워크스페이스 알림함 - 목록 폴링 + 읽음 처리
+// 워크스페이스 알림함 - 목록 폴링(워크스페이스당 공유 폴링 하나로 통합, notificationListStore
+// 참고) + 읽음 처리
 export function useNotifications(workspaceId: string) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   // 초기값을 true로 둬야 한다 - false로 시작하면 첫 렌더에서(진짜 fetch가 끝나기도 전에)
@@ -17,38 +17,35 @@ export function useNotifications(workspaceId: string) {
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
-  async function loadList() {
-    if (!workspaceId) return;
-    const res = await getNotificationListApi(workspaceId);
-    if (res.status === "success") {
-      setNotifications(res.notifications);
-    }
-  }
-
   useEffect(() => {
+    if (!workspaceId) return;
     setIsLoading(true);
-    loadList().finally(() => setIsLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId]);
-
-  // 새 알림을 놓치지 않도록 백그라운드에서 조용히 주기적 재조회 (로딩 스피너 없이)
-  useEffect(() => {
-    if (!workspaceId) return;
-    const timer = setInterval(loadList, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const unsubscribe = subscribeNotificationList(workspaceId, (list) => {
+      setNotifications(list);
+      setIsLoading(false);
+    });
+    return unsubscribe;
   }, [workspaceId]);
 
   async function markRead(id: string) {
-    // 낙관적 업데이트 — 서버 응답 기다리지 않고 바로 읽음 표시
-    setNotifications((prev) =>
+    // 낙관적 업데이트 — 서버 응답 기다리지 않고 바로 읽음 표시 (공유 캐시에 반영해서
+    // NotificationBell/useRealMeetings 등 다른 구독자도 즉시 같이 반영됨)
+    setNotificationListCache(workspaceId, (prev) =>
       prev.map((n) => (n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n))
     );
     const res = await markNotificationReadApi(workspaceId, id);
     if (res.status === "success" && res.notification) {
       const updated = res.notification;
-      setNotifications((prev) => prev.map((n) => (n.id === id ? updated : n)));
+      setNotificationListCache(workspaceId, (prev) => prev.map((n) => (n.id === id ? updated : n)));
     }
+  }
+
+  // 이제 진짜 삭제 API가 있어서, 더 이상 로컬에서 숨기기만 하는 게 아니라 서버 row 자체를
+  // 지운다. 낙관적으로 캐시에서 먼저 빼서 바로 사라지게 하고, 실패하면 다음 이벤트/새로고침
+  // 때 다시 채워진다.
+  async function deleteNotification(id: string) {
+    setNotificationListCache(workspaceId, (prev) => prev.filter((n) => n.id !== id));
+    await deleteNotificationApi(workspaceId, id);
   }
 
   return {
@@ -56,6 +53,7 @@ export function useNotifications(workspaceId: string) {
     unreadCount,
     isLoading,
     markRead,
-    refresh: loadList,
+    deleteNotification,
+    refresh: () => refreshNotificationList(workspaceId),
   };
 }
