@@ -81,10 +81,14 @@ def update_ai_chat_session(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     _get_owned_session_or_404(db, session_id, workspace_id, room_id, current_user_id)
-    if request.category_id is None:
+    if request.category_id is None and request.title is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="수정할 내용이 없습니다.")
-    category = resolve_category(db, workspace_id, request.category_id)
-    session = ai_chat_crud.update_session_category(db, session_id, category.id)
+
+    category_id = None
+    if request.category_id is not None:
+        category_id = resolve_category(db, workspace_id, request.category_id).id
+
+    session = ai_chat_crud.update_session(db, session_id, category_id=category_id, title=request.title)
     return AIChatSessionSchema.model_validate(session)
 
 def _get_owned_session_or_404(db: Session, session_id: UUID, workspace_id: UUID, room_id: UUID, current_user_id: str):
@@ -262,10 +266,14 @@ def update_standalone_ai_chat_session(
 ):
     require_workspace_member(db, workspace_id, current_user_id)
     _get_owned_standalone_session_or_404(db, session_id, workspace_id, current_user_id)
-    if request.category_id is None:
+    if request.category_id is None and request.title is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="수정할 내용이 없습니다.")
-    category = resolve_category(db, workspace_id, request.category_id)
-    session = ai_chat_crud.update_session_category(db, session_id, category.id)
+
+    category_id = None
+    if request.category_id is not None:
+        category_id = resolve_category(db, workspace_id, request.category_id).id
+
+    session = ai_chat_crud.update_session(db, session_id, category_id=category_id, title=request.title)
     return AIChatSessionSchema.model_validate(session)
 
 # 대화 삭제 (워크스페이스 단독)

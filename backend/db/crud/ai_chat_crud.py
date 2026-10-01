@@ -94,6 +94,22 @@ def update_session_category(db: Session, session_id: uuid.UUID, category_id: uui
     return row
 
 
+def update_session(
+    db: Session, session_id: uuid.UUID,
+    category_id: Optional[uuid.UUID] = None, title: Optional[str] = None,
+) -> Optional[AiChatSession]:
+    """category_id/title 중 넘어온 값만 부분 수정한다 — None이면 그 필드는 건드리지 않음."""
+    row = get_session(db, session_id)
+    if row:
+        if category_id is not None:
+            row.category_id = category_id
+        if title is not None:
+            row.title = title
+        db.commit()
+        db.refresh(row)
+    return row
+
+
 def get_session(db: Session, session_id: uuid.UUID) -> Optional[AiChatSession]:
     return (
         db.query(AiChatSession)

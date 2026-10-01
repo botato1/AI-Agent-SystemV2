@@ -144,8 +144,9 @@ class AIChatSessionListResponse(BaseModel):
     sessions: list[AIChatSessionSchema] = Field(default_factory=list)
 
 
-class AIChatSessionUpdateRequest(BaseModel):   
-    category_id: Optional[UUID] = None   
+class AIChatSessionUpdateRequest(BaseModel):
+    category_id: Optional[UUID] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
 # =============================================================================
