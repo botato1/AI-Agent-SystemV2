@@ -188,7 +188,15 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     if (res.status === "success" && res.session) {
       const session = res.session;
       sessionsOpIdRef.current++;
-      setSessions((prev) => [session, ...prev]);
+      // 새 세션은 고정된 적이 없으니(is_pinned: false) 고정 블록보다 위로 가면 안 된다.
+      // 무조건 맨 앞에 꽂으면, 제목이 아직 안 생긴 지금은 고정된 대화들 위에 떴다가
+      // 첫 메시지 응답 후 목록을 다시 받아올 때(백엔드가 is_pinned DESC로 정렬) 그제서야
+      // 고정 아래로 내려가는 게 보여서 - 처음부터 고정 블록 바로 아래, 비고정 맨 앞에 끼운다.
+      setSessions((prev) => {
+        const firstUnpinnedIndex = prev.findIndex((s) => !s.is_pinned);
+        const insertAt = firstUnpinnedIndex === -1 ? prev.length : firstUnpinnedIndex;
+        return [...prev.slice(0, insertAt), session, ...prev.slice(insertAt)];
+      });
       skipNextLoadRef.current = true;
       setActiveSessionId(session.id);
       messagesOpIdRef.current++;
