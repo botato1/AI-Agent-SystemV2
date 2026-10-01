@@ -404,6 +404,75 @@ export async function getMeetingListApi(workspaceId: string): Promise<GetMeeting
   }
 }
 
+export interface GetMeetingListStreamTicketResponse {
+  status: "success" | "error";
+  wsTicket: string | null;
+  message: string;
+  error: string | null;
+}
+
+/**
+ * 1-1. 회의 목록 실시간 스트림 연결 티켓 발급 API
+ * (GET /api/workspaces/{workspace_id}/meetings/stream/ticket)
+ *
+ * 회의 상태가 바뀔 때(시작/종료/예약/일시정지/재개/업로드)마다 서버가 이 티켓으로 연결한
+ * 웹소켓에 meeting_updated 이벤트를 push해준다 - 더 이상 목록을 주기적으로 폴링할 필요가
+ * 없다 (room/document stream과 동일한 패턴).
+ */
+export async function getMeetingListStreamTicketApi(
+  workspaceId: string
+): Promise<GetMeetingListStreamTicketResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      wsTicket: null,
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/stream/ticket`,
+      { method: "GET" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      let defaultMsg = "실시간 연결 티켓 발급에 실패했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스입니다.";
+
+      return {
+        status: "error",
+        wsTicket: null,
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      wsTicket: data.ws_ticket,
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getMeetingListStreamTicketApi error:", error);
+    return {
+      status: "error",
+      wsTicket: null,
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
 /**
  * 2. 회의 단건 조회 API (GET /api/workspaces/{workspace_id}/meetings/{meeting_id})
  */

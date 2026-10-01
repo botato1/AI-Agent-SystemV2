@@ -7,7 +7,6 @@ import {
   MeetingAttendee,
   MeetingDocumentItem,
   SplitSegmentParams,
-  getMeetingListApi,
   deleteMeetingApi,
   getMeetingSegmentsApi,
   getMeetingSummaryApi,
@@ -28,6 +27,7 @@ import {
 } from "../services/meeting";
 import { BackendTask, getSuggestedTasksApi, updateTaskStatusApi, deleteTaskApi } from "../services/task";
 import { useNotifications } from "./useNotifications";
+import { subscribeMeetingsList, setMeetingsListCache, refreshMeetingsList } from "./meetingListStore";
 
 // 업로드된 회의(STT 요약/결정사항) 실제 백엔드 연동
 export function useRealMeetings(workspaceId: string, selectedCategoryId?: string | null) {
@@ -45,24 +45,22 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
 
   const selectedMeeting = meetings.find((m) => m.id === selectedMeetingId) ?? null;
 
-  async function loadMeetings() {
-    if (!workspaceId) return;
-    const res = await getMeetingListApi(workspaceId);
-    if (res.status === "success") {
-      setMeetings(res.meetings);
-      return;
-    }
-    // 조용히 실패하고 끝나면(네트워크 순단 등) 목록이 그대로 멈춰버리니 한 번은 재시도한다.
-    setTimeout(async () => {
-      const retryRes = await getMeetingListApi(workspaceId);
-      if (retryRes.status === "success") setMeetings(retryRes.meetings);
-    }, 2000);
-  }
-
+  // 목록 조회/폴링은 워크스페이스당 하나만 돌도록 공유 스토어(meetingListStore)에 구독한다.
+  // HomeView/MeetingsPanel이 동시에 이 훅을 각자 생성해도(실제로 그런다) 폴링은 한 번만 돈다 -
+  // 예전엔 훅 인스턴스마다 독립적으로 5초 setInterval을 돌려서, 같은 워크스페이스를 보는
+  // 탭 하나에서도 목록 조회가 중복으로 나갔고 사용자 수만큼 그대로 곱해졌다.
   useEffect(() => {
     setSelectedMeetingId(null);
+    if (!workspaceId) {
+      setMeetings([]);
+      return;
+    }
     setIsLoading(true);
-    loadMeetings().finally(() => setIsLoading(false));
+    const unsubscribe = subscribeMeetingsList(workspaceId, (list) => {
+      setMeetings(list);
+      setIsLoading(false);
+    });
+    return unsubscribe;
   }, [workspaceId]);
 
   // 사이드바에서 카테고리를 바꾸면 지금 보던 회의가 새 카테고리에 없을 수 있으니, 상세 패널을
@@ -70,16 +68,6 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
   useEffect(() => {
     setSelectedMeetingId(null);
   }, [selectedCategoryId]);
-
-  // 목록을 주기적으로 재조회 - 다른 팀원이 새로 시작한 회의는 내 로컬 목록에 아직 없어서
-  // "진행 중인 회의가 있을 때만" 폴링하는 조건으로는 절대 못 잡는다(새로고침해야만 보이던
-  // 원인). 그래서 이 페이지를 보고 있는 동안엔 로컬 목록 상태와 무관하게 항상 폴링한다.
-  useEffect(() => {
-    if (!workspaceId) return;
-    const timer = setInterval(loadMeetings, 5000);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId]);
 
   async function loadDetail() {
     if (!workspaceId || !selectedMeetingId) {
@@ -197,7 +185,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     setIsUploading(false);
 
     if (res.status === "success" && res.meeting) {
-      setMeetings((prev) => [res.meeting as Meeting, ...prev]);
+      setMeetingsListCache(workspaceId, (prev) => [res.meeting as Meeting, ...prev]);
       setSelectedMeetingId(res.meeting.id);
     } else {
       alert(`음성 업로드 실패: ${res.message}`);
@@ -350,7 +338,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     const res = await renameMeetingApi(workspaceId, id, title);
     if (res.status === "success" && res.meeting) {
       const updated = res.meeting;
-      setMeetings((prev) => prev.map((m) => (m.id === id ? updated : m)));
+      setMeetingsListCache(workspaceId, (prev) => prev.map((m) => (m.id === id ? updated : m)));
     } else {
       alert(`회의 제목 변경 실패: ${res.message}`);
     }
@@ -365,7 +353,9 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     });
     if (res.status === "success" && res.meeting) {
       const updated = res.meeting;
-      setMeetings((prev) => prev.map((m) => (m.id === selectedMeetingId ? updated : m)));
+      setMeetingsListCache(workspaceId, (prev) =>
+        prev.map((m) => (m.id === selectedMeetingId ? updated : m))
+      );
       return true;
     }
     alert(`장소 수정 실패: ${res.message}`);
@@ -375,7 +365,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
   // 회의 종료 직후 서버 목록을 다시 받아오기 전에도 "분석 중" 상태를 바로 보여주기 위한
   // 낙관적 갱신 - reload()가 지연되거나 조용히 실패해도 화면이 빈 상태로 안 보이게 한다.
   function upsertMeeting(meeting: Meeting) {
-    setMeetings((prev) =>
+    setMeetingsListCache(workspaceId, (prev) =>
       prev.some((m) => m.id === meeting.id)
         ? prev.map((m) => (m.id === meeting.id ? { ...m, ...meeting } : m))
         : [meeting, ...prev]
@@ -386,7 +376,7 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     const res = await deleteMeetingApi(workspaceId, id);
 
     if (res.status === "success") {
-      setMeetings((prev) => prev.filter((m) => m.id !== id));
+      setMeetingsListCache(workspaceId, (prev) => prev.filter((m) => m.id !== id));
       setSelectedMeetingId((prev) => (prev === id ? null : prev));
     } else {
       alert(`회의 삭제 실패: ${res.message}`);
@@ -427,6 +417,6 @@ export function useRealMeetings(workspaceId: string, selectedCategoryId?: string
     splitSegment,
     updateFullSummary,
     updateShortSummary,
-    reload: loadMeetings,
+    reload: () => refreshMeetingsList(workspaceId),
   };
 }

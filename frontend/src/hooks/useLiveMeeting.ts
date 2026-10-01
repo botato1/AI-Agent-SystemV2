@@ -16,9 +16,9 @@ import {
   updateMeetingInfoApi,
   updateMeetingSegmentApi,
   getMeetingApi,
-  getMeetingListApi,
   getMeetingSegmentsApi,
 } from "../services/meeting";
+import { subscribeMeetingsList } from "./meetingListStore";
 
 export type LiveMeetingStatus =
   | "idle"
@@ -221,30 +221,20 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   const [isViewer, setIsViewer] = useState(false);
   const isViewerRef = useRef(false);
 
-  // 아무것도 안 하고 있을 때만(idle) 참가 가능한 회의가 있는지 주기적으로 확인
+  // 아무것도 안 하고 있을 때만(idle) 참가 가능한 회의가 있는지 확인한다. 목록 조회 자체는
+  // meetingListStore가 워크스페이스당 하나로 공유해서 폴링하므로, 여기서 직접 또 폴링하지
+  // 않고 그 결과만 구독한다 (예전엔 이 훅이 독자적으로 5초마다 getMeetingListApi를 호출해서,
+  // useRealMeetings 쪽 폴링과 중복으로 나가고 있었다).
   useEffect(() => {
     if (!workspaceId || status !== "idle") {
       setJoinableMeeting(null);
       return;
     }
 
-    let cancelled = false;
-
-    async function poll() {
-      const res = await getMeetingListApi(workspaceId);
-      if (cancelled) return;
-      if (res.status === "success") {
-        const found = res.meetings.find((m) => m.status === "recording");
-        setJoinableMeeting(found || null);
-      }
-    }
-
-    poll();
-    const timer = setInterval(poll, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+    return subscribeMeetingsList(workspaceId, (list) => {
+      const found = list.find((m) => m.status === "recording");
+      setJoinableMeeting(found || null);
+    });
   }, [workspaceId, status]);
 
   const statusRef = useRef<LiveMeetingStatus>(status);
