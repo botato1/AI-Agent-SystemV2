@@ -66,6 +66,13 @@ async def _meeting_reminder_loop():
 async def _start_meeting_reminder_loop():
     asyncio.create_task(_meeting_reminder_loop())
 
+@app.on_event("startup")
+async def _save_main_event_loop():
+    # 동기 라우트 핸들러/백그라운드 스레드에서 WS로 안전하게 push하기 위해,
+    # 메인 이벤트 루프를 저장해둔다 (broadcast_*_event_sync 참조).
+    from backend.core.main_loop import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(rag_router)

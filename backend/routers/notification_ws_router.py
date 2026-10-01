@@ -4,6 +4,9 @@
 
 meeting_list_ws_router.py와 동일한 패턴. create_notification() 호출부가
 전부 동기(def) 함수/백그라운드 작업 안이라서 동기 래퍼를 같이 둔다.
+
+[리뷰 반영] asyncio.run() 대신 run_coroutine_threadsafe로 메인 이벤트 루프
+위에서 직접 실행 - meeting_list_ws_router.py 상단 docstring 참조.
 """
 
 import asyncio
@@ -12,6 +15,7 @@ import uuid
 from fastapi import APIRouter, Query, WebSocket
 from jose import JWTError
 
+from backend.core.main_loop import get_main_loop
 from backend.core.security import verify_notification_ws_ticket
 from backend.core.ws_ticket_store import consume_ticket
 from backend.db.crud import workspace_crud
@@ -40,9 +44,12 @@ async def broadcast_notification_event(workspace_id: uuid.UUID, payload: dict) -
 
 def broadcast_notification_event_sync(workspace_id: uuid.UUID, payload: dict) -> None:
     """동기 컨텍스트(def 라우트 핸들러, 백그라운드 작업)에서 호출하기 위한 래퍼.
-    그 컨텍스트엔 실행 중인 이벤트 루프가 없어 asyncio.run으로 새로 연다."""
+    WebSocket 연결이 묶여있는 메인 이벤트 루프 위에서 스레드-안전하게 실행한다."""
     try:
-        asyncio.run(broadcast_notification_event(workspace_id, payload))
+        future = asyncio.run_coroutine_threadsafe(
+            broadcast_notification_event(workspace_id, payload), get_main_loop(),
+        )
+        future.result(timeout=5)
     except Exception as e:
         print(f"[notification_ws_router] 동기 컨텍스트 push 실패: {repr(e)}")
 
