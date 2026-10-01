@@ -83,7 +83,16 @@ def list_sessions(
     # 정렬 기준이 없으면 DB가 반환하는 순서가 쿼리마다 들쭉날쭉해서, 프론트에서
     # "목록 위치가 갑자기 바뀐다"고 느끼는 원인이 됐다 - 최근에 답변이 온 대화가
     # 위로 오도록 updated_at 내림차순으로 명시한다 (오래된 대화일수록 아래로).
-    return query.order_by(AiChatSession.updated_at.desc()).all()
+    return query.order_by(AiChatSession.is_pinned.desc(), AiChatSession.updated_at.desc()).all()
+
+
+def set_session_pinned(db: Session, session_id: uuid.UUID, is_pinned: bool) -> Optional[AiChatSession]:
+    row = get_session(db, session_id)
+    if row:
+        row.is_pinned = is_pinned
+        db.commit()
+        db.refresh(row)
+    return row
 
 def update_session_category(db: Session, session_id: uuid.UUID, category_id: uuid.UUID) -> Optional[AiChatSession]:
     row = get_session(db, session_id)

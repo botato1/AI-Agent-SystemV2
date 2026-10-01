@@ -139,6 +139,7 @@ class AIChatSessionSchema(TimestampSchema, SoftDeleteSchema):
         default=None,
         max_length=200,
     )
+    is_pinned: bool = False
 
 class AIChatSessionListResponse(BaseModel):
     sessions: list[AIChatSessionSchema] = Field(default_factory=list)
@@ -147,6 +148,10 @@ class AIChatSessionListResponse(BaseModel):
 class AIChatSessionUpdateRequest(BaseModel):
     category_id: Optional[UUID] = None
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+class AIChatSessionPinRequest(BaseModel):
+    is_pinned: bool
 
 
 # =============================================================================
