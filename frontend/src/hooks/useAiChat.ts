@@ -3,9 +3,13 @@ import {
   createAiChatSessionApi,
   getAiChatSessionsApi,
   updateAiChatSessionCategoryApi,
+  renameAiChatSessionApi,
+  pinAiChatSessionApi,
   createRoomAiChatSessionApi,
   getRoomAiChatSessionsApi,
   updateRoomAiChatSessionCategoryApi,
+  renameRoomAiChatSessionApi,
+  pinRoomAiChatSessionApi,
   deleteAiChatSessionApi,
   sendAiChatMessageApi,
   getAiChatMessagesApi,
@@ -20,6 +24,7 @@ export interface AiChatDisplayMessage {
   role: AIChatRole;
   content: string;
   modelName?: string | null;
+  createdAt?: string;
   isPending?: boolean;
   errorText?: string;
   sources?: AIMessageSource[];
@@ -59,6 +64,16 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
   const messagesOpIdRef = useRef(0);
   const sessionsOpIdRef = useRef(0);
 
+  // createSession()이 새로 만든(=메시지가 하나도 없는 게 확실한) 세션으로 activeSessionId를
+  // 바꾸면, 아래 loadMessages useEffect가 "세션이 바뀌었다"고 보고 그 세션의 메시지 목록을
+  // 다시 GET한다. 그런데 sendMessage()가 이어서 방금 친 메시지를 낙관적으로 화면에 추가하는
+  // 것과 이 GET이 경쟁하게 되고, 방금 보낸 메시지가 서버에 저장되기 전에 이 GET이 먼저
+  // 응답(빈 배열)으로 돌아오면 opId 세대가 더 앞서 있어 낙관적으로 추가한 메시지를 그대로
+  // 지워버린다 - "로그인 직후 첫 메시지가 씹히는" 버그의 원인. 어차피 방금 만든 세션은
+  // 비어있는 게 확실하므로(createSession이 이미 setMessages([])로 반영해둠), 이 GET 자체를
+  // 건너뛴다.
+  const skipNextLoadRef = useRef(false);
+
   // 대화 목록 불러오기 - 최근 활동순으로 내려오므로 첫 번째를 기본 선택.
   // 단, 이미 선택된 대화가 목록에 여전히 존재하면 그 선택을 유지한다 - 그렇지 않으면
   // 메시지 전송 후 제목/정렬을 갱신하려고 부르는 것뿐인데 사용자가 보고 있던 대화가
@@ -74,6 +89,8 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     setIsLoadingSessions(false);
 
     if (res.status === "success" && opId === sessionsOpIdRef.current) {
+      // 백엔드가 이제 고정(is_pinned) 먼저, 그다음 최근 활동순으로 정렬해서 내려주므로
+      // 프론트에서 다시 정렬하지 않고 그대로 신뢰한다.
       setSessions(res.sessions);
       setActiveSessionId((prev) =>
         prev && res.sessions.some((s) => s.id === prev) ? prev : res.sessions[0]?.id ?? null
@@ -100,6 +117,11 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     // 이전 세션의 응답이 지금 보고 있는 세션의 메시지 목록을 덮어쓰지 않도록 막는다.
     let cancelled = false;
 
+    if (skipNextLoadRef.current) {
+      skipNextLoadRef.current = false;
+      return;
+    }
+
     async function loadMessages() {
       if (!workspaceId || !activeSessionId) {
         messagesOpIdRef.current++;
@@ -120,6 +142,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
             role: m.role,
             content: m.content,
             modelName: m.model_name,
+            createdAt: m.created_at,
           }))
         );
         // 근거자료가 없는 답변엔 "근거자료 보기" 버튼 자체를 숨기려면 있는지 여부를
@@ -141,6 +164,21 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     setActiveSessionId(sessionId);
   }
 
+  // "새 대화" 버튼을 눌렀을 때 쓰는 카테고리 - 실제 세션 생성은 첫 메시지를 보낼 때까지
+  // 미루므로, 그 사이에 선택해둔 카테고리를 잠깐 기억해뒀다가 그때 같이 넘긴다.
+  const pendingNewSessionCategoryIdRef = useRef<string | undefined>(undefined);
+
+  // "새 대화" - 여기서 바로 서버에 세션을 만들지 않고 화면만 빈 상태로 돌린다. 바로 만들어
+  // 버리면, 아무 말도 안 하고 다른 대화로 넘어가거나 나가버린 경우에도 빈 대화가 서버에
+  // 남아서 목록에 의미 없는 "새 대화" 항목이 계속 쌓인다. 실제 생성은 sendMessage()가
+  // activeSessionId가 없을 때 하는 지연 생성에 맡긴다 - 첫 메시지를 보내야만 진짜 대화가 된다.
+  function startNewChat(categoryId?: string) {
+    pendingNewSessionCategoryIdRef.current = categoryId;
+    messagesOpIdRef.current++;
+    setActiveSessionId(null);
+    setMessages([]);
+  }
+
   // 새 대화 생성 - 목록 맨 앞에 추가하고 바로 선택. categoryId를 주면 그 카테고리로 태깅된다
   // (사이드바에서 특정 카테고리를 선택한 채로 새 대화를 시작한 경우).
   async function createSession(categoryId?: string): Promise<string | null> {
@@ -151,6 +189,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
       const session = res.session;
       sessionsOpIdRef.current++;
       setSessions((prev) => [session, ...prev]);
+      skipNextLoadRef.current = true;
       setActiveSessionId(session.id);
       messagesOpIdRef.current++;
       setMessages([]);
@@ -171,6 +210,34 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
       return true;
     }
     alert(`카테고리 변경 실패: ${res.message}`);
+    return false;
+  }
+
+  // 대화 이름 직접 변경
+  async function renameSession(sessionId: string, title: string): Promise<boolean> {
+    const res = roomId
+      ? await renameRoomAiChatSessionApi(workspaceId, roomId, sessionId, title)
+      : await renameAiChatSessionApi(workspaceId, sessionId, title);
+    if (res.status === "success" && res.session) {
+      const updated = res.session;
+      setSessions((prev) => prev.map((s) => (s.id === sessionId ? updated : s)));
+      return true;
+    }
+    alert(`이름 변경 실패: ${res.message}`);
+    return false;
+  }
+
+  // 대화 고정/해제 - 고정 여부가 목록 정렬 기준(고정 먼저)에도 영향을 주므로, 단순히
+  // 로컬 필드만 바꾸지 않고 목록을 다시 받아와 순서까지 서버 기준으로 맞춘다.
+  async function togglePinSession(sessionId: string, isPinned: boolean): Promise<boolean> {
+    const res = roomId
+      ? await pinRoomAiChatSessionApi(workspaceId, roomId, sessionId, isPinned)
+      : await pinAiChatSessionApi(workspaceId, sessionId, isPinned);
+    if (res.status === "success") {
+      await loadSessions();
+      return true;
+    }
+    alert(`고정 설정 실패: ${res.message}`);
     return false;
   }
 
@@ -200,7 +267,8 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
 
     let sessionId = activeSessionId;
     if (!sessionId) {
-      sessionId = await createSession();
+      sessionId = await createSession(pendingNewSessionCategoryIdRef.current);
+      pendingNewSessionCategoryIdRef.current = undefined;
       if (!sessionId) return;
     }
 
@@ -212,11 +280,12 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     // 그 GET이 지금 추가하는 첫 메시지보다 늦게 "비어있음"으로 응답하면 방금 추가한
     // 메시지를 지워버리므로("첫 대화가 안 보이고 다음 대화부터 나옴" 버그의 원인),
     // 세대를 올려 그 늦은 응답이 무시되게 한다.
+    const nowIso = new Date().toISOString();
     messagesOpIdRef.current++;
     setMessages((prev) => [
       ...prev,
-      { id: userTempId, role: "user", content: trimmed },
-      { id: assistantTempId, role: "assistant", content: "", isPending: true },
+      { id: userTempId, role: "user", content: trimmed, createdAt: nowIso },
+      { id: assistantTempId, role: "assistant", content: "", isPending: true, createdAt: nowIso },
     ]);
     setIsSending(true);
 
@@ -243,6 +312,7 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
                   role: assistant.role,
                   content: assistant.content,
                   modelName: assistant.model_name,
+                  createdAt: assistant.created_at,
                   isPending: false,
                 }
               : m
@@ -285,7 +355,10 @@ export function useAiChat(workspaceId: string, selectedCategoryId?: string | nul
     activeSessionId,
     selectSession,
     createSession,
+    startNewChat,
     changeSessionCategory,
+    renameSession,
+    togglePinSession,
     deleteSession,
     messages,
     isLoadingSessions,
