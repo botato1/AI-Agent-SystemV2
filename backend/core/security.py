@@ -293,3 +293,33 @@ def verify_document_ws_ticket(token: str) -> dict[str, Any]:
         raise JWTError("티켓에 필요한 정보가 없습니다.")
 
     return payload
+
+
+def create_meeting_list_ws_ticket(
+    user_id: str, workspace_id: str, expires_delta: Optional[timedelta] = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "workspace_id": workspace_id,
+        "type": "meeting_list_ws_ticket",
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def verify_meeting_list_ws_ticket(token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+
+    if payload.get("type") != "meeting_list_ws_ticket":
+        raise JWTError("회의 목록 WebSocket 티켓이 아닙니다.")
+
+    if not payload.get("sub") or not payload.get("workspace_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+
+    return payload
