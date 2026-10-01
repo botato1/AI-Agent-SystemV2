@@ -16,6 +16,7 @@ import AuthView from "./components/AuthView";
 import PasswordResetConfirmView from "./components/PasswordResetConfirmView";
 import { ToastContainer } from "./lib/toast";
 import { ConfirmDialogContainer } from "./lib/confirm";
+import { MenuIcon } from "./components/icons";
 
 import { Channel, User, Workspace } from "./types";
 import { useTheme } from "./hooks/useTheme";
@@ -154,6 +155,10 @@ export default function App() {
 
   const [showProfile, setShowProfile] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // 모바일 화면(md 미만)에서는 사이드바가 항상 떠 있으면 본문이 찌부러지니, 기본으로는
+  // 숨겨두고 햄버거 버튼으로 오버레이처럼 열고 닫는다. 데스크톱(md 이상)에서는 이 값과
+  // 무관하게 Sidebar가 항상 보이도록 CSS에서 처리한다(Sidebar.tsx 참고).
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
   // 1. 자동 로그인 체크
@@ -583,7 +588,18 @@ export default function App() {
     <div key={currentUser.id} className="flex h-screen w-screen overflow-hidden">
       <ToastContainer />
       <ConfirmDialogContainer />
+
+      {/* 모바일에서 사이드바를 오버레이로 열었을 때 뒤쪽을 어둡게 깔고, 탭하면 닫히게 함 */}
+      {isMobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setIsMobileSidebarOpen(false)}
+        />
+      )}
+
       <Sidebar
+        isMobileOpen={isMobileSidebarOpen}
+        onCloseMobile={() => setIsMobileSidebarOpen(false)}
         workspaces={workspaces}
         currentWorkspaceId={currentWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
@@ -596,10 +612,18 @@ export default function App() {
         selectedCategoryId={selectedCategoryId}
         onSelectCategory={setSelectedCategoryId}
         onCreateCategory={(name) => categoriesState.createCategory(name)}
+        onRenameCategory={(id, name) => categoriesState.renameCategory(id, name)}
+        onDeleteCategory={(id) => categoriesState.deleteCategory(id)}
         activePlaceholder={selection.type === "placeholder" ? selection.key : null}
         voiceMeetingStatus={voiceMeetingStatus}
-        onSelectChannel={(channel) => setSelection({ type: "channel", channel })}
-        onSelectPlaceholder={(key) => setSelection({ type: "placeholder", key })}
+        onSelectChannel={(channel) => {
+          setSelection({ type: "channel", channel });
+          setIsMobileSidebarOpen(false);
+        }}
+        onSelectPlaceholder={(key) => {
+          setSelection({ type: "placeholder", key });
+          setIsMobileSidebarOpen(false);
+        }}
         onCreateChannel={handleCreateChannel}
         onRenameChannel={handleRenameChannel}
         onDeleteChannel={handleDeleteChannel}
@@ -613,7 +637,18 @@ export default function App() {
         t={t}
       />
 
-      <div className="flex h-full flex-1 flex-col overflow-hidden">
+      <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+        {/* 모바일 전용 상단 바 - 사이드바가 숨겨져 있으니 여는 버튼이 필요함 */}
+        <button
+          onClick={() => setIsMobileSidebarOpen(true)}
+          className="flex h-11 flex-shrink-0 items-center gap-2 border-b border-recall-border px-3 text-recall-textMuted md:hidden"
+        >
+          <MenuIcon size={18} />
+          <span className="truncate text-sm font-medium text-recall-text">
+            {currentWorkspace?.name}
+          </span>
+        </button>
+
         {bannerMeeting && (
           <LiveMeetingBanner
             title={bannerMeeting.title}

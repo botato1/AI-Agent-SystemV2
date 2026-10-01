@@ -41,4 +41,5 @@ export {
   Scissors as SplitIcon,
   GripVertical as GripIcon,
   Lightbulb as InsightIcon,
+  Pin as PinIcon,
 } from "lucide-react";

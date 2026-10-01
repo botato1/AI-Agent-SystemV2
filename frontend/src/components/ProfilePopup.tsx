@@ -51,9 +51,9 @@ export default function ProfilePopup({
   }
 
   return (
-    <div ref={wrapperRef} className="relative mt-auto px-2 pb-2">
+    <div ref={wrapperRef} className="relative min-w-0 flex-1">
       {isOpen && (
-        <div className="absolute bottom-14 left-2 right-2 rounded-xl border border-recall-border bg-recall-bgSoft p-1.5 shadow-lg z-20">
+        <div className="absolute bottom-full left-0 right-0 z-20 mb-2 rounded-xl border border-recall-border bg-recall-bgSoft p-1.5 shadow-lg">
           {menuItems.map((item) => (
             <button
               key={item.label}
