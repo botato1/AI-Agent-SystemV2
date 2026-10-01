@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import (
     BaseModel,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -148,6 +149,18 @@ class AIChatSessionListResponse(BaseModel):
 class AIChatSessionUpdateRequest(BaseModel):
     category_id: Optional[UUID] = None
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        # [리뷰 반영] min_length=1은 trim을 안 해서 " "(공백만)도 통과함 -
+        # 공백 제거 후 빈 문자열이면 거부한다.
+        if v is None:
+            return v
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("제목은 공백만으로 구성될 수 없습니다.")
+        return trimmed
 
 
 class AIChatSessionPinRequest(BaseModel):
