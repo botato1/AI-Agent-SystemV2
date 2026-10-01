@@ -3,9 +3,11 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.security import create_notification_ws_ticket
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, notification_crud
 from backend.schemas.notification_schema import (
@@ -30,6 +32,22 @@ def _get_notification_or_404(db: Session, notification_id: UUID, workspace_id: U
             detail="알림을 찾을 수 없습니다.",
         )
     return notification
+
+
+class NotificationWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 워크스페이스 알림 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=NotificationWsTicketResponse)
+def get_notification_ws_ticket(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_notification_ws_ticket(current_user_id, str(workspace_id))
+    return NotificationWsTicketResponse(ws_ticket=ticket)
 
 
 # 알림 목록 조회
@@ -73,6 +91,19 @@ def mark_notification_read(
     notification_crud.mark_read(db, notification_id)
     db.refresh(notification)
     return NotificationSchema.model_validate(notification)
+
+
+# 알림 삭제
+@router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_notification_api(
+    workspace_id: UUID,
+    notification_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    _get_notification_or_404(db, notification_id, workspace_id, current_user_id)
+    notification_crud.delete_notification(db, notification_id)
 
 @preferences_router.get("/notification-preferences", response_model=NotificationPreferencesSchema)
 def get_notification_preferences_api(

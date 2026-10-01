@@ -88,6 +88,12 @@ def mark_read(db: Session, notification_id: uuid.UUID) -> None:
         row.read_at = func.now()
         db.commit()
 
+
+def delete_notification(db: Session, notification_id: uuid.UUID) -> None:
+    """소프트 삭제 컬럼이 없는 테이블이라 실제 row를 지운다."""
+    db.query(Notification).filter(Notification.id == notification_id).delete()
+    db.commit()
+
 def reminder_already_sent(db: Session, ref_type: str, ref_id: uuid.UUID, notif_type: str) -> bool:
     return (
         db.query(Notification)
