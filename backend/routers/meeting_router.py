@@ -4,6 +4,7 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from pydantic import BaseModel
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -11,7 +12,7 @@ import io
 import wave
 from sqlalchemy.orm import Session
 
-from backend.core.security import create_ws_ticket
+from backend.core.security import create_ws_ticket, create_meeting_list_ws_ticket
 from backend.core.dependencies import get_current_user_id, require_workspace_member
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud, file_crud, workspace_crud, contradiction_crud, auth_crud
@@ -21,7 +22,7 @@ from backend.services.meeting_service import process_uploaded_audio_stt
 from backend.modules.rag.chroma_client import MEETING_COLLECTION, search_hybrid
 from backend.modules.judgment import agenda_reminder
 from backend.db.modules import Meeting
-from backend.routers import meeting_ws_router
+from backend.routers import meeting_ws_router, meeting_list_ws_router
 from backend.schemas.task_schema import TaskResponse, TaskListResponse
 from backend.schemas.meeting_schema import (
     MeetingStartRequest,
@@ -126,6 +127,21 @@ def _resolve_category(db: Session, workspace_id: uuid.UUID, category_id: uuid.UU
         )
     return category
 
+class MeetingListWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 워크스페이스 회의 목록 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=MeetingListWsTicketResponse)
+def get_meeting_list_ws_ticket(
+    workspace_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_meeting_list_ws_ticket(current_user_id, str(workspace_id))
+    return MeetingListWsTicketResponse(ws_ticket=ticket)
+
 
 # 실시간 녹음 시작
 @router.post("/start", response_model=MeetingStartResponse, status_code=status.HTTP_201_CREATED)
@@ -164,6 +180,10 @@ def start_meeting_api(
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting.id))
     reminder_result = agenda_reminder.check_on_session_start(db, category.id)
+
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(meeting.id), "status": meeting.status},
+    )
 
     return MeetingStartResponse(
         **MeetingResponse.model_validate(meeting).model_dump(),
@@ -243,6 +263,10 @@ async def upload_meeting_api(
         meeting.id, workspace_id, category.id, file_content,
     )
 
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(meeting.id), "status": meeting.status},
+    )
+
     return MeetingResponse.model_validate(meeting)
 
 
@@ -299,6 +323,10 @@ def end_meeting_api(
         meeting_id=str(meeting_id),
         workspace_id=str(workspace_id),
         category_id=str(meeting.category_id),
+    )
+
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(meeting.id), "status": meeting.status},
     )
 
     return MeetingResponse.model_validate(meeting)
@@ -447,6 +475,10 @@ def schedule_meeting_api(
 
     meeting_crud.set_attendees(db, meeting.id, request.attendee_ids)
 
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(meeting.id), "status": meeting.status},
+    )
+
     return MeetingResponse.model_validate(meeting)
 
 
@@ -521,6 +553,10 @@ def begin_scheduled_meeting_api(
 
     ws_ticket = create_ws_ticket(current_user_id, str(meeting_id))
     reminder_result = agenda_reminder.check_on_session_start(db, transitioned.category_id)
+
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(transitioned.id), "status": transitioned.status},
+    )
 
     return MeetingStartResponse(
         **MeetingResponse.model_validate(transitioned).model_dump(),
@@ -1063,6 +1099,9 @@ def pause_meeting_api(
         )
 
     meeting_ws_router.set_stream_paused(meeting_id, True)
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(transitioned.id), "status": transitioned.status},
+    )
     return MeetingResponse.model_validate(transitioned)
 
 
@@ -1104,6 +1143,9 @@ def resume_meeting_api(
         )
 
     meeting_ws_router.set_stream_paused(meeting_id, False)
+    meeting_list_ws_router.broadcast_meeting_list_event_sync(
+        workspace_id, {"event": "meeting_updated", "meeting_id": str(transitioned.id), "status": transitioned.status},
+    )
     return MeetingResponse.model_validate(transitioned)
 
 # 화자 라벨(SPEAKER_00 등)을 실명으로 매핑 — 회의 진행 중/종료 후 언제든 호출 가능

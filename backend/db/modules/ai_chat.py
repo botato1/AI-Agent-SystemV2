@@ -1,6 +1,6 @@
 """AI Chat (채팅방 단위 개인 RAG QA) — 내 파트"""
 
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 
 from backend.db.base import Base
@@ -18,6 +18,7 @@ class AiChatSession(Base):
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True) 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title = Column(String(200), nullable=True)
+    is_pinned = Column(Boolean, nullable=False, server_default="false")
     created_at = created_at_col()
     updated_at = updated_at_col()
     deleted_at = Column(DateTime(timezone=True), nullable=True)

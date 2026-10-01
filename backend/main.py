@@ -16,12 +16,14 @@ from backend.routers.auth_router import router as auth_router
 from backend.routers.workspace_router import router as workspace_router
 from backend.routers.meeting_router import router as meeting_router, decisions_router as decisions_router
 from backend.routers.meeting_ws_router import router as meeting_ws_router
+from backend.routers.meeting_list_ws_router import router as meeting_list_ws_router
 from backend.routers.room_ws_router import router as room_ws_router
 from backend.routers.contradiction_router import router as contradiction_router
 from backend.routers.worktree_router import router as worktree_router
 from backend.routers.ai_chat_router import router as ai_chat_router, standalone_router as ai_chat_standalone_router
 from backend.routers.notification_router import router as notification_router
 from backend.routers.notification_router import router as notification_router, preferences_router as notification_preferences_router
+from backend.routers.notification_ws_router import router as notification_ws_router
 from backend.routers.dashboard_router import router as dashboard_router
 from backend.routers.webhook_router import router as webhook_router
 from backend.routers.category_router import router as category_router, item_router as category_item_router
@@ -64,6 +66,13 @@ async def _meeting_reminder_loop():
 async def _start_meeting_reminder_loop():
     asyncio.create_task(_meeting_reminder_loop())
 
+@app.on_event("startup")
+async def _save_main_event_loop():
+    # 동기 라우트 핸들러/백그라운드 스레드에서 WS로 안전하게 push하기 위해,
+    # 메인 이벤트 루프를 저장해둔다 (broadcast_*_event_sync 참조).
+    from backend.core.main_loop import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(rag_router)
@@ -75,12 +84,14 @@ app.include_router(meeting_router)
 app.include_router(decisions_router)
 app.include_router(meeting_ws_router)
 app.include_router(room_ws_router)
+app.include_router(meeting_list_ws_router)
 app.include_router(contradiction_router)
 app.include_router(worktree_router)
 app.include_router(ai_chat_router)
 app.include_router(ai_chat_standalone_router)
 app.include_router(notification_router)
 app.include_router(notification_preferences_router)
+app.include_router(notification_ws_router)
 app.include_router(dashboard_router)
 app.include_router(webhook_router)
 app.include_router(category_router)

@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from backend.db.crud import meeting_crud, notification_crud
 from backend.db.session import SessionLocal
+from backend.routers import notification_ws_router
 
 REMINDER_MINUTES_BEFORE = 10
 KST = ZoneInfo("Asia/Seoul")
@@ -52,6 +53,9 @@ def check_and_send_meeting_reminders(reminder_minutes: int = REMINDER_MINUTES_BE
                     ref_type="meeting",
                     ref_id=meeting.id,
                 )
+            notification_ws_router.broadcast_notification_event_sync(
+                meeting.workspace_id, {"event": "notification_created"},
+            )
     except Exception as e:
         print(f"[meeting_reminder_service] 알림 확인 중 오류: {repr(e)}")
     finally:
