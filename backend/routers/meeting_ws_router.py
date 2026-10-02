@@ -550,7 +550,17 @@ async def meeting_stream_ws(
 
     offset_ms = 0
     if participant_name and meeting.started_at:
-        offset_ms = max(0, int((datetime.now(timezone.utc) - meeting.started_at).total_seconds() * 1000))
+        # [수정 - 리뷰 반영] 일시정지 중이었던 시간을 안 빼면, 일시정지 중 끊겼다가
+        # 재접속하는 참가자의 녹음 시작 offset이 실제보다 더 뒤로 밀려서
+        # (_merge_individual_recordings에서) 다른 참가자와 싱크가 어긋난다.
+        # 이 경로(paused 상태에서 재접속)는 /join·/stream이 recording만 허용하던
+        # 이전엔 애초에 막혀있었는데, JOINABLE_MEETING_STATUSES로 넓히면서
+        # 처음 실제로 도달 가능해졌다.
+        offset_ms = max(
+            0,
+            int((datetime.now(timezone.utc) - meeting.started_at).total_seconds() * 1000)
+            - meeting.paused_duration_ms,
+        )
     recording_file = _open_recording_file(meeting_id, participant_name, offset_ms)
 
     _register_connection(meeting_id)
