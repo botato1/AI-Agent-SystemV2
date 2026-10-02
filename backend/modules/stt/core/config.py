@@ -183,7 +183,13 @@ def is_confident(avg_logprob: float | None, no_speech_prob: float | None) -> boo
 # VAD 기반 청크 분할 설정 (시간이 아니라 '말이 끊기는 지점' 기준으로 자름)
 REALTIME_SAMPLE_RATE = 16000
 REALTIME_MIN_CHUNK_SEC = 2      # 너무 짧은 청크는 흘려보내지 않음
-REALTIME_MAX_CHUNK_SEC = 28     # 침묵이 안 와도 이 길이가 되면 강제로 자름
+# 침묵이 안 와도 이 길이가 되면 강제로 자름. env로 스윕 가능.
+# 실측(2026-09-28, finetune/stt/replay_meeting_ws.py로 재현): 확정 청크 지연
+# (로그의 latency=)은 정밀 모델이 그 청크를 통째로 전사하는 시간이라 청크 길이에
+# 비례한다. 같은 회의 기준 28초 → 평균 4.64초·최대 6.28초, 10초 → 2.08초·3.48초,
+# 6초 → 1.11초·2.86초. 대신 짧을수록 강제 컷이 늘어 문장이 부자연스럽게 끊긴다 —
+# 채택 값은 cpCER까지 같이 재서 정할 것(NEXT.md 10번). 기본값은 28 그대로.
+REALTIME_MAX_CHUNK_SEC = int(os.getenv("REALTIME_MAX_CHUNK_SEC", "28"))
 REALTIME_SILENCE_MS = 500       # 이만큼 침묵이 지속되면 발화 구간 종료로 판단
 REALTIME_FLUSH_CHECK_INTERVAL_SEC = 0.3  # VAD 기반 flush 판정 주기 (매 프레임 돌리면 CPU 낭비)
 REALTIME_FLUSH_MIN_TAIL_SEC = 0.5        # 회의 종료 시 이보다 짧은 잔여 버퍼는 버림 (노이즈 수준)
@@ -595,6 +601,16 @@ SPEAKER_MIN_MARGIN = float(os.getenv("SPEAKER_MIN_MARGIN", "0.05"))
 #
 # ⚠️ 위 수치는 회의 한 건에서 나왔고, 그중 세 명의 프로필이 바로 그 회의 오디오에서
 #    만들어졌다(평가와 등록이 같은 오디오 = 순환). 새 녹음으로 반드시 재검증할 것.
+#
+# 재검증 결과 (2026-09-16): 다중 회의 등록(C, 2026-08-19~20) 채택 이후
+# 이 값을 재계산했다 — finetune/stt/recalibrate_absolute_floor.py, 여러
+# 회의·화자로 leave-one-out. 집계로는 EER 근사 지점이 0.40으로 나왔지만,
+# 실제 cpCER로 검증하니 0.35/0.40/0.45 **전부 특정 인물 쌍(가동현·이준오
+# 관련)의 오수락을 하나도 못 줄였고 cpCER만 나빠졌다** — 이 두 사람의 오수락
+# 유사도가 0.45보다도 높아서, 절대 문턱을 어느 쪽으로 옮겨도 못 가른다.
+# ⇒ 0.35를 유지하는 건 "이 값이 최적이라서"가 아니라 "어떤 값도 이 문제를
+#   못 풀어서"다. 문턱 조정으로 다시 시도하지 말 것 — 자세한 근거는
+#   finetune/stt/EXPERIMENTS.md의 "여섯 번째 기각" 절.
 SPEAKER_ABSOLUTE_FLOOR = float(os.getenv("SPEAKER_ABSOLUTE_FLOOR", "0.35"))
 
 # 재분석에서 오디오를 훑는 창 크기와 간격.

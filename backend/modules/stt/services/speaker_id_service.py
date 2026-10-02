@@ -34,7 +34,11 @@ _MIN_EMBED_SEC = 1.0
 # "화자 C"를 하나 더 보는 정도) 서로 다른 사람을 합치는 것(위험, 남의 발언이
 # 같은 사람으로 묶임)보다 낫다는 그날의 결론을 그대로 적용했다.
 # ⚠️ 실측 없이 정한 초안값이다 — 실제 회의로 확인 전까지는 이 값을 낮추지 말 것.
-_UNASSIGNED_MERGE_THRESHOLD = 0.75
+# 실측(2026-09-16)으로 재검토 대상이 됨: 등록 프로필끼리도 1등 유사도 평균이
+# 0.419, 하위 5%가 0.161(recalibrate_absolute_floor.py)이라 0.75는 같은 사람이
+# 두 번 말해도 거의 못 넘는 값일 수 있다 — env로 스윕할 수 있게 열어둔다.
+# 기본값은 바꾸지 않았다(2026-08-20 묶음 판정 실험 결론 반영, 위 문서 참고).
+_UNASSIGNED_MERGE_THRESHOLD = float(os.getenv("UNASSIGNED_MERGE_THRESHOLD", "0.75"))
 
 
 class SpeechBrainEmbedding:
