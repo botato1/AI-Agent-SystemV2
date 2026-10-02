@@ -17,6 +17,8 @@ import {
   updateMeetingSegmentApi,
   getMeetingApi,
   getMeetingSegmentsApi,
+  getMeetingActiveParticipantsApi,
+  MeetingActiveParticipant,
 } from "../services/meeting";
 import { subscribeMeetingsList } from "./meetingListStore";
 
@@ -220,6 +222,34 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
   // "회의 종료" 대신 "나가기"만 가능하게 UI를 다르게 보여줘야 해서 필요하다.
   const [isViewer, setIsViewer] = useState(false);
   const isViewerRef = useRef(false);
+
+  // 지금 이 회의에 실제로 들어와 있는 사람 목록 - 예전엔 아예 안 보여주고 있었다.
+  // 실시간으로 들고 나는 걸 반영해야 해서 녹음/일시정지 중엔 짧은 주기로 다시 불러온다.
+  // 다른 폴링들과 달리 "지금 실제로 라이브 회의를 보고 있는 동안만" 도니까 상시 부하는 아니다.
+  const [activeParticipants, setActiveParticipants] = useState<MeetingActiveParticipant[]>([]);
+
+  useEffect(() => {
+    if (!workspaceId || !meeting || (status !== "recording" && status !== "paused")) {
+      setActiveParticipants([]);
+      return;
+    }
+
+    let cancelled = false;
+    async function loadParticipants() {
+      const res = await getMeetingActiveParticipantsApi(workspaceId, meeting!.id);
+      if (!cancelled && res.status === "success") {
+        setActiveParticipants(res.participants);
+      }
+    }
+
+    loadParticipants();
+    const timer = setInterval(loadParticipants, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, meeting?.id, status]);
 
   // 아무것도 안 하고 있을 때만(idle) 참가 가능한 회의가 있는지 확인한다. 목록 조회 자체는
   // meetingListStore가 워크스페이스당 하나로 공유해서 폴링하므로, 여기서 직접 또 폴링하지
@@ -895,6 +925,7 @@ export function useLiveMeeting(workspaceId: string, currentUser: CurrentUserInfo
     errorMessage,
     joinableMeeting,
     isViewer,
+    activeParticipants,
     start,
     join,
     beginScheduled,

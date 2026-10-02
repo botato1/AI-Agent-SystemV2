@@ -1970,6 +1970,77 @@ export async function getMeetingAttendeesApi(
   }
 }
 
+export interface MeetingActiveParticipant {
+  user_id: string;
+  display_name: string | null;
+  profile_image_url: string | null;
+}
+
+export interface GetMeetingActiveParticipantsResponse {
+  status: "success" | "error";
+  participants: MeetingActiveParticipant[];
+  message: string;
+  error: string | null;
+}
+
+// 지금 이 회의에 실제로 웹소켓으로 연결돼있는(=참가 중인) 사람 목록. 참석자 명단(attendees)과
+// 달리 "지금 들어와 있는지"를 보여주는 용도라 실시간성이 필요 - 호출하는 쪽에서 짧은 주기로
+// 다시 불러야 한다.
+export async function getMeetingActiveParticipantsApi(
+  workspaceId: string,
+  meetingId: string
+): Promise<GetMeetingActiveParticipantsResponse> {
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+  const token = localStorage.getItem("access_token");
+
+  if (!token) {
+    return {
+      status: "error",
+      participants: [],
+      message: "인증 토큰이 없습니다. 다시 로그인해 주세요.",
+      error: "UNAUTHORIZED",
+    };
+  }
+
+  try {
+    const response = await authFetch(
+      `${API_BASE_URL}/api/workspaces/${workspaceId}/meetings/${meetingId}/active-participants`,
+      { method: "GET" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      let defaultMsg = "참가자 목록을 불러오지 못했습니다.";
+      if (response.status === 401) defaultMsg = "인증이 만료되었습니다. 다시 로그인해 주세요.";
+      else if (response.status === 403) defaultMsg = "워크스페이스 멤버만 조회할 수 있습니다.";
+      else if (response.status === 404) defaultMsg = "존재하지 않는 워크스페이스이거나 회의입니다.";
+
+      return {
+        status: "error",
+        participants: [],
+        message: data.message || defaultMsg,
+        error: data.error || `HTTP_${response.status}`,
+      };
+    }
+
+    return {
+      status: "success",
+      participants: data.participants || [],
+      message: "성공",
+      error: null,
+    };
+  } catch (error) {
+    console.error("getMeetingActiveParticipantsApi error:", error);
+    return {
+      status: "error",
+      participants: [],
+      message: "서버와 통신할 수 없습니다.",
+      error: "NETWORK_ERROR",
+    };
+  }
+}
+
 /**
  * 회의 참석자 지정/수정 API (PATCH /api/workspaces/{workspace_id}/meetings/{meeting_id}/attendees)
  */

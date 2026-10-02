@@ -396,23 +396,31 @@ export default function App() {
     }
   }
 
-  // 워크스페이스 생성 API
+  // 워크스페이스 생성 API - 응답이 오기 전엔 다시 못 누르게 막는다. 원래 이 가드가
+  // 없어서 더블클릭하면 응답 오기 전에 한 번 더 호출돼 워크스페이스가 2개씩 생기고 있었다.
+  const isCreatingWorkspaceRef = useRef(false);
   async function handleCreateWorkspace() {
-    const wsName = `${t.name_new_workspace}${workspaces.length + 1}`;
+    if (isCreatingWorkspaceRef.current) return;
+    isCreatingWorkspaceRef.current = true;
+    try {
+      const wsName = `${t.name_new_workspace}${workspaces.length + 1}`;
 
-    const apiRes = await createWorkspaceApi(wsName);
+      const apiRes = await createWorkspaceApi(wsName);
 
-    if (apiRes.status === "success" && apiRes.workspace) {
-      const newWorkspace = apiRes.workspace;
+      if (apiRes.status === "success" && apiRes.workspace) {
+        const newWorkspace = apiRes.workspace;
 
-      setWorkspaces((prev) => [...prev, newWorkspace]);
-      setChannelsByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
+        setWorkspaces((prev) => [...prev, newWorkspace]);
+        setChannelsByWorkspace((prev) => ({ ...prev, [newWorkspace.id]: [] }));
 
-      setCurrentWorkspaceId(newWorkspace.id);
-      localStorage.setItem("last_workspace_id", newWorkspace.id);
-      setSelection({ type: "placeholder", key: "home" });
-    } else {
-      alert(`워크스페이스 생성 실패: ${apiRes.message}`);
+        setCurrentWorkspaceId(newWorkspace.id);
+        localStorage.setItem("last_workspace_id", newWorkspace.id);
+        setSelection({ type: "placeholder", key: "home" });
+      } else {
+        alert(`워크스페이스 생성 실패: ${apiRes.message}`);
+      }
+    } finally {
+      isCreatingWorkspaceRef.current = false;
     }
   }
 
@@ -721,6 +729,7 @@ export default function App() {
           errorMessage={liveMeeting.errorMessage}
           joinableMeeting={liveMeeting.joinableMeeting}
           isViewer={liveMeeting.isViewer}
+          activeParticipants={liveMeeting.activeParticipants}
           onStart={liveMeeting.start}
           onJoin={liveMeeting.join}
           onPause={liveMeeting.pause}
