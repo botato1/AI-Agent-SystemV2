@@ -478,7 +478,10 @@ async def meeting_stream_ws(
     if not meeting or meeting.workspace_id != workspace_id:
         await websocket.close(code=4404)
         return
-    if meeting.status != "recording":
+    # [수정] REST /join이 recording/paused 둘 다 허용하는데 여기는 recording만
+    # 허용해서, 일시정지 상태인 회의는 join으로 티켓은 받아도 실제 WS 연결은
+    # 거부당하는 불일치가 있었다. /join과 동일한 기준으로 맞춘다.
+    if meeting.status not in ("recording", "paused"):
         await websocket.close(code=4409)
         return
 
