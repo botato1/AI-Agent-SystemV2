@@ -18,7 +18,6 @@ from ..core.config import (
     REALTIME_FORCE_CUT_MIN_SILENCE_MS,
     REALTIME_PARTIAL_INTERVAL_SEC,
     REALTIME_PARTIAL_MIN_SEC,
-    REALTIME_PARTIAL_TRIM_LOOKBACK_SEC,
     REALTIME_PARTIAL_SPEAKER_TAIL_SEC,
     REALTIME_SPEAKER_SPLIT_ENABLED,
     REALTIME_SPEAKER_SPLIT_SILENCE_MS,
@@ -173,11 +172,6 @@ class RealtimeSTTSession:
         # Local Agreement 스트리밍 상태 (청크가 끝나기 전에도 실시간으로 텍스트를 흘려보내기 위함)
         self._last_partial_at = 0.0
         self._prev_partial_words: list[str] = []
-        # 트림 상태 — 이미 확정돼 다시 안 훑어도 되는 버퍼 앞부분(초 단위)과,
-        # 그 구간의 누적 확정 텍스트. maybe_stream_partial() 참고.
-        self._partial_trim_sec = 0.0
-        self._partial_confirmed_prefix = ""
-        self._prev_confirmed_len = 0
 
     def push_audio(self, pcm16_bytes: bytes) -> np.ndarray:
         """
@@ -299,9 +293,6 @@ class RealtimeSTTSession:
             self._total_samples = 0
         self._last_partial_at = 0.0
         self._prev_partial_words = []
-        self._partial_trim_sec = 0.0
-        self._partial_confirmed_prefix = ""
-        self._prev_confirmed_len = 0
         return chunk, offset_sec
 
     def _transcribe(
@@ -801,22 +792,16 @@ class RealtimeSTTSession:
     async def maybe_stream_partial(self) -> dict | None:
         """
         Local Agreement 스트리밍: 청크가 끝나길(VAD 침묵) 기다리지 않고,
-        1초 주기로 지금까지 쌓인 버퍼를 Fast 모델로 다시 훑어서
+        1초 주기로 지금까지 쌓인 버퍼 전체를 Fast 모델로 다시 훑어서
         '이전 결과와 일치하는 앞부분'만 확정 텍스트로 흘려보낸다.
         발화자가 안 쉬고 계속 말해도 화면에 실시간으로 텍스트가 갱신되는 효과.
         확정 여부는 결국 process_chunk()의 Precise Pass가 최종 보정한다.
 
-        실측(2026-09-28): 원래는 매번 버퍼 "전체"를 다시 훑어서, 청크가 길어질수록
-        스캔 비용도 같이 늘었다(거의 제곱 비용 — 긴 청크에서 지연 평균 4.6초·최대
-        6.3초). 이미 확정된 앞부분은 다음 스캔부터 빼고 훑도록 트림한다
-        (self._partial_trim_sec). Qwen3-ASR은 30초 미만 오디오에 세그먼트를
-        하나만 주므로(Whisper처럼 문장별 타임스탬프가 없음) 정확한 경계를 몰라
-        **단어 개수 비율로 근사**한다 — 부정확할 수 있으니 두 가지로 보수적으로
-        간다: ① 직전 스캔 대비 확정 단어 수가 "두 번째로도" 그대로일 때만 커밋
-        (한 번의 우연한 일치로 자르지 않음), ② 그 경계 바로 앞 여유
-        (REALTIME_PARTIAL_TRIM_LOOKBACK_SEC)는 트림하지 않고 남겨 다음 스캔의
-        문맥으로 쓴다. 화면에 보이는 확정 텍스트의 타이밍 자체는 이전과 동일하다
-        (누적 확정분 + 이번 스캔의 합의분) — 트림 여부와 무관하게 매 스캔 계산한다.
+        ⚠️ 확정된 앞부분을 재스캔에서 빼는 트림 최적화는 시도했다가 되돌렸다
+        (2026-10-02, PR #163 리뷰). 지연 지표(latency=)는 정밀 패스 시간이라 이 경로와
+        무관해 효과가 없었고, 단어 비율 근사로 자르면 앞 문맥을 잃어 이미 확정한
+        단어가 뒤늦게 달라질 수 있는 새 실패 모드만 생긴다. 근거는
+        finetune/stt/NEXT.md 10번 참고.
         """
         now = time.monotonic()
         if now - self._last_partial_at < REALTIME_PARTIAL_INTERVAL_SEC:
@@ -824,11 +809,7 @@ class RealtimeSTTSession:
         if self._buffer_duration_sec() < REALTIME_PARTIAL_MIN_SEC:
             return None
 
-        full_buffer = self._materialize_buffer()
-        trim_samples = int(self._partial_trim_sec * REALTIME_SAMPLE_RATE)
-        buffer = full_buffer[trim_samples:]
-        tail_duration_sec = len(buffer) / REALTIME_SAMPLE_RATE
-
+        buffer = self._materialize_buffer()
         loop = asyncio.get_event_loop()
         # 전사와 화자 판정을 병렬로 — 순차로 돌리면 임베딩 시간만큼 자막이 늦어진다
         # (process_chunk의 확정 경로와 같은 구조).
@@ -845,35 +826,12 @@ class RealtimeSTTSession:
 
         confirmed_words = _longest_common_prefix(self._prev_partial_words, words)
         tentative_words = words[len(confirmed_words):]
-
-        confirmed_text = (
-            self._partial_confirmed_prefix
-            + (" " if self._partial_confirmed_prefix and confirmed_words else "")
-            + " ".join(confirmed_words)
-        ).strip()
-
-        # 트림 판정 — 이번 스캔의 확정 단어 수가 직전 스캔과 같으면(=경계가
-        # 두 번째로도 안 변함) 그 지점까지 커밋한다. 아니면 다음 스캔을 위해
-        # 이번 결과만 남겨두고 트림은 보류.
-        if confirmed_words and len(confirmed_words) == self._prev_confirmed_len and words:
-            ratio = len(confirmed_words) / len(words)
-            commit_sec = tail_duration_sec * ratio - REALTIME_PARTIAL_TRIM_LOOKBACK_SEC
-            if commit_sec > 0:
-                self._partial_trim_sec += commit_sec
-                self._partial_confirmed_prefix = confirmed_text
-                self._prev_partial_words = []
-                self._prev_confirmed_len = 0
-            else:
-                self._prev_partial_words = words
-                self._prev_confirmed_len = len(confirmed_words)
-        else:
-            self._prev_partial_words = words
-            self._prev_confirmed_len = len(confirmed_words)
+        self._prev_partial_words = words
 
         return {
             "session_id": self.session_id,
             "type": "partial",
-            "confirmed_text": confirmed_text,
+            "confirmed_text": " ".join(confirmed_words),
             "tentative_text": " ".join(tentative_words),
             # 잠정 화자 — 확정본이 도착하면 덮어써진다. 프론트는 이 값을 '추정'으로
             # 다뤄야 한다(확정 세그먼트의 speaker와 달리 바뀔 수 있음).

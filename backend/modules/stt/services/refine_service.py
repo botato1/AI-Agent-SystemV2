@@ -351,6 +351,27 @@ async def _refine_group(meeting_id, meeting_dir, meta, meta_path, app_state) -> 
     return meta
 
 
+def _check_aligned_audio(
+    base_len: int, base_sr: int, other_len: int, other_sr: int, tol_sec: float = 0.1,
+) -> None:
+    """전사용 오디오가 원본 audio와 같은 샘플레이트·길이인지 확인한다.
+
+    턴 경계는 원본 audio 기준으로 계산돼 전사용 오디오에서도 같은 샘플 위치로 잘린다.
+    샘플레이트나 길이가 다르면 파이썬 슬라이싱은 범위를 벗어나도 에러를 안 내서
+    전사가 조용히 어긋나므로, 시작 전에 크게 실패시킨다(PR #163 리뷰).
+    """
+    if other_sr != base_sr:
+        raise ValueError(
+            f"transcribe_audio_file 샘플레이트 불일치: {other_sr} != {base_sr} "
+            f"(원본 audio와 같아야 턴 경계를 그대로 쓸 수 있다)"
+        )
+    if abs(other_len - base_len) > base_sr * tol_sec:
+        raise ValueError(
+            f"transcribe_audio_file 길이 불일치: {other_len / base_sr:.2f}s "
+            f"vs 원본 {base_len / base_sr:.2f}s (허용 오차 {tol_sec}초)"
+        )
+
+
 async def _diarize_and_segment(
     app_state, audio: np.ndarray, sample_rate: int,
     enrolled_count: int, expected_speakers: int | None,
@@ -505,11 +526,12 @@ async def _refine(meeting_id: str, app_state, force: bool = False) -> dict | Non
     # 붕괴하는 문제를 우회하려는 시도 — NEXT.md 7번/IDEAS.md #8 참고.
     transcribe_audio_file = meta.get("transcribe_audio_file")
     if transcribe_audio_file:
-        transcribe_audio, _ = sf.read(
+        transcribe_audio, transcribe_sr = sf.read(
             os.path.join(meeting_dir, transcribe_audio_file), dtype="float32",
         )
         if transcribe_audio.ndim > 1:
             transcribe_audio = transcribe_audio.mean(axis=1)
+        _check_aligned_audio(len(audio), sample_rate, len(transcribe_audio), transcribe_sr)
     else:
         transcribe_audio = audio
 

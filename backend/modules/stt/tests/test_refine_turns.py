@@ -8,9 +8,11 @@ _resolve_overlapping_turns) 유닛테스트.
 입력→출력이 결정론적인 경계 조건(턴 병합 간격, 겹침 우선순위)은 훨씬 싸고
 빠르게 유닛테스트로 지킬 수 있다.
 """
+import pytest
+
 from stt.services.refine_service import (
     MAX_TURN_GAP_SEC, MIN_TRIMMED_TURN_SEC,
-    _free_pieces, _merge_adjacent_turns, _resolve_overlapping_turns,
+    _check_aligned_audio, _free_pieces, _merge_adjacent_turns, _resolve_overlapping_turns,
 )
 
 
@@ -101,3 +103,25 @@ class TestResolveOverlappingTurns:
         turns = [_turn("B", 5.0, 7.0), _turn("A", 0.0, 2.0)]
         result = _resolve_overlapping_turns(turns)
         assert [t["speaker"] for t in result] == ["A", "B"]
+
+
+class TestCheckAlignedAudio:
+    SR = 16000
+
+    def test_identical_passes(self):
+        _check_aligned_audio(self.SR * 10, self.SR, self.SR * 10, self.SR)
+
+    def test_few_samples_off_passes(self):
+        # 48kHz 향상본을 정수비로 다시 16kHz로 내리면 길이가 몇 샘플 어긋날 수 있다
+        _check_aligned_audio(self.SR * 10, self.SR, self.SR * 10 - 3, self.SR)
+
+    def test_sample_rate_mismatch_raises(self):
+        with pytest.raises(ValueError, match="샘플레이트"):
+            _check_aligned_audio(self.SR * 10, self.SR, self.SR * 10, 48000)
+
+    def test_length_mismatch_beyond_tolerance_raises(self):
+        with pytest.raises(ValueError, match="길이"):
+            _check_aligned_audio(self.SR * 10, self.SR, self.SR * 9, self.SR)
+
+    def test_length_just_inside_tolerance_passes(self):
+        _check_aligned_audio(self.SR * 10, self.SR, self.SR * 10 + int(self.SR * 0.09), self.SR)

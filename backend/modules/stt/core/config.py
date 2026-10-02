@@ -183,11 +183,12 @@ def is_confident(avg_logprob: float | None, no_speech_prob: float | None) -> boo
 # VAD 기반 청크 분할 설정 (시간이 아니라 '말이 끊기는 지점' 기준으로 자름)
 REALTIME_SAMPLE_RATE = 16000
 REALTIME_MIN_CHUNK_SEC = 2      # 너무 짧은 청크는 흘려보내지 않음
-# 침묵이 안 와도 이 길이가 되면 강제로 자름. env로 스윕 가능 — 실측(2026-09-22):
-# maybe_stream_partial()이 매초 버퍼 전체를 다시 훑어서(아래 REALTIME_PARTIAL_INTERVAL_SEC),
-# 청크가 길어질수록 매 스캔의 연산량도 같이 늘어난다(거의 제곱 비용). 28초 기준
-# 실측 지연이 평균 4.6초·최대 6.3초까지 나왔다 — realtime_service.py의
-# maybe_stream_partial 문서, finetune/stt/replay_meeting_ws.py로 재현 가능.
+# 침묵이 안 와도 이 길이가 되면 강제로 자름. env로 스윕 가능.
+# 실측(2026-09-28, finetune/stt/replay_meeting_ws.py로 재현): 확정 청크 지연
+# (로그의 latency=)은 정밀 모델이 그 청크를 통째로 전사하는 시간이라 청크 길이에
+# 비례한다. 같은 회의 기준 28초 → 평균 4.64초·최대 6.28초, 10초 → 2.08초·3.48초,
+# 6초 → 1.11초·2.86초. 대신 짧을수록 강제 컷이 늘어 문장이 부자연스럽게 끊긴다 —
+# 채택 값은 cpCER까지 같이 재서 정할 것(NEXT.md 10번). 기본값은 28 그대로.
 REALTIME_MAX_CHUNK_SEC = int(os.getenv("REALTIME_MAX_CHUNK_SEC", "28"))
 REALTIME_SILENCE_MS = 500       # 이만큼 침묵이 지속되면 발화 구간 종료로 판단
 REALTIME_FLUSH_CHECK_INTERVAL_SEC = 0.3  # VAD 기반 flush 판정 주기 (매 프레임 돌리면 CPU 낭비)
@@ -204,16 +205,6 @@ REALTIME_FORCE_CUT_MIN_SILENCE_MS = 100
 # 청크가 끝나기 전에 미리 텍스트를 흘려보내기 위한 파라미터
 REALTIME_PARTIAL_INTERVAL_SEC = 1.0   # 이 주기로 버퍼 전체를 다시 훑어 잠정 텍스트 갱신
 REALTIME_PARTIAL_MIN_SEC = 1.0        # 이보다 짧은 버퍼는 아직 잠정 전사 안 함
-
-# 실측(2026-09-28): 매초 버퍼 "전체"를 다시 훑어서, 청크가 길어질수록(최대
-# REALTIME_MAX_CHUNK_SEC까지) 매 스캔 비용도 같이 늘었다(거의 제곱 비용) —
-# 긴 청크에서 지연 평균 4.6초·최대 6.3초까지 나온 원인. 이미 확정된 구간은
-# 다시 안 훑도록 트림하되, Qwen3-ASR은 30초 미만 오디오에 세그먼트를 하나만
-# 주므로(Whisper처럼 문장별 타임스탬프가 없음) 단어 비율로 근사한다 — 정확한
-# 경계가 아니므로 직전 스캔 대비 확정 단어 수가 "두 번째로도" 그대로일 때만
-# 커밋하고(realtime_service.maybe_stream_partial 참고), 그 경계 바로 앞
-# 이 여유만큼은 트림하지 않고 남겨 다음 스캔의 문맥으로 쓴다.
-REALTIME_PARTIAL_TRIM_LOOKBACK_SEC = 1.5
 
 # 잠정 자막에 화자를 붙일 때 쓸 오디오 길이(버퍼 끝에서부터).
 #
