@@ -10,6 +10,11 @@ from sqlalchemy.exc import IntegrityError
 from backend.db.modules import Task, Decision, Meeting, MeetingAttendee, MeetingSegment, MeetingSummary, User
 from backend.modules.rag import chroma_client
 
+# 녹음 중이거나 일시정지된 회의 - REST 재연결(/join)과 WS 스트림 연결 둘 다 이 기준으로
+# 입장을 허용해야 한다. 예전엔 각 호출부가 ("recording", "paused")를 따로 하드코딩해서
+# 둘 중 하나만 고치면 다시 어긋나는 문제가 반복됐다 (리뷰 반영).
+JOINABLE_MEETING_STATUSES = ("recording", "paused")
+
 
 def create_meeting(
     db: Session, workspace_id: uuid.UUID, category_id: uuid.UUID, title: str,

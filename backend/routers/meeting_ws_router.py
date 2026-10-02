@@ -289,7 +289,7 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording/paused 상태면 자동으로 마무리한다."""
     db.expire_all()  # REST pause/resume이 다른 세션에서 커밋한 최신 값을 확실히 읽기 위함
     meeting = meeting_crud.get_meeting(db, meeting_id)
-    if not meeting or meeting.status not in ("recording", "paused"):
+    if not meeting or meeting.status not in meeting_crud.JOINABLE_MEETING_STATUSES:
         return
 
     if meeting.recording_mode == "individual":
@@ -478,10 +478,10 @@ async def meeting_stream_ws(
     if not meeting or meeting.workspace_id != workspace_id:
         await websocket.close(code=4404)
         return
-    # [수정] REST /join이 recording/paused 둘 다 허용하는데 여기는 recording만
-    # 허용해서, 일시정지 상태인 회의는 join으로 티켓은 받아도 실제 WS 연결은
-    # 거부당하는 불일치가 있었다. /join과 동일한 기준으로 맞춘다.
-    if meeting.status not in ("recording", "paused"):
+    # [수정 - 리뷰 반영] REST /join이 recording/paused 둘 다 허용하는데 여기는
+    # recording만 허용해서, 일시정지 상태인 회의는 join으로 티켓은 받아도 실제
+    # WS 연결은 거부당하는 불일치가 있었다. /join과 동일한 기준(공유 상수)으로 맞춘다.
+    if meeting.status not in meeting_crud.JOINABLE_MEETING_STATUSES:
         await websocket.close(code=4409)
         return
 

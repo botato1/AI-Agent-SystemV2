@@ -5,16 +5,27 @@
 meeting_list_ws_router.py / notification_ws_router.py에서 쓰던 패턴
 (workspace_id -> list[WebSocket] dict, broadcast, run_coroutine_threadsafe
 동기 래퍼)이 contradiction/task/room/member에도 똑같이 필요해서 클래스로
-뽑았다. 각 리소스별 ws_router 파일은 이 클래스를 인스턴스화해서 쓰고,
-자기 리소스의 티켓 검증/엔드포인트 등록만 담당한다.
+뽑았다.
+
+[수정 - 리뷰 반영] 거기서 한 발 더 나아가, contradiction/task/room_list/member
+ws_router.py 4개 파일이 "티켓 검증 -> workspace_id 일치 확인 -> 티켓 소모 ->
+멤버십 확인 -> accept -> register -> receive 루프 -> unregister/close"로
+토씨만 다르고 완전히 동일한 ~55줄짜리 핸들러를 복붙하고 있었다. 검증 함수와
+채널만 바뀌는 부분이라 make_workspace_stream_router()로 뽑아서, 각 리소스별
+ws_router.py는 이제 자기 리소스의 티켓 검증 함수 하나만 넘기면 된다.
 """
 
 import asyncio
 import uuid
+from typing import Callable
 
-from fastapi import WebSocket
+from fastapi import APIRouter, Query, WebSocket
+from jose import JWTError
 
 from backend.core.main_loop import get_main_loop
+from backend.core.ws_ticket_store import consume_ticket
+from backend.db.crud import workspace_crud
+from backend.db.session import SessionLocal
 
 
 class WorkspaceBroadcastChannel:
@@ -50,11 +61,76 @@ class WorkspaceBroadcastChannel:
     def broadcast_sync(self, workspace_id: uuid.UUID, payload: dict) -> None:
         """동기(def) 라우트 핸들러/백그라운드 스레드에서 호출하기 위한 래퍼.
         WebSocket 연결이 묶여있는 메인 이벤트 루프 위에서 스레드-안전하게 실행한다
-        (asyncio.run()으로 별도 루프를 만들지 않음 - meeting_list_ws_router.py 리뷰 반영)."""
+        (asyncio.run()으로 별도 루프를 만들지 않음 - meeting_list_ws_router.py 리뷰 반영).
+
+        [수정 - 리뷰 반영] 예전엔 future.result(timeout=5)로 완료를 기다렸는데,
+        이 함수가 전부 생성/수정/삭제 같은 동기 REST 라우트 핸들러 안에서
+        호출되다 보니 WS 클라이언트 하나가 느리거나 메인 루프가 잠깐 바쁘기만
+        해도 그 HTTP 요청 자체가 최대 5초 묶여버린다. 브로드캐스트는 응답에
+        영향을 주지 않아도 되는 부가 효과(최악의 경우 클라이언트가 다음
+        재연결/폴백 때 받음)라 fire-and-forget으로 바꾸고, 실패는 콜백에서
+        로그만 남긴다."""
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self.broadcast(workspace_id, payload), get_main_loop(),
             )
-            future.result(timeout=5)
         except Exception as e:
-            print(f"[ws_broadcast:{self._label}] 동기 컨텍스트 push 실패: {repr(e)}")
+            print(f"[ws_broadcast:{self._label}] 브로드캐스트 예약 실패: {repr(e)}")
+            return
+
+        def _log_if_failed(f) -> None:
+            exc = f.exception()
+            if exc is not None:
+                print(f"[ws_broadcast:{self._label}] 비동기 push 실패: {repr(exc)}")
+
+        future.add_done_callback(_log_if_failed)
+
+
+def make_workspace_stream_router(
+    *, label: str, path: str, verify_fn: Callable[[str], dict], tags: list[str],
+) -> tuple[APIRouter, "WorkspaceBroadcastChannel"]:
+    """contradiction/task/room_list/member가 공유하는 WS 스트림 엔드포인트를
+    조립한다. 리소스별로 다른 건 티켓 검증 함수와 경로/태그뿐이라 그것만
+    주입받는다. 반환된 router를 main.py에 등록하고, channel의
+    broadcast/broadcast_sync를 mutation 지점에서 호출하면 된다."""
+    channel = WorkspaceBroadcastChannel(label)
+    router = APIRouter(tags=tags)
+
+    @router.websocket(path)
+    async def stream_ws(websocket: WebSocket, workspace_id: uuid.UUID, ticket: str = Query(...)):
+        try:
+            payload = verify_fn(ticket)
+        except JWTError:
+            await websocket.close(code=4401)
+            return
+        if payload.get("workspace_id") != str(workspace_id):
+            await websocket.close(code=4401)
+            return
+        if not consume_ticket(payload["jti"], payload["exp"]):
+            await websocket.close(code=4401)
+            return
+
+        db = SessionLocal()
+        try:
+            member = workspace_crud.get_membership(db, workspace_id, uuid.UUID(payload["sub"]))
+        finally:
+            db.close()
+        if not member:
+            await websocket.close(code=4403)
+            return
+
+        await websocket.accept()
+        channel.register(workspace_id, websocket)
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+        finally:
+            channel.unregister(workspace_id, websocket)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+
+    return router, channel
