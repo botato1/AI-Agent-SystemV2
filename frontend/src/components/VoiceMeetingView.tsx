@@ -1,5 +1,5 @@
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert, AudioQualityAlert } from "../hooks/useLiveMeeting";
-import { Meeting, RecordingMode, AgendaReminderPopup } from "../services/meeting";
+import { Meeting, RecordingMode, AgendaReminderPopup, MeetingActiveParticipant } from "../services/meeting";
 import MeetingsPanel from "./MeetingsPanel";
 
 interface VoiceMeetingViewProps {
@@ -18,6 +18,7 @@ interface VoiceMeetingViewProps {
   errorMessage: string | null;
   joinableMeeting: Meeting | null;
   isViewer: boolean;
+  activeParticipants: MeetingActiveParticipant[];
   onStart: (
     title: string,
     relatedRoomId?: string,
@@ -60,6 +61,7 @@ export default function VoiceMeetingView({
   errorMessage,
   joinableMeeting,
   isViewer,
+  activeParticipants,
   onStart,
   onJoin,
   onPause,
@@ -100,6 +102,7 @@ export default function VoiceMeetingView({
         liveError={errorMessage}
         joinableMeeting={joinableMeeting}
         isViewer={isViewer}
+        activeParticipants={activeParticipants}
         onStartLive={onStart}
         onJoinLive={onJoin}
         onPauseLive={onPause}

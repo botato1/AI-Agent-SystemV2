@@ -4,7 +4,7 @@ import { useCategories } from "../hooks/useCategories";
 import { LiveMeetingStatus, LiveSegment, ContradictionAlert, AudioQualityAlert } from "../hooks/useLiveMeeting";
 import { useContradictions } from "../hooks/useContradictions";
 import { useDecisionReminders } from "../hooks/useDecisionReminders";
-import { Meeting, MeetingStatus, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision } from "../services/meeting";
+import { Meeting, MeetingStatus, RecordingMode, AgendaReminderPopup, AgendaReminderItem, Decision, MeetingActiveParticipant } from "../services/meeting";
 import { ContradictionSeverity } from "../services/contradiction";
 import {
   UploadIcon,
@@ -492,6 +492,7 @@ interface MeetingsPanelProps {
   liveError: string | null;
   joinableMeeting: Meeting | null;
   isViewer: boolean;
+  activeParticipants: MeetingActiveParticipant[];
   onStartLive: (
     title: string,
     relatedRoomId?: string,
@@ -1269,6 +1270,7 @@ export default function MeetingsPanel({
   liveError,
   joinableMeeting,
   isViewer,
+  activeParticipants,
   onStartLive,
   onJoinLive,
   onPauseLive,
@@ -1527,12 +1529,25 @@ export default function MeetingsPanel({
     return () => clearTimeout(timer);
   }, [highlightSegmentId]);
 
-  // 실시간 회의 스크립트 - 새 발화가 쌓여도 자동으로 안 내려가서, 계속 손으로 스크롤해야
-  // 방금 나온 말을 볼 수 있었다. 확정 발화든 진행 중인 부분 인식(partial)이든 바뀔 때마다
-  // 맨 아래로 스크롤한다.
+  // 실시간 회의 스크립트 - 예전엔 새 발화가 쌓일 때마다 무조건 맨 아래로 스크롤해서,
+  // 위로 올려서 지난 내용을 읽으려 해도 바로 다시 끌려 내려갔다. 지금 바닥에 있을
+  // 때만("드래그로 안 올린 상태") 자동으로 따라 내려가고, 위로 올려서 보는 중이면
+  // 새 발화가 와도 그 자리를 유지한다 - 다시 바닥까지 스크롤해야 자동 추적이 재개된다.
+  const liveScriptContainerRef = useRef<HTMLDivElement>(null);
   const liveScriptBottomRef = useRef<HTMLDivElement>(null);
+  const isLiveScriptAtBottomRef = useRef(true);
+
+  function handleLiveScriptScroll() {
+    const el = liveScriptContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isLiveScriptAtBottomRef.current = distanceFromBottom < 40;
+  }
+
   useEffect(() => {
-    liveScriptBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (isLiveScriptAtBottomRef.current) {
+      liveScriptBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [liveSegments.length, livePartial.confirmed, livePartial.tentative]);
 
   function toggleContradictionExpanded(id: string) {
@@ -1552,6 +1567,14 @@ export default function MeetingsPanel({
       : realMeetings;
 
   const isViewingLive = isLiveActive && !!liveMeeting && selectedMeetingId === liveMeeting.id;
+
+  // 각자 PC(individual) 모드에서는 host(회의를 시작한 사람)가 아닌 참가자도 isViewer가
+  // false라서, 예전엔 회의를 "종료"(전체 끝내기)할 수 있는 버튼을 똑같이 가졌다 - 참가자
+  // 아무나 눌러도 다른 사람이 아직 녹음 중인데 회의 전체가 끝나버리는 문제의 원인이었다.
+  // host만 전체를 끝낼 수 있고, 나머지는 자기 연결만 끊는 "나가기"만 가능해야 한다.
+  const isIndividualNonHost =
+    !!liveMeeting && liveMeeting.recording_mode === "individual" && liveMeeting.started_by !== currentUserId;
+  const canControlLiveMeeting = !isViewer && !isIndividualNonHost;
 
   const contradictions = workspaceContradictions.filter((c) => {
     if (c.source_type !== "meeting_segment") return false;
@@ -1772,10 +1795,10 @@ export default function MeetingsPanel({
           <>
             <div className="mb-3 flex items-center justify-between pb-3 border-b border-recall-border/60">
               <div>
-                {isViewer ? (
-                  <p className="text-base font-medium text-recall-text">{liveMeeting.title}</p>
-                ) : (
+                {canControlLiveMeeting ? (
                   <EditableMeetingTitle title={liveMeeting.title} onRename={onRenameLive} t={t} />
+                ) : (
+                  <p className="text-base font-medium text-recall-text">{liveMeeting.title}</p>
                 )}
                 <p className="flex items-center gap-1.5 text-xs text-recall-textMuted mt-0.5">
                   {liveStatus === "recording" && (
@@ -1784,9 +1807,37 @@ export default function MeetingsPanel({
                   {liveStatusLabel(t, liveStatus)}
                   {isViewer && <span className="text-recall-textMuted/70">· {t.meeting_view_only_badge}</span>}
                 </p>
+                {activeParticipants.length > 0 && (
+                  <div className="mt-1.5 flex items-center -space-x-1.5">
+                    {activeParticipants.slice(0, 6).map((p) =>
+                      p.profile_image_url ? (
+                        <img
+                          key={p.user_id}
+                          src={p.profile_image_url}
+                          alt={p.display_name || ""}
+                          title={p.display_name || undefined}
+                          className="h-5 w-5 flex-shrink-0 rounded-full border border-recall-bgMain object-cover"
+                        />
+                      ) : (
+                        <div
+                          key={p.user_id}
+                          title={p.display_name || undefined}
+                          className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border border-recall-bgMain bg-recall-border text-[9px] font-medium text-recall-textMuted"
+                        >
+                          {(p.display_name || "?").trim().charAt(0).toUpperCase()}
+                        </div>
+                      )
+                    )}
+                    <span className="!ml-2 text-[11px] text-recall-textMuted">
+                      {t.meeting_active_participants_count
+                        ? t.meeting_active_participants_count(activeParticipants.length)
+                        : `${activeParticipants.length}명 참가 중`}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="flex gap-1.5">
-                {isViewer ? (
+                {!canControlLiveMeeting ? (
                   (liveStatus === "recording" || liveStatus === "paused") && (
                     <button
                       onClick={onLeaveLive}
@@ -1880,7 +1931,11 @@ export default function MeetingsPanel({
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto rounded-2xl border border-recall-border bg-white/5 p-4 custom-scrollbar">
+            <div
+              ref={liveScriptContainerRef}
+              onScroll={handleLiveScriptScroll}
+              className="flex-1 overflow-y-auto rounded-2xl border border-recall-border bg-white/5 p-4 custom-scrollbar"
+            >
               {liveStatus === "reconnecting" && (
                 <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
                   <div className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-400" />
