@@ -382,33 +382,24 @@ def _verify_workspace_ws_ticket(ticket_type: str, error_label: str, token: str) 
     return payload
 
 
-def create_contradiction_ws_ticket(user_id: str, workspace_id: str) -> str:
-    return _create_workspace_ws_ticket("contradiction_ws_ticket", user_id, workspace_id)
+# [수정 - 리뷰 반영] contradiction/task/room_list/member 4개 리소스가 ticket_type
+# 문자열과 한글 에러 라벨만 다르고 완전히 동일한 create/verify 함수 쌍을 하나씩
+# 손으로 갖고 있었다. 리소스-스펙 테이블 하나로 모으고, 5번째 리소스가
+# 추가돼도 이 테이블에 한 줄만 추가하면 되도록 한다
+# (make_workspace_stream_router가 라우터 쪽에서 하던 것과 동일한 패턴).
+_WORKSPACE_RESOURCE_WS_TICKET_SPECS: dict[str, tuple[str, str]] = {
+    "contradiction": ("contradiction_ws_ticket", "모순 목록"),
+    "task": ("task_ws_ticket", "할 일 목록"),
+    "room_list": ("room_list_ws_ticket", "채팅방 목록"),
+    "member": ("member_ws_ticket", "멤버 목록"),
+}
 
 
-def verify_contradiction_ws_ticket(token: str) -> dict[str, Any]:
-    return _verify_workspace_ws_ticket("contradiction_ws_ticket", "모순 목록", token)
+def create_resource_ws_ticket(resource: str, user_id: str, workspace_id: str) -> str:
+    ticket_type, _ = _WORKSPACE_RESOURCE_WS_TICKET_SPECS[resource]
+    return _create_workspace_ws_ticket(ticket_type, user_id, workspace_id)
 
 
-def create_task_ws_ticket(user_id: str, workspace_id: str) -> str:
-    return _create_workspace_ws_ticket("task_ws_ticket", user_id, workspace_id)
-
-
-def verify_task_ws_ticket(token: str) -> dict[str, Any]:
-    return _verify_workspace_ws_ticket("task_ws_ticket", "할 일 목록", token)
-
-
-def create_room_list_ws_ticket(user_id: str, workspace_id: str) -> str:
-    return _create_workspace_ws_ticket("room_list_ws_ticket", user_id, workspace_id)
-
-
-def verify_room_list_ws_ticket(token: str) -> dict[str, Any]:
-    return _verify_workspace_ws_ticket("room_list_ws_ticket", "채팅방 목록", token)
-
-
-def create_member_ws_ticket(user_id: str, workspace_id: str) -> str:
-    return _create_workspace_ws_ticket("member_ws_ticket", user_id, workspace_id)
-
-
-def verify_member_ws_ticket(token: str) -> dict[str, Any]:
-    return _verify_workspace_ws_ticket("member_ws_ticket", "멤버 목록", token)
+def verify_resource_ws_ticket(resource: str, token: str) -> dict[str, Any]:
+    ticket_type, error_label = _WORKSPACE_RESOURCE_WS_TICKET_SPECS[resource]
+    return _verify_workspace_ws_ticket(ticket_type, error_label, token)

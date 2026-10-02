@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
-from backend.core.security import create_task_ws_ticket
+from backend.core.security import create_resource_ws_ticket
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud
 from backend.routers.task_ws_router import broadcast_task_event_sync
@@ -35,7 +35,7 @@ def get_task_ws_ticket(
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    ticket = create_task_ws_ticket(current_user_id, str(workspace_id))
+    ticket = create_resource_ws_ticket("task", current_user_id, str(workspace_id))
     return TaskWsTicketResponse(ws_ticket=ticket)
 
 

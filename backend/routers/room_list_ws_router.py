@@ -7,13 +7,15 @@ room_ws_router.py(채팅방 안 메시지 스트림)와는 별개 - 이건 "방 
 공용 핸들러는 backend/core/ws_broadcast.py의 make_workspace_stream_router 참조
 (리뷰 반영 - 이전엔 4개 리소스 ws_router.py가 거의 동일한 핸들러를 복붙했었음)."""
 
-from backend.core.security import verify_room_list_ws_ticket
+import functools
+
+from backend.core.security import verify_resource_ws_ticket
 from backend.core.ws_broadcast import make_workspace_stream_router
 
 router, _channel = make_workspace_stream_router(
     label="room_list",
     path="/api/workspaces/{workspace_id}/rooms/stream",
-    verify_fn=verify_room_list_ws_ticket,
+    verify_fn=functools.partial(verify_resource_ws_ticket, "room_list"),
     tags=["Rooms List (Realtime)"],
 )
 broadcast_room_list_event = _channel.broadcast

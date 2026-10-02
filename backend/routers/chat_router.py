@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
-from backend.core.security import create_room_ws_ticket, create_room_list_ws_ticket
+from backend.core.security import create_room_ws_ticket, create_resource_ws_ticket
 from backend.db.session import get_db, SessionLocal
 from backend.db.crud import file_crud, room_crud, workspace_crud, notification_crud, contradiction_crud
 from backend.graphs.contradiction_graph import run_contradiction_detection
@@ -177,7 +177,7 @@ def get_room_list_ws_ticket(
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    ticket = create_room_list_ws_ticket(current_user_id, str(workspace_id))
+    ticket = create_resource_ws_ticket("room_list", current_user_id, str(workspace_id))
     return RoomListWsTicketResponse(ws_ticket=ticket)
 
 

@@ -7,14 +7,16 @@
 채널 자체는 backend/core/contradiction_events.py가 소유한다 - graphs/judgment
 레이어도 같은 채널로 직접 push해야 해서(리뷰 반영, 레이어 역전 방지)."""
 
+import functools
+
 from backend.core.contradiction_events import contradiction_channel
-from backend.core.security import verify_contradiction_ws_ticket
+from backend.core.security import verify_resource_ws_ticket
 from backend.core.ws_broadcast import make_workspace_stream_router
 
 router, _channel = make_workspace_stream_router(
     label="contradiction",
     path="/api/workspaces/{workspace_id}/contradictions/stream",
-    verify_fn=verify_contradiction_ws_ticket,
+    verify_fn=functools.partial(verify_resource_ws_ticket, "contradiction"),
     tags=["Contradictions (Realtime)"],
     channel=contradiction_channel,
 )

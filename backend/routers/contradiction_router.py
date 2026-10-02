@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
-from backend.core.security import create_contradiction_ws_ticket
+from backend.core.security import create_resource_ws_ticket
 from backend.db.session import get_db
 from backend.db.crud import contradiction_crud, file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
@@ -40,7 +40,7 @@ def get_contradiction_ws_ticket(
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    ticket = create_contradiction_ws_ticket(current_user_id, str(workspace_id))
+    ticket = create_resource_ws_ticket("contradiction", current_user_id, str(workspace_id))
     return ContradictionWsTicketResponse(ws_ticket=ticket)
 
 

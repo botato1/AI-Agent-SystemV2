@@ -11,7 +11,7 @@ from backend.core.dependencies import (
     require_workspace_member,
     require_workspace_owner,
 )
-from backend.core.security import create_workspace_invite_token, create_member_ws_ticket
+from backend.core.security import create_workspace_invite_token, create_resource_ws_ticket
 from backend.core.email import send_workspace_invite_email
 from backend.db.session import get_db
 from backend.db.crud import auth_crud, room_crud, workspace_crud
@@ -124,7 +124,7 @@ def get_member_ws_ticket(
     db: Session = Depends(get_db),
 ):
     require_workspace_member(db, workspace_id, current_user_id)
-    ticket = create_member_ws_ticket(current_user_id, str(workspace_id))
+    ticket = create_resource_ws_ticket("member", current_user_id, str(workspace_id))
     return MemberWsTicketResponse(ws_ticket=ticket)
 
 
