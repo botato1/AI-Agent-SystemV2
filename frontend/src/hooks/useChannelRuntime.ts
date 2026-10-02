@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getRoomMessagesApi,
   sendRoomMessageApi,
@@ -30,6 +30,19 @@ function sortByCreatedAt(messages: RoomMessage[]): RoomMessage[] {
   return [...messages].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
+}
+
+// 메시지 하나 받을 때마다 배열 전체를 복사해서 다시 정렬하면, 채팅이 빠르게 몰릴 때
+// "메시지 1개당 전체 재정렬"이 쌓여서 메인 스레드가 막혀 화면이 멈추는 것처럼 보인다
+// (백엔드 쪽에서 리뷰로 지적받음). 새 메시지는 거의 항상 맨 뒤에 와야 정상이니, 그 경우엔
+// 그냥 뒤에 붙이기만 하고, 아주 드물게 순서가 뒤바뀐 메시지가 와야만 전체를 다시 정렬한다.
+function appendMessage(prev: RoomMessage[], incoming: RoomMessage): RoomMessage[] {
+  if (prev.some((m) => m.id === incoming.id)) return prev;
+  const last = prev[prev.length - 1];
+  if (!last || new Date(incoming.created_at).getTime() >= new Date(last.created_at).getTime()) {
+    return [...prev, incoming];
+  }
+  return sortByCreatedAt([...prev, incoming]);
 }
 
 interface CurrentUserInfo {
@@ -96,11 +109,7 @@ export function useChannelRuntime(
           const payload = JSON.parse(event.data);
           if (payload.type === "new_message" && payload.message) {
             const incoming = payload.message as RoomMessage;
-            setRoomMessages((prev) =>
-              prev.some((m) => m.id === incoming.id)
-                ? prev
-                : sortByCreatedAt([...prev, incoming])
-            );
+            setRoomMessages((prev) => appendMessage(prev, incoming));
           } else if (payload.type === "contradiction_alert") {
             setContradictionSignal((n) => n + 1);
           }
@@ -133,14 +142,21 @@ export function useChannelRuntime(
     return "알 수 없음";
   }
 
-  const chatMessages: ChatMessage[] = roomMessages.map((m) => ({
-    id: m.id,
-    author: resolveAuthor(m.sender_user_id),
-    senderId: m.sender_user_id,
-    text: m.content,
-    isMine: m.sender_user_id === currentUser.id,
-    createdAt: m.created_at,
-  }));
+  // useMemo 없이 매 렌더마다 전체 목록을 다시 .map() 돌면, 메시지가 많은 방일수록
+  // 렌더 한 번의 비용이 커진다 - roomMessages가 실제로 바뀔 때만 다시 계산한다.
+  const chatMessages: ChatMessage[] = useMemo(
+    () =>
+      roomMessages.map((m) => ({
+        id: m.id,
+        author: resolveAuthor(m.sender_user_id),
+        senderId: m.sender_user_id,
+        text: m.content,
+        isMine: m.sender_user_id === currentUser.id,
+        createdAt: m.created_at,
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roomMessages, currentUser.id, memberNameById]
+  );
 
   async function sendChatMessage(text: string) {
     if (!text.trim() || !workspaceId || !channelId) return;
@@ -150,9 +166,7 @@ export function useChannelRuntime(
     if (res.status === "success" && res.messageData) {
       const sent = res.messageData as RoomMessage;
       // WS로 같은 메시지가 먼저 도착했을 수 있으니 id 기준으로 중복 방지
-      setRoomMessages((prev) =>
-        prev.some((m) => m.id === sent.id) ? prev : sortByCreatedAt([...prev, sent])
-      );
+      setRoomMessages((prev) => appendMessage(prev, sent));
     } else {
       alert(`메시지 전송 실패: ${res.message}`);
     }
