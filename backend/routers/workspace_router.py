@@ -112,7 +112,6 @@ def delete_workspace_api(
     workspace_crud.delete_workspace(db, workspace_id)
 
 
-# 멤버 추가 (이메일로 검색, owner만)
 class MemberWsTicketResponse(BaseModel):
     ws_ticket: str
 
@@ -129,6 +128,7 @@ def get_member_ws_ticket(
     return MemberWsTicketResponse(ws_ticket=ticket)
 
 
+# 멤버 추가 (이메일로 검색, owner만)
 @router.post(
     "/{workspace_id}/members",
     response_model=WorkspaceMemberResponse,
