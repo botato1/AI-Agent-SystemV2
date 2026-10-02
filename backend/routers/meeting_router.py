@@ -1182,7 +1182,7 @@ def join_meeting_api(
     # [수정 - 리뷰 반영] "recording"만 허용하면, 일시정지 상태에서 연결이 끊긴
     # 사람이 재연결하려고 이 엔드포인트를 호출할 때 409로 막혀버린다. 프론트가
     # 재연결 시 새 ws_ticket을 여기서 받아오도록 이미 고쳐놨으므로, paused도 허용한다.
-    if meeting.status not in ("recording", "paused"):
+    if meeting.status not in meeting_crud.JOINABLE_MEETING_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="녹음 중이거나 일시정지된 회의가 아닙니다.",

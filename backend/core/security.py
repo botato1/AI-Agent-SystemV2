@@ -353,3 +353,53 @@ def verify_notification_ws_ticket(token: str) -> dict[str, Any]:
         raise JWTError("티켓에 필요한 정보가 없습니다.")
 
     return payload
+
+
+def _create_workspace_ws_ticket(
+    ticket_type: str, user_id: str, workspace_id: str, expires_delta: Optional[timedelta] = None,
+) -> str:
+    """워크스페이스 단위 WS 티켓 발급 공통 로직 - contradiction/task/room/member
+    티켓이 전부 동일한 payload 구조라 중복을 줄인다."""
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "workspace_id": workspace_id,
+        "type": ticket_type,
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def _verify_workspace_ws_ticket(ticket_type: str, error_label: str, token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+    if payload.get("type") != ticket_type:
+        raise JWTError(f"{error_label} WebSocket 티켓이 아닙니다.")
+    if not payload.get("sub") or not payload.get("workspace_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+    return payload
+
+
+# [수정 - 리뷰 반영] contradiction/task/room_list/member 4개 리소스가 ticket_type
+# 문자열과 한글 에러 라벨만 다르고 완전히 동일한 create/verify 함수 쌍을 하나씩
+# 손으로 갖고 있었다. 리소스-스펙 테이블 하나로 모으고, 5번째 리소스가
+# 추가돼도 이 테이블에 한 줄만 추가하면 되도록 한다
+# (make_workspace_stream_router가 라우터 쪽에서 하던 것과 동일한 패턴).
+_WORKSPACE_RESOURCE_WS_TICKET_SPECS: dict[str, tuple[str, str]] = {
+    "contradiction": ("contradiction_ws_ticket", "모순 목록"),
+    "task": ("task_ws_ticket", "할 일 목록"),
+    "room_list": ("room_list_ws_ticket", "채팅방 목록"),
+    "member": ("member_ws_ticket", "멤버 목록"),
+}
+
+
+def create_resource_ws_ticket(resource: str, user_id: str, workspace_id: str) -> str:
+    ticket_type, _ = _WORKSPACE_RESOURCE_WS_TICKET_SPECS[resource]
+    return _create_workspace_ws_ticket(ticket_type, user_id, workspace_id)
+
+
+def verify_resource_ws_ticket(resource: str, token: str) -> dict[str, Any]:
+    ticket_type, error_label = _WORKSPACE_RESOURCE_WS_TICKET_SPECS[resource]
+    return _verify_workspace_ws_ticket(ticket_type, error_label, token)

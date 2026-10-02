@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import (
@@ -10,10 +11,11 @@ from backend.core.dependencies import (
     require_workspace_member,
     require_workspace_owner,
 )
-from backend.core.security import create_workspace_invite_token
+from backend.core.security import create_workspace_invite_token, create_resource_ws_ticket
 from backend.core.email import send_workspace_invite_email
 from backend.db.session import get_db
 from backend.db.crud import auth_crud, room_crud, workspace_crud
+from backend.routers.member_ws_router import broadcast_member_event_sync
 from backend.schemas.workspace_schema import (
     WorkspaceCreateRequest,
     WorkspaceUpdateRequest,
@@ -110,6 +112,22 @@ def delete_workspace_api(
     workspace_crud.delete_workspace(db, workspace_id)
 
 
+class MemberWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 워크스페이스 멤버 목록 실시간 연결용 WS 티켓 발급
+@router.get("/{workspace_id}/members/stream/ticket", response_model=MemberWsTicketResponse)
+def get_member_ws_ticket(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_resource_ws_ticket("member", current_user_id, str(workspace_id))
+    return MemberWsTicketResponse(ws_ticket=ticket)
+
+
 # 멤버 추가 (이메일로 검색, owner만)
 @router.post(
     "/{workspace_id}/members",
@@ -141,6 +159,7 @@ def add_workspace_member_api(
         db, workspace_id=workspace_id, user_id=user.id,
         added_by=UUID(current_user_id), role=request.role,
     )
+    broadcast_member_event_sync(workspace_id, {"event": "member_added", "user_id": str(user.id)})
     return _member_response(member, user)
 
 
@@ -166,6 +185,7 @@ def invite_workspace_member_api(
             db, workspace_id=workspace_id, user_id=user.id,
             added_by=UUID(current_user_id), role=request.role,
         )
+        broadcast_member_event_sync(workspace_id, {"event": "member_added", "user_id": str(user.id)})
         return {"status": "added", "member": _member_response(member, user)}
 
     invite_token = create_workspace_invite_token(
@@ -220,6 +240,7 @@ def update_workspace_member_role_api(
 
     member = workspace_crud.update_member_role(db, workspace_id, user_id, request.role)
     user = auth_crud.get_user_by_id(db, user_id)
+    broadcast_member_event_sync(workspace_id, {"event": "member_updated", "user_id": str(user_id)})
     return _member_response(member, user)
 
 
@@ -247,3 +268,4 @@ def remove_workspace_member_api(
         )
 
     workspace_crud.remove_member(db, workspace_id, user_id)
+    broadcast_member_event_sync(workspace_id, {"event": "member_removed", "user_id": str(user_id)})

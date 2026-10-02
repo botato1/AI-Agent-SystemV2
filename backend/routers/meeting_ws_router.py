@@ -289,7 +289,7 @@ def _finalize_meeting_if_recording(db: Session, meeting_id: uuid.UUID) -> None:
     """WS 세션이 어떤 이유로든 끝났을 때, 아직 recording/paused 상태면 자동으로 마무리한다."""
     db.expire_all()  # REST pause/resume이 다른 세션에서 커밋한 최신 값을 확실히 읽기 위함
     meeting = meeting_crud.get_meeting(db, meeting_id)
-    if not meeting or meeting.status not in ("recording", "paused"):
+    if not meeting or meeting.status not in meeting_crud.JOINABLE_MEETING_STATUSES:
         return
 
     if meeting.recording_mode == "individual":
@@ -478,7 +478,10 @@ async def meeting_stream_ws(
     if not meeting or meeting.workspace_id != workspace_id:
         await websocket.close(code=4404)
         return
-    if meeting.status != "recording":
+    # [수정 - 리뷰 반영] REST /join이 recording/paused 둘 다 허용하는데 여기는
+    # recording만 허용해서, 일시정지 상태인 회의는 join으로 티켓은 받아도 실제
+    # WS 연결은 거부당하는 불일치가 있었다. /join과 동일한 기준(공유 상수)으로 맞춘다.
+    if meeting.status not in meeting_crud.JOINABLE_MEETING_STATUSES:
         await websocket.close(code=4409)
         return
 
@@ -547,7 +550,28 @@ async def meeting_stream_ws(
 
     offset_ms = 0
     if participant_name and meeting.started_at:
-        offset_ms = max(0, int((datetime.now(timezone.utc) - meeting.started_at).total_seconds() * 1000))
+        # [수정 - 리뷰 반영] 일시정지 중이었던 시간을 안 빼면, 일시정지 중 끊겼다가
+        # 재접속하는 참가자의 녹음 시작 offset이 실제보다 더 뒤로 밀려서
+        # (_merge_individual_recordings에서) 다른 참가자와 싱크가 어긋난다.
+        # 이 경로(paused 상태에서 재접속)는 /join·/stream이 recording만 허용하던
+        # 이전엔 애초에 막혀있었는데, JOINABLE_MEETING_STATUSES로 넓히면서
+        # 처음 실제로 도달 가능해졌다.
+        #
+        # [수정 - 리뷰 반영] paused_duration_ms는 resume 시점에만 갱신되므로,
+        # "아직 resume 안 하고 paused인 채로" 재접속하는 경우엔 진행 중인
+        # 일시정지 구간이 거기 반영돼 있지 않다 - 그 구간(now - paused_at)도
+        # 추가로 빼야 한다(meeting_router.py의 resume 핸들러가 같은 값을
+        # additional_pause_ms로 계산하는 방식과 동일).
+        now = datetime.now(timezone.utc)
+        in_progress_pause_ms = 0
+        if meeting.status == "paused" and meeting.paused_at:
+            in_progress_pause_ms = int((now - meeting.paused_at).total_seconds() * 1000)
+        offset_ms = max(
+            0,
+            int((now - meeting.started_at).total_seconds() * 1000)
+            - meeting.paused_duration_ms
+            - in_progress_pause_ms,
+        )
     recording_file = _open_recording_file(meeting_id, participant_name, offset_ms)
 
     _register_connection(meeting_id)

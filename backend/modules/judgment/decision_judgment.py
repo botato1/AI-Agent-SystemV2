@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from backend.core.contradiction_events import broadcast_contradiction_event_sync
 from backend.db.crud import contradiction_crud, history_crud
 from backend.db.modules import Decision, Meeting
 from backend.modules.llm.ollama_client import _call_ollama
@@ -470,6 +471,9 @@ def judge(
         **session_kwargs,
         **({"meeting_segment_id": source_id} if source_type == "meeting_segment"
            else {"room_message_id": source_id}),
+    )
+    broadcast_contradiction_event_sync(
+        workspace_id, {"event": "contradiction_created", "contradiction_id": str(contradiction.id)}
     )
 
     if already_popped:

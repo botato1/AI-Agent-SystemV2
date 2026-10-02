@@ -12,6 +12,7 @@ import uuid
 
 import httpx
 
+from backend.core.contradiction_events import broadcast_contradiction_event_sync
 from backend.db.crud import content_chunk_crud, contradiction_crud, file_crud
 from backend.db.session import SessionLocal
 from backend.graphs.states.contradiction_state import (
@@ -255,6 +256,9 @@ def contradiction_detect_node(state: ContradictionState) -> dict:
                 **{source_field: source_uuid},
             )
             saved_ids.append(str(row.id))
+            broadcast_contradiction_event_sync(
+                workspace_uuid, {"event": "contradiction_created", "contradiction_id": str(row.id)}
+            )
     finally:
         db.close()
 
