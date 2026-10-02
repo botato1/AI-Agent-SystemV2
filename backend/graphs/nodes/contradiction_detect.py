@@ -12,9 +12,9 @@ import uuid
 
 import httpx
 
+from backend.core.contradiction_events import broadcast_contradiction_event_sync
 from backend.db.crud import content_chunk_crud, contradiction_crud, file_crud
 from backend.db.session import SessionLocal
-from backend.routers.contradiction_ws_router import broadcast_contradiction_event_sync
 from backend.graphs.states.contradiction_state import (
     ContradictionState,
     DetectedContradiction,

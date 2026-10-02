@@ -37,11 +37,11 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from backend.core.contradiction_events import broadcast_contradiction_event_sync
 from backend.db.crud import contradiction_crud, history_crud
 from backend.db.modules import Decision, Meeting
 from backend.modules.llm.ollama_client import _call_ollama
 from backend.modules.rag import chroma_client
-from backend.routers.contradiction_ws_router import broadcast_contradiction_event_sync
 
 # [수정 - 2026.07.27] confidence/Model2 이원화 제거. 판단은 배치1~4 통합
 # 파인튜닝 모델(re-call-model1-unified-v7) 하나로, 단계별 개별 호출.

@@ -21,7 +21,6 @@ from backend.routers.room_ws_router import router as room_ws_router
 from backend.routers.contradiction_router import router as contradiction_router
 from backend.routers.worktree_router import router as worktree_router
 from backend.routers.ai_chat_router import router as ai_chat_router, standalone_router as ai_chat_standalone_router
-from backend.routers.notification_router import router as notification_router
 from backend.routers.notification_router import router as notification_router, preferences_router as notification_preferences_router
 from backend.routers.notification_ws_router import router as notification_ws_router
 from backend.routers.contradiction_ws_router import router as contradiction_ws_router

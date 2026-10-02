@@ -12,7 +12,7 @@ from backend.core.security import create_contradiction_ws_ticket
 from backend.db.session import get_db
 from backend.db.crud import contradiction_crud, file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
-from backend.routers.contradiction_ws_router import broadcast_contradiction_event_sync
+from backend.core.contradiction_events import broadcast_contradiction_event_sync
 
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (

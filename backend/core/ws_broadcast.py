@@ -88,12 +88,20 @@ class WorkspaceBroadcastChannel:
 
 def make_workspace_stream_router(
     *, label: str, path: str, verify_fn: Callable[[str], dict], tags: list[str],
+    channel: "WorkspaceBroadcastChannel | None" = None,
 ) -> tuple[APIRouter, "WorkspaceBroadcastChannel"]:
     """contradiction/task/room_list/member가 공유하는 WS 스트림 엔드포인트를
     조립한다. 리소스별로 다른 건 티켓 검증 함수와 경로/태그뿐이라 그것만
     주입받는다. 반환된 router를 main.py에 등록하고, channel의
-    broadcast/broadcast_sync를 mutation 지점에서 호출하면 된다."""
-    channel = WorkspaceBroadcastChannel(label)
+    broadcast/broadcast_sync를 mutation 지점에서 호출하면 된다.
+
+    channel을 안 넘기면 여기서 새로 만든다(기존 동작, task/room/member처럼
+    router 모듈이 채널을 전담 소유해도 되는 경우). 이미 만들어둔 채널이 있으면
+    (예: contradiction - graphs/judgment 레이어가 직접 push해야 해서 채널을
+    backend/core/contradiction_events.py에 둠) 그걸 그대로 쓰도록 넘길 수
+    있다 - 안 그러면 "router가 만든 채널"과 "core가 만든 채널"이 따로 놀아서
+    WS는 한쪽에 register되는데 push는 다른 쪽에서 나가는 버그가 생긴다."""
+    channel = channel or WorkspaceBroadcastChannel(label)
     router = APIRouter(tags=tags)
 
     @router.websocket(path)
