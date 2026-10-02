@@ -3,11 +3,14 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
+from backend.core.security import create_task_ws_ticket
 from backend.db.session import get_db
 from backend.db.crud import meeting_crud, room_crud
+from backend.routers.task_ws_router import broadcast_task_event_sync
 from backend.schemas.task_schema import (
     TaskCreateRequest,
     TaskStatusUpdateRequest,
@@ -18,6 +21,22 @@ from backend.schemas.task_schema import (
 )
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/tasks", tags=["Tasks"])
+
+
+class TaskWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 워크스페이스 할 일 목록 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=TaskWsTicketResponse)
+def get_task_ws_ticket(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_task_ws_ticket(current_user_id, str(workspace_id))
+    return TaskWsTicketResponse(ws_ticket=ticket)
 
 
 def _get_task_or_404(db: Session, task_id: UUID, workspace_id: UUID):
@@ -73,6 +92,7 @@ def create_task(
         status="open",
         created_by=UUID(current_user_id),
     )
+    broadcast_task_event_sync(workspace_id, {"event": "task_created", "task_id": str(item.id)})
     return TaskResponse.model_validate(item)
 
 
@@ -102,6 +122,7 @@ def update_task_status_api(
     _get_task_or_404(db, task_id, workspace_id)
 
     item = meeting_crud.update_task_status(db, task_id, request.status)
+    broadcast_task_event_sync(workspace_id, {"event": "task_updated", "task_id": str(task_id)})
     return TaskResponse.model_validate(item)
 
 
@@ -118,6 +139,7 @@ def update_task_priority_api(
     _get_task_or_404(db, task_id, workspace_id)
 
     item = meeting_crud.update_task_priority(db, task_id, request.priority)
+    broadcast_task_event_sync(workspace_id, {"event": "task_updated", "task_id": str(task_id)})
     return TaskResponse.model_validate(item)
 
 # 할 일 상세 수정 (제목/설명/담당자/마감일/우선순위/상태를 한 번에)
@@ -148,6 +170,7 @@ def update_task_api(
         )
 
     item = meeting_crud.update_task(db, task_id, **update_fields)
+    broadcast_task_event_sync(workspace_id, {"event": "task_updated", "task_id": str(task_id)})
     return TaskResponse.model_validate(item)
 
 
@@ -163,3 +186,4 @@ def delete_task_api(
     _get_task_or_404(db, task_id, workspace_id)
 
     meeting_crud.delete_task(db, task_id)
+    broadcast_task_event_sync(workspace_id, {"event": "task_deleted", "task_id": str(task_id)})

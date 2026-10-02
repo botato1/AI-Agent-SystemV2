@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member, resolve_category
-from backend.core.security import create_room_ws_ticket
+from backend.core.security import create_room_ws_ticket, create_room_list_ws_ticket
 from backend.db.session import get_db, SessionLocal
 from backend.db.crud import file_crud, room_crud, workspace_crud, notification_crud, contradiction_crud
 from backend.graphs.contradiction_graph import run_contradiction_detection
 from backend.routers.room_ws_router import broadcast_room_event
+from backend.routers.room_list_ws_router import broadcast_room_list_event_sync
 from backend.schemas.chat_schema import (
     RoomMessageSchema,
     RoomMessageCreateRequest,
@@ -154,6 +155,10 @@ class RoomWsTicketResponse(BaseModel):
     ws_ticket: str
 
 
+class RoomListWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
 def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
     room = room_crud.get_room_by_id(db, room_id, workspace_id)
     if not room:
@@ -162,6 +167,18 @@ def _get_room_or_404(db: Session, room_id: UUID, workspace_id: UUID):
             detail="채팅방을 찾을 수 없습니다.",
         )
     return room
+
+
+# 워크스페이스 채팅방 목록 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=RoomListWsTicketResponse)
+def get_room_list_ws_ticket(
+    workspace_id: UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_room_list_ws_ticket(current_user_id, str(workspace_id))
+    return RoomListWsTicketResponse(ws_ticket=ticket)
 
 
 # 채팅방 생성
@@ -183,6 +200,7 @@ def create_room(
         name=request.name,
         created_by=UUID(current_user_id),
     )
+    broadcast_room_list_event_sync(workspace_id, {"event": "room_created", "room_id": str(room.id)})
     return RoomResponse.model_validate(room)
 
 
@@ -241,6 +259,7 @@ def update_room(
         )
 
     room = room_crud.update_room(db, room_id, **update_fields)
+    broadcast_room_list_event_sync(workspace_id, {"event": "room_updated", "room_id": str(room_id)})
     return RoomResponse.model_validate(room)
 
 
@@ -256,6 +275,7 @@ def delete_room(
     _get_room_or_404(db, room_id, workspace_id)
 
     room_crud.delete_room(db, room_id)
+    broadcast_room_list_event_sync(workspace_id, {"event": "room_deleted", "room_id": str(room_id)})
 
 # 채팅방 실시간 연결용 WS 티켓 발급
 @router.get("/{room_id}/stream/ticket", response_model=RoomWsTicketResponse)

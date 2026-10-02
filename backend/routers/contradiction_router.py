@@ -4,12 +4,15 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.dependencies import get_current_user_id, require_workspace_member
+from backend.core.security import create_contradiction_ws_ticket
 from backend.db.session import get_db
 from backend.db.crud import contradiction_crud, file_crud, meeting_crud, notification_crud, workspace_crud
 from backend.db.modules import Decision
+from backend.routers.contradiction_ws_router import broadcast_contradiction_event_sync
 
 from backend.graphs.change_summary_graph import run_change_summary_generation
 from backend.schemas.contradiction_schema import (
@@ -23,6 +26,22 @@ from backend.schemas.type_schema import ContradictionStatus
 
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/contradictions", tags=["Contradictions"])
+
+
+class ContradictionWsTicketResponse(BaseModel):
+    ws_ticket: str
+
+
+# 워크스페이스 모순 목록 실시간 연결용 WS 티켓 발급
+@router.get("/stream/ticket", response_model=ContradictionWsTicketResponse)
+def get_contradiction_ws_ticket(
+    workspace_id: uuid.UUID,
+    current_user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    require_workspace_member(db, workspace_id, current_user_id)
+    ticket = create_contradiction_ws_ticket(current_user_id, str(workspace_id))
+    return ContradictionWsTicketResponse(ws_ticket=ticket)
 
 
 def _get_contradiction_or_404(db: Session, contradiction_id: uuid.UUID, workspace_id: uuid.UUID):
@@ -260,6 +279,9 @@ def resolve_contradiction_api(
         )
 
     updated = contradiction_crud.get_contradiction(db, contradiction_id)
+    broadcast_contradiction_event_sync(
+        workspace_id, {"event": "contradiction_updated", "contradiction_id": str(contradiction_id)}
+    )
     return _to_contradiction_schema(db, updated)
 
 
@@ -282,6 +304,9 @@ def dismiss_contradiction_api(
     _check_meeting_not_recording(db, contradiction)
     
     updated = contradiction_crud.dismiss_contradiction(db, contradiction_id)
+    broadcast_contradiction_event_sync(
+        workspace_id, {"event": "contradiction_updated", "contradiction_id": str(contradiction_id)}
+    )
     return _to_contradiction_schema(db, updated)
 
 # 변경 요약 초안 조회
@@ -328,6 +353,9 @@ def reopen_contradiction_api(
         )
 
     updated = contradiction_crud.reopen_contradiction(db, contradiction_id)
+    broadcast_contradiction_event_sync(
+        workspace_id, {"event": "contradiction_updated", "contradiction_id": str(contradiction_id)}
+    )
     return _to_contradiction_schema(db, updated)
 
 
@@ -359,5 +387,8 @@ def update_contradiction_api(
         db, contradiction_id,
         statement_text_snapshot=request.statement_text_snapshot,
         reference_text_snapshot=request.reference_text_snapshot,
+    )
+    broadcast_contradiction_event_sync(
+        workspace_id, {"event": "contradiction_updated", "contradiction_id": str(contradiction_id)}
     )
     return _to_contradiction_schema(db, updated)

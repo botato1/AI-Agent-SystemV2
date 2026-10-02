@@ -353,3 +353,62 @@ def verify_notification_ws_ticket(token: str) -> dict[str, Any]:
         raise JWTError("티켓에 필요한 정보가 없습니다.")
 
     return payload
+
+
+def _create_workspace_ws_ticket(
+    ticket_type: str, user_id: str, workspace_id: str, expires_delta: Optional[timedelta] = None,
+) -> str:
+    """워크스페이스 단위 WS 티켓 발급 공통 로직 - contradiction/task/room/member
+    티켓이 전부 동일한 payload 구조라 중복을 줄인다."""
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(seconds=WS_TICKET_EXPIRE_SECONDS)
+    )
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "workspace_id": workspace_id,
+        "type": ticket_type,
+        "jti": str(uuid_lib.uuid4()),
+        "exp": expire,
+    }
+    return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
+
+
+def _verify_workspace_ws_ticket(ticket_type: str, error_label: str, token: str) -> dict[str, Any]:
+    payload = decode_token(token)
+    if payload.get("type") != ticket_type:
+        raise JWTError(f"{error_label} WebSocket 티켓이 아닙니다.")
+    if not payload.get("sub") or not payload.get("workspace_id") or not payload.get("jti"):
+        raise JWTError("티켓에 필요한 정보가 없습니다.")
+    return payload
+
+
+def create_contradiction_ws_ticket(user_id: str, workspace_id: str) -> str:
+    return _create_workspace_ws_ticket("contradiction_ws_ticket", user_id, workspace_id)
+
+
+def verify_contradiction_ws_ticket(token: str) -> dict[str, Any]:
+    return _verify_workspace_ws_ticket("contradiction_ws_ticket", "모순 목록", token)
+
+
+def create_task_ws_ticket(user_id: str, workspace_id: str) -> str:
+    return _create_workspace_ws_ticket("task_ws_ticket", user_id, workspace_id)
+
+
+def verify_task_ws_ticket(token: str) -> dict[str, Any]:
+    return _verify_workspace_ws_ticket("task_ws_ticket", "할 일 목록", token)
+
+
+def create_room_list_ws_ticket(user_id: str, workspace_id: str) -> str:
+    return _create_workspace_ws_ticket("room_list_ws_ticket", user_id, workspace_id)
+
+
+def verify_room_list_ws_ticket(token: str) -> dict[str, Any]:
+    return _verify_workspace_ws_ticket("room_list_ws_ticket", "채팅방 목록", token)
+
+
+def create_member_ws_ticket(user_id: str, workspace_id: str) -> str:
+    return _create_workspace_ws_ticket("member_ws_ticket", user_id, workspace_id)
+
+
+def verify_member_ws_ticket(token: str) -> dict[str, Any]:
+    return _verify_workspace_ws_ticket("member_ws_ticket", "멤버 목록", token)
