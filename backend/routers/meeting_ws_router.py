@@ -556,10 +556,21 @@ async def meeting_stream_ws(
         # 이 경로(paused 상태에서 재접속)는 /join·/stream이 recording만 허용하던
         # 이전엔 애초에 막혀있었는데, JOINABLE_MEETING_STATUSES로 넓히면서
         # 처음 실제로 도달 가능해졌다.
+        #
+        # [수정 - 리뷰 반영] paused_duration_ms는 resume 시점에만 갱신되므로,
+        # "아직 resume 안 하고 paused인 채로" 재접속하는 경우엔 진행 중인
+        # 일시정지 구간이 거기 반영돼 있지 않다 - 그 구간(now - paused_at)도
+        # 추가로 빼야 한다(meeting_router.py의 resume 핸들러가 같은 값을
+        # additional_pause_ms로 계산하는 방식과 동일).
+        now = datetime.now(timezone.utc)
+        in_progress_pause_ms = 0
+        if meeting.status == "paused" and meeting.paused_at:
+            in_progress_pause_ms = int((now - meeting.paused_at).total_seconds() * 1000)
         offset_ms = max(
             0,
-            int((datetime.now(timezone.utc) - meeting.started_at).total_seconds() * 1000)
-            - meeting.paused_duration_ms,
+            int((now - meeting.started_at).total_seconds() * 1000)
+            - meeting.paused_duration_ms
+            - in_progress_pause_ms,
         )
     recording_file = _open_recording_file(meeting_id, participant_name, offset_ms)
 
