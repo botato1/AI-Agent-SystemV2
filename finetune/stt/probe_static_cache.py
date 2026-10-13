@@ -117,6 +117,9 @@ def main():
                     baseline_text[length] = text
                 elif length in baseline_text and text != baseline_text[length]:
                     note = "⚠️ 텍스트가 dynamic과 다름"
+                    if i == 0:
+                        print(f"      dynamic : {baseline_text[length]}")
+                        print(f"      {mode:<8}: {text}")
                 if i == 0 and mode != "dynamic":
                     note = (note + " 첫 호출(컴파일 포함)").strip()
                 print(f"{mode:<16}{length:>4.0f}s{i + 1:>5}{ms:>8.0f}ms{ntok:>6d}{ms / max(ntok, 1):>8.1f}ms  {note}")
