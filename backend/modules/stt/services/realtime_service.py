@@ -1,5 +1,6 @@
 import asyncio
 import re
+import threading
 import time
 import numpy as np
 from faster_whisper import WhisperModel
@@ -296,8 +297,13 @@ class RealtimeSTTSession:
         return chunk, offset_sec
 
     def _transcribe(
-        self, model: WhisperModel, audio: np.ndarray, beam_size: int, initial_prompt: str | None = None
+        self, model: WhisperModel, audio: np.ndarray, beam_size: int, initial_prompt: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> list[dict]:
+        # 취소를 지원하는 엔진(Qwen)에만 넘긴다 — Whisper 계열 transcribe는 이 인자가 없다.
+        extra = {"cancel_event": cancel_event} if (
+            cancel_event is not None and getattr(model, "supports_cancel", False)
+        ) else {}
         segments, _info = model.transcribe(
             audio,
             language=WHISPER_LANGUAGE,
@@ -305,6 +311,7 @@ class RealtimeSTTSession:
             vad_filter=True,
             initial_prompt=initial_prompt,
             condition_on_previous_text=False,
+            **extra,
         )
         return [
             {
@@ -493,7 +500,7 @@ class RealtimeSTTSession:
             logger.info(f"🔍 목소리 변화로 화자 전환 감지(침묵 없음): {names}")
         return runs
 
-    async def _transcribe_with_speakers(self, audio, precise_task, final_model):
+    async def _transcribe_with_speakers(self, audio, precise_task, final_model, cancel_event=None):
         """
         화자 전환을 반영해 전사한다. (세그먼트 목록, 대표 화자)를 반환.
 
@@ -520,6 +527,10 @@ class RealtimeSTTSession:
             segments, speaker = await asyncio.gather(precise_task, speaker_task)
             return segments, speaker
 
+        # future.cancel()만으로는 이미 executor에서 돌고 있는 스레드가 안 멈춘다 —
+        # 버려진 전체 전사가 GPU를 끝까지 써서 턴별 전사를 늦췄다(전환 청크 지연 2배).
+        if cancel_event is not None:
+            cancel_event.set()
         precise_task.cancel()
         logger.info(
             f"🔀 [{self.session_id}] 청크 안에서 화자 전환 감지 — {len(turns)}개 턴으로 분할 전사"
@@ -585,8 +596,10 @@ class RealtimeSTTSession:
         # 정확도는 회의 종료 후 정밀 재분석(large-v3)이 책임지므로, 여기서는 빠른 모델을 쓴다.
         # (실측: turbo 0.26초·건 vs large-v3 1.73초·건, 정확도 차 1.35%p — config 주석 참고)
         final_model = self.fast_model if REALTIME_FINAL_USES_FAST_MODEL else self.precise_model
+        cancel_event = threading.Event()
         precise_task = loop.run_in_executor(
-            None, self._transcribe, final_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt
+            None, self._transcribe, final_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt,
+            cancel_event,
         )
         if self.fixed_speaker is not None:
             # 각자 PC 모드 — 참가자가 이미 자기 이름으로 접속했으므로 화자 식별 자체가 불필요
@@ -594,7 +607,7 @@ class RealtimeSTTSession:
             speaker_label = self.fixed_speaker
         elif self.speaker_identifier is not None:
             precise_segments, speaker_label = await self._transcribe_with_speakers(
-                audio, precise_task, final_model
+                audio, precise_task, final_model, cancel_event
             )
         else:
             precise_segments = await precise_task

@@ -30,9 +30,11 @@ Whisper 계열 대신 도입한 이유 (실측 근거, 2026-07-30):
   경계를 세그먼트 시각으로 쓴다. 여기서도 같은 창 분할을 적용해 동일한
   granularity를 유지한다. 별도 정렬 모델(Qwen3-ForcedAligner)은 필요 없다.
 """
+import threading
+
 import numpy as np
 import torch
-from transformers import AutoProcessor, AutoModelForMultimodalLM
+from transformers import AutoProcessor, AutoModelForMultimodalLM, StoppingCriteria, StoppingCriteriaList
 
 from ..core.config import logger, REALTIME_SAMPLE_RATE, QWEN_ITN_ENABLED
 from ..utils.korean_itn import to_digits
@@ -52,6 +54,25 @@ _ECHO_MIN_RUN = 20
 _ECHO_MIN_RATIO = 0.5
 
 
+class _CancelCriteria(StoppingCriteria):
+    """
+    cancel_event가 set되면 다음 토큰 경계에서 생성을 멈춘다.
+
+    왜 필요한가: asyncio의 future.cancel()은 run_in_executor로 이미 돌고 있는 스레드를
+    멈추지 못한다. 화자 전환이 감지돼 버려진 전체 청크 전사가 GPU에서 끝까지 돌며
+    턴별 전사와 자원을 나눠 쓰던 문제(전환 청크 지연이 같은 길이에서 약 2배)를
+    협력적 취소로 막는다. 취소 지연은 토큰 하나(약 24ms)다.
+    """
+
+    def __init__(self, event: threading.Event):
+        self.event = event
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return torch.full(
+            (input_ids.shape[0],), self.event.is_set(), dtype=torch.bool, device=input_ids.device
+        )
+
+
 class Qwen3ASREngine:
     """
     faster_whisper.WhisperModel / TransformersWhisperEngine와 동일한 호출 규약
@@ -59,6 +80,9 @@ class Qwen3ASREngine:
     no_speech_prob 보유)을 제공한다. 호출부(stt_service, realtime_service,
     refine_service)는 수정 없이 그대로 재사용된다.
     """
+
+    # 호출부가 transcribe(cancel_event=...)를 넘겨도 되는 엔진인지 알리는 표식.
+    supports_cancel = True
 
     def __init__(self, model_id: str, device: str = "cuda", context: str | None = None):
         """
@@ -89,7 +113,12 @@ class Qwen3ASREngine:
         vad_filter: bool = True,
         initial_prompt: str | None = None,
         condition_on_previous_text: bool = False,  # 호환용. 창 단위 독립 디코딩만 지원.
+        cancel_event: threading.Event | None = None,
     ):
+        """
+        cancel_event: set되면 진행 중인 생성을 토큰 경계에서 멈추고 지금까지의 결과를
+                      버린 채 빈 목록을 돌려준다. 결과를 쓰지 않을 때(버려진 전사)만 쓸 것.
+        """
         audio = load_audio(audio_or_path)
         info = TranscribeInfo(language=language)
         trim_offset_sec = 0.0
@@ -107,12 +136,18 @@ class Qwen3ASREngine:
         segments = []
         window_start = 0
         while window_start < len(audio):
+            if cancel_event is not None and cancel_event.is_set():
+                return [], info
             raw_window = audio[window_start: window_start + _WINDOW_SAMPLES]
             if len(raw_window) < REALTIME_SAMPLE_RATE // 20:
                 break
             cutoff = find_window_cutoff(raw_window)
             window = raw_window[:cutoff]
-            text, avg_logprob = self._generate_window(window, language, beam_size, context)
+            text, avg_logprob = self._generate_window(
+                window, language, beam_size, context, cancel_event
+            )
+            if cancel_event is not None and cancel_event.is_set():
+                return [], info  # 중간에 끊긴 창의 불완전한 텍스트는 쓰지 않는다
             if text:
                 segments.append(Segment(
                     start=round(trim_offset_sec + window_start / REALTIME_SAMPLE_RATE, 2),
@@ -131,7 +166,10 @@ class Qwen3ASREngine:
 
         return segments, info
 
-    def _generate_window(self, window: np.ndarray, language: str, beam_size: int, context: str | None):
+    def _generate_window(
+        self, window: np.ndarray, language: str, beam_size: int, context: str | None,
+        cancel_event: threading.Event | None = None,
+    ):
         """30초 이하 오디오 창 하나를 전사해 (텍스트, avg_logprob)를 반환."""
         inputs = self.processor.apply_chat_template(
             [self._build_conversation(window, language, context)],
@@ -141,14 +179,20 @@ class Qwen3ASREngine:
         ).to(self.model.device, self.model.dtype)
 
         prompt_len = inputs["input_ids"].shape[1]
+        extra = {}
+        if cancel_event is not None:
+            extra["stopping_criteria"] = StoppingCriteriaList([_CancelCriteria(cancel_event)])
         outputs = self.model.generate(
             **inputs,
+            **extra,
             max_new_tokens=_MAX_NEW_TOKENS,
             num_beams=max(beam_size, 1),
             do_sample=False,
             return_dict_in_generate=True,
             output_scores=True,
         )
+        if cancel_event is not None and cancel_event.is_set():
+            return "", 0.0  # 호출부(transcribe)가 취소를 보고 결과를 버린다
         generated_ids = outputs.sequences[:, prompt_len:]
         text = self.processor.decode(generated_ids, return_format="transcription_only")[0].strip()
         if self._is_context_echo(text, context):
