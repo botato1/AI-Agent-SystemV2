@@ -16,6 +16,9 @@ REALTIME_MAX_CHUNK_SEC(최대 청크 길이)를 값별로 바꿔가며 **지연�
 
 사용법 (GPU 서버, stt venv, 백그라운드 권장 — 약 50분):
   nohup python sweep_chunk_cap.py > ~/nas_private/chunkcap.log 2>&1 &
+
+세션 id는 chunkcap-{값}-r{반복}-{회의}-{실행시각}이다. 방금 돌린 실행만 보려면:
+  python analyze_chunk_latency_log.py /tmp/stt.log --prefix chunkcap-15 --last 6
 """
 import argparse
 import json
@@ -110,9 +113,11 @@ def score_realtime(meeting_id: str, script: str) -> dict:
     return {"cp": cp, "di": di, "orc": orc, "cost": cost}
 
 
-def run_one(cap: int, rep: int, meeting: tuple) -> dict | None:
+def run_one(cap: int, rep: int, meeting: tuple, tag: str) -> dict | None:
     orig, script, attendees, short = meeting
-    session_id = f"chunkcap-{cap}-r{rep}-{short}"
+    # 꼬리표(tag)가 없으면 재실행 때 같은 id가 로그에서 이전 실행과 합쳐져 청크 수·지연이
+    # 부풀려진다(2026-10-13에 실제로 물림 — "청크수/런"이 2~3배로 찍혔다).
+    session_id = f"chunkcap-{cap}-r{rep}-{short}-{tag}"
     queue_before = count_in_log("큐 포화")
 
     out = subprocess.run(
@@ -152,6 +157,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--caps", nargs="+", type=int, default=[28, 15, 10, 6])
     ap.add_argument("--repeats", type=int, default=2)
+    ap.add_argument("--tag", default=time.strftime("%m%d%H%M"),
+                    help="세션 id 꼬리표. 기본은 실행 시각 — 재실행끼리 로그에서 섞이지 않게 한다")
     args = ap.parse_args()
 
     total_audio = 117 + 166
@@ -168,7 +175,7 @@ def main():
                 break
             for rep in range(1, args.repeats + 1):
                 for meeting in MEETINGS:
-                    row = run_one(cap, rep, meeting)
+                    row = run_one(cap, rep, meeting, args.tag)
                     if row:
                         rows.append(row)
                         created.append(row["meeting_id"])
