@@ -30,6 +30,7 @@ Whisper 계열 대신 도입한 이유 (실측 근거, 2026-07-30):
   경계를 세그먼트 시각으로 쓴다. 여기서도 같은 창 분할을 적용해 동일한
   granularity를 유지한다. 별도 정렬 모델(Qwen3-ForcedAligner)은 필요 없다.
 """
+import os
 import threading
 import time
 
@@ -37,7 +38,7 @@ import numpy as np
 import torch
 from transformers import AutoProcessor, AutoModelForMultimodalLM, StoppingCriteria, StoppingCriteriaList
 
-from ..core.config import logger, REALTIME_SAMPLE_RATE, QWEN_ITN_ENABLED
+from ..core.config import logger, REALTIME_SAMPLE_RATE, QWEN_ITN_ENABLED, build_qwen_context
 from ..utils.korean_itn import to_digits
 from .whisper_engine import (
     Segment, TranscribeInfo,
@@ -48,6 +49,10 @@ from .whisper_engine import (
 # 한 창에서 생성할 최대 토큰 수. 30초 발화가 이보다 길게 전사되는 경우는 없지만,
 # 환각 루프에 빠졌을 때 무한정 생성하는 걸 막는 상한 역할도 한다.
 _MAX_NEW_TOKENS = 448
+
+# fast_decode의 torch.compile을 동적 shape로 돌릴지. 켜면 프롬프트·오디오 길이가 바뀔 때
+# 재컴파일(수십 초 정지)을 피하지만 약간 느려질 수 있다. 기본은 꺼짐 — 실측 후 결정한다.
+_FAST_DECODE_DYNAMIC = os.getenv("STT_FAST_DECODE_DYNAMIC", "0").strip().lower() in ("1", "true", "yes")
 
 # 컨텍스트 받아적기 판정 기준 (_is_context_echo).
 # 20자 연속 일치 + 출력의 절반 이상 — 실제 발화가 이 조건을 만족하기는 매우 어렵다.
@@ -137,17 +142,35 @@ class Qwen3ASREngine:
         torch.cuda.empty_cache()
         self.fast_decode = True
 
-        # 컴파일을 서버 시작 시점에 끝낸다 — 첫 실사용 청크가 15초 넘게 걸리지 않게.
-        # 길이가 달라도 재컴파일되지 않음을 10/12/15초에서 확인했지만 몇 가지 길이를 미리 돌린다.
+        # 컴파일을 서버 시작 시점에 끝낸다 — 첫 실사용 청크가 20초 넘게 멈추지 않게.
+        # 실제 호출은 회의마다 길이가 다른 컨텍스트(참석자 이름)와 길이가 다른 오디오를
+        # 쓰므로, 워밍업도 컨텍스트 길이 × 오디오 길이를 섞어서 돌린다. (2026-10-14 실측:
+        # 컨텍스트 없는 워밍업만 했더니 첫 실제 호출이 22초 걸렸다.)
+        sample_names = ["문지수", "김나연", "이승주", "가동현", "이준오", "홍길동", "김철수", "박영희"]
+        contexts = [self.default_context]
+        for n in (3, 8):
+            contexts.append(build_qwen_context(sample_names[:n]) or self.default_context)
         rng = np.random.default_rng(0)
-        for seconds in (3.0, 12.0, 6.0):
-            noise = (0.02 * rng.standard_normal(int(seconds * REALTIME_SAMPLE_RATE))).astype(np.float32)
-            self._generate_window(noise, "ko", 1, None)
+        for ctx in contexts:
+            for seconds in (3.0, 8.0, 15.0):
+                noise = (0.02 * rng.standard_normal(int(seconds * REALTIME_SAMPLE_RATE))).astype(np.float32)
+                t_call = time.perf_counter()
+                self._generate_window(noise, "ko", 1, ctx)
+                logger.info(
+                    f"   워밍업 {seconds:.0f}초 / 컨텍스트 {len(ctx or '')}자: "
+                    f"{time.perf_counter() - t_call:.1f}초"
+                )
         logger.info(f"⚡ fast_decode 준비 완료 (int8 + 정적 캐시/compile, {time.perf_counter() - started:.0f}초)")
 
     def _decode_kwargs(self) -> dict:
         """generate에 덧붙일 인자. 정적 캐시는 fast_decode일 때만."""
-        return {"cache_implementation": "static"} if self.fast_decode else {}
+        if not self.fast_decode:
+            return {}
+        kwargs = {"cache_implementation": "static"}
+        if _FAST_DECODE_DYNAMIC:
+            from transformers import CompileConfig
+            kwargs["compile_config"] = CompileConfig(dynamic=True)
+        return kwargs
 
     @torch.inference_mode()
     def transcribe(

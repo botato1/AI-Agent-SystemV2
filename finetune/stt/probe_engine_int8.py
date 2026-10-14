@@ -75,6 +75,23 @@ def main():
         print(f"{st:>5.0f}s{ms0:>8.0f}ms{ms1:>8.0f}ms{ms0 / ms1:>7.2f}x{d:>8.1f}%{lp1 - lp0:>+11.3f}")
     print(f"{'평균':>6}{'':>18}{sum(speedups) / len(speedups):>7.2f}x{sum(diffs) / len(diffs):>8.1f}%")
 
+    # 재컴파일 정지 시험: 회의마다 달라지는 컨텍스트 길이 × 청크 길이를 섞어 호출하고
+    # 유독 오래 걸리는 호출이 있는지 본다(워밍업이 놓친 shape가 있으면 수십 초 걸린다).
+    names = ["문지수", "김나연", "이승주", "가동현", "이준오", "홍길동", "김철수"]
+    print("\n재컴파일 정지 시험 (컨텍스트 길이 × 청크 길이)")
+    slow = []
+    for n in (0, 2, 5, 7):
+        ctx = build_qwen_context(names[:n]) if n else context
+        for sec in (2.0, 4.0, 7.0, 9.0, 13.0, 15.0):
+            ms, _t, _lp = run(fast, load_clip(args.meeting, 10.0, sec), ctx)
+            if ms > 3000:
+                slow.append((n, sec, ms))
+    if slow:
+        for n, sec, ms in slow:
+            print(f"  ⚠️ 이름 {n}명 / {sec:.0f}초 청크: {ms:.0f}ms — 재컴파일 의심")
+    else:
+        print("  24개 조합 모두 3초 이내 — 재컴파일 정지 없음")
+
     # 동시 호출: 같은 클립들을 스레드 N개가 동시에 돌려 단독 결과와 비교
     print(f"\n동시 호출 시험 ({args.threads}스레드 × 클립 {len(clips)}개)")
     results: dict[tuple[int, int], str] = {}
