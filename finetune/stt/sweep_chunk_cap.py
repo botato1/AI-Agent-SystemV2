@@ -51,17 +51,21 @@ def sh(cmd: str) -> str:
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
 
 
-def restart(cap: int | None) -> bool:
-    """cap이 None이면 환경변수 없이(=배포 기본값) 띄운다."""
+def restart(cap: int | None, int8: bool = False) -> bool:
+    """cap이 None이면 환경변수 없이(=배포 기본값) 띄운다. int8이면 실시간 확정용
+    int8 인스턴스를 켠다(STT_REALTIME_INT8) — 모델을 하나 더 올리고 컴파일 워밍업까지
+    하느라 시작이 5분 안팎 걸려서 대기 시간을 늘린다."""
     sh("kill $(pgrep -f 'uvicorn stt.main:app') 2>/dev/null")
     time.sleep(5)
     env = f"REALTIME_MAX_CHUNK_SEC={cap} " if cap is not None else ""
+    if int8:
+        env += "STT_REALTIME_INT8=1 "
     subprocess.Popen(
         f"cd {os.path.join(_REPO_ROOT, 'backend', 'modules')} && "
         f"SPEAKER_ABSOLUTE_FLOOR=0.35 {env}nohup python -u -m uvicorn stt.main:app "
         f"--host 0.0.0.0 --port 8002 >> {LOG_PATH} 2>&1 &", shell=True,
     )
-    for _ in range(40):
+    for _ in range(120 if int8 else 40):
         time.sleep(5)
         if sh("curl -s -o /dev/null -w '%{http_code}' http://localhost:8002/docs") == "200":
             return True
@@ -157,9 +161,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--caps", nargs="+", type=int, default=[28, 15, 10, 6])
     ap.add_argument("--repeats", type=int, default=2)
+    ap.add_argument("--int8", action="store_true",
+                    help="실시간 확정 전사를 int8 + 정적 캐시/compile 인스턴스로(STT_REALTIME_INT8=1)")
     ap.add_argument("--tag", default=time.strftime("%m%d%H%M"),
                     help="세션 id 꼬리표. 기본은 실행 시각 — 재실행끼리 로그에서 섞이지 않게 한다")
     args = ap.parse_args()
+    if args.int8 and "i8" not in args.tag:
+        args.tag += "i8"   # 세션 id에 남겨 bf16 실행과 로그에서 구분한다
 
     total_audio = 117 + 166
     est_min = len(args.caps) * args.repeats * (total_audio + 90) / 60
@@ -170,7 +178,7 @@ def main():
     try:
         for cap in args.caps:
             print(f"{'=' * 60}\nREALTIME_MAX_CHUNK_SEC={cap}\n{'=' * 60}")
-            if not restart(cap):
+            if not restart(cap, int8=args.int8):
                 print("  ❌ 서버가 안 뜬다 — 중단")
                 break
             for rep in range(1, args.repeats + 1):
