@@ -234,6 +234,10 @@ class Qwen3ASREngine:
 
         return segments, info
 
+    # inference_mode가 필수다: 워밍업은 transcribe() 밖에서 이 함수를 직접 부르는데, 그때
+    # grad 모드가 켜져 있으면 torch.compile이 역전파까지 포함한 그래프를 컴파일해서
+    # (실측 167초) 실제 호출(inference_mode) 때 가드가 달라 또 다시 컴파일한다(105초 정지).
+    @torch.inference_mode()
     def _generate_window(
         self, window: np.ndarray, language: str, beam_size: int, context: str | None,
         cancel_event: threading.Event | None = None,
