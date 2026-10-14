@@ -10,7 +10,7 @@ from pyannote.audio import Pipeline
 from .core.config import (
     logger, UPLOAD_DIR, MEETINGS_DIR, DEVICE, COMPUTE_TYPE, STT_ENGINE,
     WHISPER_MODEL_FAST, WHISPER_MODEL_PRECISE, DIARIZATION_MODEL, HF_TOKEN, LORA_ADAPTER_PATH,
-    build_qwen_context
+    STT_REALTIME_INT8, build_qwen_context
 )
 from .routers import stt, realtime, enroll, meetings, profiles
 from .services.speaker_id_service import load_speaker_embedding_inference
@@ -56,6 +56,20 @@ async def lifespan(app: FastAPI):
     logger.info(f"🧠 STT 모델 로딩 중... 엔진={STT_ENGINE} / 모델={WHISPER_MODEL_PRECISE} / {DEVICE}")
     app.state.stt_model = _load_whisper_model(WHISPER_MODEL_PRECISE, adapter_path=LORA_ADAPTER_PATH)
     logger.info("✅ STT (정밀/확정용) 모델 로딩 완료")
+
+    # 실시간 확정 전용 int8 인스턴스(선택). 회의 후 정밀 재분석은 위 bf16 인스턴스를 그대로 쓴다.
+    # 준비에 실패하면 같은 인스턴스를 공유하는 기존 동작으로 되돌아간다.
+    app.state.stt_model_realtime = app.state.stt_model
+    if STT_REALTIME_INT8 and STT_ENGINE == "qwen":
+        try:
+            from .services.qwen_engine import Qwen3ASREngine
+            logger.info("⚡ 실시간 확정용 int8 인스턴스 준비 중 (STT_REALTIME_INT8)")
+            app.state.stt_model_realtime = Qwen3ASREngine(
+                WHISPER_MODEL_PRECISE, device=DEVICE, context=build_qwen_context(), fast_decode=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — 어떤 실패든 서비스는 계속돼야 한다
+            logger.warning(f"⚠️ int8 인스턴스 준비 실패 — bf16 인스턴스로 계속: {exc!r}")
+            app.state.stt_model_realtime = app.state.stt_model
 
     # 실시간 회의 STT용 Fast Pass 모델 (2-pass 구조, 저지연 초안 전사 담당)
     if WHISPER_MODEL_FAST == WHISPER_MODEL_PRECISE:

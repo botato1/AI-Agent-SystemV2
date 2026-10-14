@@ -125,6 +125,13 @@ PRECISE_BEAM_SIZE = WHISPER_BEAM_SIZE
 # True로 켜면 실시간 확정도 turbo가 담당한다(속도 우선이 필요할 때).
 REALTIME_FINAL_USES_FAST_MODEL = os.getenv("REALTIME_FINAL_USES_FAST_MODEL", "0").strip().lower() not in ("0", "false", "no")
 
+# 실시간 확정 전사 전용으로 int8 가중치 양자화 + 정적 캐시/torch.compile 인스턴스를 따로 올린다.
+# (2026-10-13 probe_int8.py 실측: 토큰당 25ms → 10.5ms, 글자 변화 0.2%.)
+# 회의 후 정밀 재분석(refine)은 기존 bf16 인스턴스를 그대로 쓴다 — 최종 회의록의
+# 정확도는 건드리지 않는다. 켜려면 torchao가 필요하고, 준비에 실패하면 서버는
+# bf16 인스턴스로 되돌아가 계속 동작한다. 기본값은 꺼짐(배포 동작 불변).
+STT_REALTIME_INT8 = os.getenv("STT_REALTIME_INT8", "0").strip().lower() in ("1", "true", "yes")
+
 # ──────────────────────────────────────────
 # 신뢰도 게이팅 임계값
 # (이 기준 미달이면 confident=False로 표시 → 모순 감지 엔진이 경보를 보류)

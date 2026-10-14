@@ -31,6 +31,7 @@ Whisper 계열 대신 도입한 이유 (실측 근거, 2026-07-30):
   granularity를 유지한다. 별도 정렬 모델(Qwen3-ForcedAligner)은 필요 없다.
 """
 import threading
+import time
 
 import numpy as np
 import torch
@@ -84,13 +85,24 @@ class Qwen3ASREngine:
     # 호출부가 transcribe(cancel_event=...)를 넘겨도 되는 엔진인지 알리는 표식.
     supports_cancel = True
 
-    def __init__(self, model_id: str, device: str = "cuda", context: str | None = None):
+    def __init__(
+        self, model_id: str, device: str = "cuda", context: str | None = None,
+        fast_decode: bool = False,
+    ):
         """
         context: 회의 도메인 용어/배경 텍스트. 모든 전사에 기본으로 적용된다.
                  전사 호출에서 initial_prompt를 따로 주면 그쪽이 우선한다.
+        fast_decode: 디코더를 int8 가중치 양자화(torchao) + 정적 KV 캐시/torch.compile로
+                 돌린다. 토큰당 시간이 절반 이하가 되지만(실측 25 → 10.5ms) 출력이 아주
+                 조금 달라질 수 있어 실시간 확정 전용 인스턴스에만 쓴다. 준비에 실패하면
+                 예외를 던진다 — 호출부가 일반 인스턴스로 되돌아가야 한다.
         """
         self.device = device
         self.default_context = context
+        self.fast_decode = False
+        # 정적 캐시는 모델 하나에 캐시 객체를 공유하므로 호출이 겹치면 서로 덮어쓴다.
+        # fast_decode일 때만 생성을 한 번에 하나씩 돌린다(일반 경로는 병렬 그대로).
+        self._decode_lock = threading.Lock()
 
         logger.info(f"🧠 Qwen3-ASR 로딩 중... ({model_id} / {device})")
         self.processor = AutoProcessor.from_pretrained(model_id)
@@ -103,6 +115,39 @@ class Qwen3ASREngine:
         logger.info(f"✅ Qwen3-ASR 로딩 완료 ({model_id})")
         if context:
             logger.info(f"📌 컨텍스트 바이어싱 활성 ({len(context)}자)")
+        if fast_decode:
+            self._enable_fast_decode()
+
+    def _enable_fast_decode(self) -> None:
+        """int8 weight-only 양자화 + 정적 캐시 컴파일 워밍업. 실패하면 예외."""
+        if self.device != "cuda":
+            raise RuntimeError("fast_decode는 CUDA에서만 지원한다")
+        from torchao.quantization import quantize_
+        try:
+            from torchao.quantization import Int8WeightOnlyConfig as make_config
+        except ImportError:  # 구버전 이름
+            from torchao.quantization import int8_weight_only as make_config
+
+        started = time.perf_counter()
+        # 오디오 인코더는 건드리지 않는다 — 디코더 쪽 Linear만(토큰마다 읽히는 가중치).
+        quantize_(
+            self.model, make_config(),
+            filter_fn=lambda m, fqn: isinstance(m, torch.nn.Linear) and "audio" not in fqn.lower(),
+        )
+        torch.cuda.empty_cache()
+        self.fast_decode = True
+
+        # 컴파일을 서버 시작 시점에 끝낸다 — 첫 실사용 청크가 15초 넘게 걸리지 않게.
+        # 길이가 달라도 재컴파일되지 않음을 10/12/15초에서 확인했지만 몇 가지 길이를 미리 돌린다.
+        rng = np.random.default_rng(0)
+        for seconds in (3.0, 12.0, 6.0):
+            noise = (0.02 * rng.standard_normal(int(seconds * REALTIME_SAMPLE_RATE))).astype(np.float32)
+            self._generate_window(noise, "ko", 1, None)
+        logger.info(f"⚡ fast_decode 준비 완료 (int8 + 정적 캐시/compile, {time.perf_counter() - started:.0f}초)")
+
+    def _decode_kwargs(self) -> dict:
+        """generate에 덧붙일 인자. 정적 캐시는 fast_decode일 때만."""
+        return {"cache_implementation": "static"} if self.fast_decode else {}
 
     @torch.inference_mode()
     def transcribe(
@@ -179,18 +224,29 @@ class Qwen3ASREngine:
         ).to(self.model.device, self.model.dtype)
 
         prompt_len = inputs["input_ids"].shape[1]
-        extra = {}
+        extra = self._decode_kwargs()
         if cancel_event is not None:
             extra["stopping_criteria"] = StoppingCriteriaList([_CancelCriteria(cancel_event)])
-        outputs = self.model.generate(
-            **inputs,
-            **extra,
-            max_new_tokens=_MAX_NEW_TOKENS,
-            num_beams=max(beam_size, 1),
-            do_sample=False,
-            return_dict_in_generate=True,
-            output_scores=True,
-        )
+
+        def _run():
+            return self.model.generate(
+                **inputs,
+                **extra,
+                max_new_tokens=_MAX_NEW_TOKENS,
+                num_beams=max(beam_size, 1),
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+
+        if self.fast_decode:
+            with self._decode_lock:
+                # 락을 기다리는 사이 취소됐다면 GPU를 쓰지 않고 돌아간다
+                if cancel_event is not None and cancel_event.is_set():
+                    return "", 0.0
+                outputs = _run()
+        else:
+            outputs = _run()
         if cancel_event is not None and cancel_event.is_set():
             return "", 0.0  # 호출부(transcribe)가 취소를 보고 결과를 버린다
         generated_ids = outputs.sequences[:, prompt_len:]

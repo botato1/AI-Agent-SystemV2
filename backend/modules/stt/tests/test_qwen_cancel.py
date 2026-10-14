@@ -54,3 +54,42 @@ def test_transcribe_without_event_unchanged(monkeypatch):
     monkeypatch.setattr(qwen_engine, "trim_silence", lambda a: (a, True, 0.0))
     segments, _ = engine.transcribe(_speech(5), vad_filter=True)
     assert [s.text for s in segments] == ["가나다"]
+
+
+def test_decode_kwargs_static_only_when_fast_decode():
+    engine = _engine_without_model()
+    engine.fast_decode = False
+    assert engine._decode_kwargs() == {}
+    engine.fast_decode = True
+    assert engine._decode_kwargs() == {"cache_implementation": "static"}
+
+
+def test_fast_decode_skips_generate_when_cancelled_while_waiting(monkeypatch):
+    """락을 기다리는 사이 취소되면 generate를 부르지 않는다."""
+    engine = _engine_without_model()
+    engine.fast_decode = True
+    engine._decode_lock = threading.Lock()
+
+    class _Inputs(dict):
+        def to(self, *a, **k):
+            return self
+
+    class _Proc:
+        def apply_chat_template(self, *a, **k):
+            return _Inputs(input_ids=torch.zeros((1, 3), dtype=torch.long))
+
+    class _Model:
+        device, dtype = "cpu", torch.float32
+        called = False
+
+        def generate(self, **k):
+            _Model.called = True
+            raise AssertionError("취소됐으면 부르면 안 된다")
+
+    engine.processor = _Proc()
+    engine.model = _Model()
+    monkeypatch.setattr(engine, "_build_conversation", lambda *a, **k: [])
+    event = threading.Event()
+    event.set()
+    text, _lp = engine._generate_window(_speech(1), "ko", 1, None, event)
+    assert text == "" and not _Model.called
