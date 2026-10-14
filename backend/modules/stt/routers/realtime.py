@@ -428,7 +428,8 @@ async def realtime_stt_ws(
     is_reconnect = recorder is not None and not recorder.finalized
 
     fast_model = websocket.app.state.stt_model_fast
-    precise_model = websocket.app.state.stt_model
+    # 실시간 확정은 int8 인스턴스(켜진 경우)를, 없으면 기존 인스턴스를 쓴다.
+    precise_model = getattr(websocket.app.state, "stt_model_realtime", websocket.app.state.stt_model)
 
     if participant_name:
         # ② 각자 PC 모드

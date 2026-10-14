@@ -30,11 +30,15 @@ Whisper 계열 대신 도입한 이유 (실측 근거, 2026-07-30):
   경계를 세그먼트 시각으로 쓴다. 여기서도 같은 창 분할을 적용해 동일한
   granularity를 유지한다. 별도 정렬 모델(Qwen3-ForcedAligner)은 필요 없다.
 """
+import os
+import threading
+import time
+
 import numpy as np
 import torch
-from transformers import AutoProcessor, AutoModelForMultimodalLM
+from transformers import AutoProcessor, AutoModelForMultimodalLM, StoppingCriteria, StoppingCriteriaList
 
-from ..core.config import logger, REALTIME_SAMPLE_RATE, QWEN_ITN_ENABLED
+from ..core.config import logger, REALTIME_SAMPLE_RATE, QWEN_ITN_ENABLED, build_qwen_context
 from ..utils.korean_itn import to_digits
 from .whisper_engine import (
     Segment, TranscribeInfo,
@@ -46,10 +50,33 @@ from .whisper_engine import (
 # 환각 루프에 빠졌을 때 무한정 생성하는 걸 막는 상한 역할도 한다.
 _MAX_NEW_TOKENS = 448
 
+# fast_decode의 torch.compile을 동적 shape로 돌릴지. 켜면 프롬프트·오디오 길이가 바뀔 때
+# 재컴파일(수십 초 정지)을 피하지만 약간 느려질 수 있다. 기본은 꺼짐 — 실측 후 결정한다.
+_FAST_DECODE_DYNAMIC = os.getenv("STT_FAST_DECODE_DYNAMIC", "0").strip().lower() in ("1", "true", "yes")
+
 # 컨텍스트 받아적기 판정 기준 (_is_context_echo).
 # 20자 연속 일치 + 출력의 절반 이상 — 실제 발화가 이 조건을 만족하기는 매우 어렵다.
 _ECHO_MIN_RUN = 20
 _ECHO_MIN_RATIO = 0.5
+
+
+class _CancelCriteria(StoppingCriteria):
+    """
+    cancel_event가 set되면 다음 토큰 경계에서 생성을 멈춘다.
+
+    왜 필요한가: asyncio의 future.cancel()은 run_in_executor로 이미 돌고 있는 스레드를
+    멈추지 못한다. 화자 전환이 감지돼 버려진 전체 청크 전사가 GPU에서 끝까지 돌며
+    턴별 전사와 자원을 나눠 쓰던 문제(전환 청크 지연이 같은 길이에서 약 2배)를
+    협력적 취소로 막는다. 취소 지연은 토큰 하나(약 24ms)다.
+    """
+
+    def __init__(self, event: threading.Event):
+        self.event = event
+
+    def __call__(self, input_ids, scores, **kwargs):
+        return torch.full(
+            (input_ids.shape[0],), self.event.is_set(), dtype=torch.bool, device=input_ids.device
+        )
 
 
 class Qwen3ASREngine:
@@ -60,13 +87,27 @@ class Qwen3ASREngine:
     refine_service)는 수정 없이 그대로 재사용된다.
     """
 
-    def __init__(self, model_id: str, device: str = "cuda", context: str | None = None):
+    # 호출부가 transcribe(cancel_event=...)를 넘겨도 되는 엔진인지 알리는 표식.
+    supports_cancel = True
+
+    def __init__(
+        self, model_id: str, device: str = "cuda", context: str | None = None,
+        fast_decode: bool = False,
+    ):
         """
         context: 회의 도메인 용어/배경 텍스트. 모든 전사에 기본으로 적용된다.
                  전사 호출에서 initial_prompt를 따로 주면 그쪽이 우선한다.
+        fast_decode: 디코더를 int8 가중치 양자화(torchao) + 정적 KV 캐시/torch.compile로
+                 돌린다. 토큰당 시간이 절반 이하가 되지만(실측 25 → 10.5ms) 출력이 아주
+                 조금 달라질 수 있어 실시간 확정 전용 인스턴스에만 쓴다. 준비에 실패하면
+                 예외를 던진다 — 호출부가 일반 인스턴스로 되돌아가야 한다.
         """
         self.device = device
         self.default_context = context
+        self.fast_decode = False
+        # 정적 캐시는 모델 하나에 캐시 객체를 공유하므로 호출이 겹치면 서로 덮어쓴다.
+        # fast_decode일 때만 생성을 한 번에 하나씩 돌린다(일반 경로는 병렬 그대로).
+        self._decode_lock = threading.Lock()
 
         logger.info(f"🧠 Qwen3-ASR 로딩 중... ({model_id} / {device})")
         self.processor = AutoProcessor.from_pretrained(model_id)
@@ -79,6 +120,57 @@ class Qwen3ASREngine:
         logger.info(f"✅ Qwen3-ASR 로딩 완료 ({model_id})")
         if context:
             logger.info(f"📌 컨텍스트 바이어싱 활성 ({len(context)}자)")
+        if fast_decode:
+            self._enable_fast_decode()
+
+    def _enable_fast_decode(self) -> None:
+        """int8 weight-only 양자화 + 정적 캐시 컴파일 워밍업. 실패하면 예외."""
+        if self.device != "cuda":
+            raise RuntimeError("fast_decode는 CUDA에서만 지원한다")
+        from torchao.quantization import quantize_
+        try:
+            from torchao.quantization import Int8WeightOnlyConfig as make_config
+        except ImportError:  # 구버전 이름
+            from torchao.quantization import int8_weight_only as make_config
+
+        started = time.perf_counter()
+        # 오디오 인코더는 건드리지 않는다 — 디코더 쪽 Linear만(토큰마다 읽히는 가중치).
+        quantize_(
+            self.model, make_config(),
+            filter_fn=lambda m, fqn: isinstance(m, torch.nn.Linear) and "audio" not in fqn.lower(),
+        )
+        torch.cuda.empty_cache()
+        self.fast_decode = True
+
+        # 컴파일을 서버 시작 시점에 끝낸다 — 첫 실사용 청크가 20초 넘게 멈추지 않게.
+        # 실제 호출은 회의마다 길이가 다른 컨텍스트(참석자 이름)와 길이가 다른 오디오를
+        # 쓰므로, 워밍업도 컨텍스트 길이 × 오디오 길이를 섞어서 돌린다. (2026-10-14 실측:
+        # 컨텍스트 없는 워밍업만 했더니 첫 실제 호출이 22초 걸렸다.)
+        sample_names = ["문지수", "김나연", "이승주", "가동현", "이준오", "홍길동", "김철수", "박영희"]
+        contexts = [self.default_context]
+        for n in (3, 8):
+            contexts.append(build_qwen_context(sample_names[:n]) or self.default_context)
+        rng = np.random.default_rng(0)
+        for ctx in contexts:
+            for seconds in (3.0, 8.0, 15.0):
+                noise = (0.02 * rng.standard_normal(int(seconds * REALTIME_SAMPLE_RATE))).astype(np.float32)
+                t_call = time.perf_counter()
+                self._generate_window(noise, "ko", 1, ctx)
+                logger.info(
+                    f"   워밍업 {seconds:.0f}초 / 컨텍스트 {len(ctx or '')}자: "
+                    f"{time.perf_counter() - t_call:.1f}초"
+                )
+        logger.info(f"⚡ fast_decode 준비 완료 (int8 + 정적 캐시/compile, {time.perf_counter() - started:.0f}초)")
+
+    def _decode_kwargs(self) -> dict:
+        """generate에 덧붙일 인자. 정적 캐시는 fast_decode일 때만."""
+        if not self.fast_decode:
+            return {}
+        kwargs = {"cache_implementation": "static"}
+        if _FAST_DECODE_DYNAMIC:
+            from transformers import CompileConfig
+            kwargs["compile_config"] = CompileConfig(dynamic=True)
+        return kwargs
 
     @torch.inference_mode()
     def transcribe(
@@ -89,7 +181,12 @@ class Qwen3ASREngine:
         vad_filter: bool = True,
         initial_prompt: str | None = None,
         condition_on_previous_text: bool = False,  # 호환용. 창 단위 독립 디코딩만 지원.
+        cancel_event: threading.Event | None = None,
     ):
+        """
+        cancel_event: set되면 진행 중인 생성을 토큰 경계에서 멈추고 지금까지의 결과를
+                      버린 채 빈 목록을 돌려준다. 결과를 쓰지 않을 때(버려진 전사)만 쓸 것.
+        """
         audio = load_audio(audio_or_path)
         info = TranscribeInfo(language=language)
         trim_offset_sec = 0.0
@@ -107,12 +204,18 @@ class Qwen3ASREngine:
         segments = []
         window_start = 0
         while window_start < len(audio):
+            if cancel_event is not None and cancel_event.is_set():
+                return [], info
             raw_window = audio[window_start: window_start + _WINDOW_SAMPLES]
             if len(raw_window) < REALTIME_SAMPLE_RATE // 20:
                 break
             cutoff = find_window_cutoff(raw_window)
             window = raw_window[:cutoff]
-            text, avg_logprob = self._generate_window(window, language, beam_size, context)
+            text, avg_logprob = self._generate_window(
+                window, language, beam_size, context, cancel_event
+            )
+            if cancel_event is not None and cancel_event.is_set():
+                return [], info  # 중간에 끊긴 창의 불완전한 텍스트는 쓰지 않는다
             if text:
                 segments.append(Segment(
                     start=round(trim_offset_sec + window_start / REALTIME_SAMPLE_RATE, 2),
@@ -131,7 +234,14 @@ class Qwen3ASREngine:
 
         return segments, info
 
-    def _generate_window(self, window: np.ndarray, language: str, beam_size: int, context: str | None):
+    # inference_mode가 필수다: 워밍업은 transcribe() 밖에서 이 함수를 직접 부르는데, 그때
+    # grad 모드가 켜져 있으면 torch.compile이 역전파까지 포함한 그래프를 컴파일해서
+    # (실측 167초) 실제 호출(inference_mode) 때 가드가 달라 또 다시 컴파일한다(105초 정지).
+    @torch.inference_mode()
+    def _generate_window(
+        self, window: np.ndarray, language: str, beam_size: int, context: str | None,
+        cancel_event: threading.Event | None = None,
+    ):
         """30초 이하 오디오 창 하나를 전사해 (텍스트, avg_logprob)를 반환."""
         inputs = self.processor.apply_chat_template(
             [self._build_conversation(window, language, context)],
@@ -141,14 +251,31 @@ class Qwen3ASREngine:
         ).to(self.model.device, self.model.dtype)
 
         prompt_len = inputs["input_ids"].shape[1]
-        outputs = self.model.generate(
-            **inputs,
-            max_new_tokens=_MAX_NEW_TOKENS,
-            num_beams=max(beam_size, 1),
-            do_sample=False,
-            return_dict_in_generate=True,
-            output_scores=True,
-        )
+        extra = self._decode_kwargs()
+        if cancel_event is not None:
+            extra["stopping_criteria"] = StoppingCriteriaList([_CancelCriteria(cancel_event)])
+
+        def _run():
+            return self.model.generate(
+                **inputs,
+                **extra,
+                max_new_tokens=_MAX_NEW_TOKENS,
+                num_beams=max(beam_size, 1),
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+
+        if self.fast_decode:
+            with self._decode_lock:
+                # 락을 기다리는 사이 취소됐다면 GPU를 쓰지 않고 돌아간다
+                if cancel_event is not None and cancel_event.is_set():
+                    return "", 0.0
+                outputs = _run()
+        else:
+            outputs = _run()
+        if cancel_event is not None and cancel_event.is_set():
+            return "", 0.0  # 호출부(transcribe)가 취소를 보고 결과를 버린다
         generated_ids = outputs.sequences[:, prompt_len:]
         text = self.processor.decode(generated_ids, return_format="transcription_only")[0].strip()
         if self._is_context_echo(text, context):
