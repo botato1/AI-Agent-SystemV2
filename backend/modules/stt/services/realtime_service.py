@@ -1,5 +1,6 @@
 import asyncio
 import re
+import threading
 import time
 import numpy as np
 from faster_whisper import WhisperModel
@@ -78,6 +79,37 @@ def _longest_common_prefix(a: list[str], b: list[str]) -> list[str]:
             break
         prefix.append(x)
     return prefix
+
+
+def _absorb_short_turns(
+    turns: list[tuple[int, int, str | None]], min_samples: int,
+) -> list[tuple[int, int, str | None]]:
+    """너무 짧은 턴은 이웃 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
+    라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
+    때문에 긴 발화를 쪼개는 건 얻는 것보다 잃는 게 크다.
+
+    기본은 앞 턴에 흡수. 첫 턴이 짧으면 흡수할 앞이 없으므로 대신 **다음 턴에**
+    흡수시킨다 (2026-08-20, 팀 제보) — 안 그러면 화자 전환 직후 첫 몇 글자가
+    통째로 별도 턴이 되어 미상으로 방치된다("개발."만 분리돼 화자미상, "진행
+    상황..."만 이승주로 붙은 사례). 턴은 서로 붙어 있어(경계 사이 간격 없음)
+    자연스러운 침묵으로 나뉜 게 아니라 강제로 잘린 조각이므로 흡수가 맞다.
+    """
+    merged: list[tuple[int, int, str | None]] = []
+    i = 0
+    while i < len(turns):
+        start, end, label = turns[i]
+        too_short = (end - start) < min_samples
+        if too_short and merged:
+            prev_start, _, prev_label = merged[-1]
+            merged[-1] = (prev_start, end, prev_label)
+        elif too_short and not merged and i + 1 < len(turns):
+            _, next_end, next_label = turns[i + 1]
+            merged.append((start, next_end, next_label))
+            i += 1   # 다음 턴은 이미 흡수했으므로 건너뛴다
+        else:
+            merged.append((start, end, label))
+        i += 1
+    return merged
 
 
 class RealtimeSTTSession:
@@ -188,7 +220,7 @@ class RealtimeSTTSession:
         """
         청크를 확정해도 되는 시점인지 판단.
         - 최소 길이(2초) 미만이면 아직 안 보냄
-        - 최대 길이(28초)에 도달하면 침묵을 못 찾아도 강제로 자름 (지연 폭주 방지)
+        - 최대 길이(REALTIME_MAX_CHUNK_SEC, 기본 15초)에 도달하면 침묵을 못 찾아도 강제로 자름 (지연 폭주 방지)
         - 그 사이엔 VAD로 '말이 끊긴 지점(500ms 이상 침묵)'을 찾으면 자름
         VAD는 버퍼 전체를 훑는 비싼 연산이라 매 프레임이 아니라 일정 주기로만 수행.
         """
@@ -265,8 +297,13 @@ class RealtimeSTTSession:
         return chunk, offset_sec
 
     def _transcribe(
-        self, model: WhisperModel, audio: np.ndarray, beam_size: int, initial_prompt: str | None = None
+        self, model: WhisperModel, audio: np.ndarray, beam_size: int, initial_prompt: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> list[dict]:
+        # 취소를 지원하는 엔진(Qwen)에만 넘긴다 — Whisper 계열 transcribe는 이 인자가 없다.
+        extra = {"cancel_event": cancel_event} if (
+            cancel_event is not None and getattr(model, "supports_cancel", False)
+        ) else {}
         segments, _info = model.transcribe(
             audio,
             language=WHISPER_LANGUAGE,
@@ -274,6 +311,7 @@ class RealtimeSTTSession:
             vad_filter=True,
             initial_prompt=initial_prompt,
             condition_on_previous_text=False,
+            **extra,
         )
         return [
             {
@@ -368,7 +406,7 @@ class RealtimeSTTSession:
         """
         청크를 화자 턴 단위로 나눈다. [(시작 샘플, 끝 샘플, 화자), ...]
 
-        왜 필요한가: 청크는 VAD가 침묵을 찾을 때까지 최대 28초까지 늘어난다. 두 사람이
+        왜 필요한가: 청크는 VAD가 침묵을 찾을 때까지 최대 REALTIME_MAX_CHUNK_SEC(기본 15초)까지 늘어난다. 두 사람이
         쉼 없이 주고받으면 한 청크에 여러 화자가 들어가는데, 청크당 라벨 하나만 붙이면
         질문과 답변이 한 사람 발언으로 묶인다.
 
@@ -429,31 +467,7 @@ class RealtimeSTTSession:
         # 내부 표식은 밖으로 내보내지 않는다 — 호출부는 None(미상)으로 받는다
         turns = [(a, b, None if c == _UNKNOWN_SPEAKER else c) for a, b, c in turns]
 
-        # 너무 짧은 턴은 이웃 턴에 흡수한다. 턴이 짧을수록 화자 판정에 쓸 오디오가 줄어
-        # 라벨이 흔들리고, 전사도 문맥이 끊겨 나빠진다. 맞장구("네", "아 그래요") 하나
-        # 때문에 긴 발화를 쪼개는 건 얻는 것보다 잃는 게 크다.
-        #
-        # 기본은 앞 턴에 흡수. 첫 턴이 짧으면 흡수할 앞이 없으므로 대신 **다음 턴에**
-        # 흡수시킨다 (2026-08-20, 팀 제보) — 안 그러면 화자 전환 직후 첫 몇 글자가
-        # 통째로 별도 턴이 되어 미상으로 방치된다("개발."만 분리돼 화자미상, "진행
-        # 상황..."만 이승주로 붙은 사례). 턴은 서로 붙어 있어(경계 사이 간격 없음)
-        # 자연스러운 침묵으로 나뉜 게 아니라 강제로 잘린 조각이므로 흡수가 맞다.
-        merged: list[tuple[int, int, str | None]] = []
-        i = 0
-        while i < len(turns):
-            start, end, label = turns[i]
-            too_short = (end - start) < _MIN_SPLIT_TURN_SAMPLES
-            if too_short and merged:
-                prev_start, _, prev_label = merged[-1]
-                merged[-1] = (prev_start, end, prev_label)
-            elif too_short and not merged and i + 1 < len(turns):
-                _, next_end, next_label = turns[i + 1]
-                merged.append((start, next_end, next_label))
-                i += 1   # 다음 턴은 이미 흡수했으므로 건너뛴다
-            else:
-                merged.append((start, end, label))
-            i += 1
-        return merged
+        return _absorb_short_turns(turns, _MIN_SPLIT_TURN_SAMPLES)
 
     def _scan_speaker_changes(self, audio: np.ndarray) -> list[tuple[int, int, str | None]]:
         """
@@ -486,7 +500,7 @@ class RealtimeSTTSession:
             logger.info(f"🔍 목소리 변화로 화자 전환 감지(침묵 없음): {names}")
         return runs
 
-    async def _transcribe_with_speakers(self, audio, precise_task, final_model):
+    async def _transcribe_with_speakers(self, audio, precise_task, final_model, cancel_event=None):
         """
         화자 전환을 반영해 전사한다. (세그먼트 목록, 대표 화자)를 반환.
 
@@ -513,6 +527,10 @@ class RealtimeSTTSession:
             segments, speaker = await asyncio.gather(precise_task, speaker_task)
             return segments, speaker
 
+        # future.cancel()만으로는 이미 executor에서 돌고 있는 스레드가 안 멈춘다 —
+        # 버려진 전체 전사가 GPU를 끝까지 써서 턴별 전사를 늦췄다(전환 청크 지연 2배).
+        if cancel_event is not None:
+            cancel_event.set()
         precise_task.cancel()
         logger.info(
             f"🔀 [{self.session_id}] 청크 안에서 화자 전환 감지 — {len(turns)}개 턴으로 분할 전사"
@@ -578,8 +596,10 @@ class RealtimeSTTSession:
         # 정확도는 회의 종료 후 정밀 재분석(large-v3)이 책임지므로, 여기서는 빠른 모델을 쓴다.
         # (실측: turbo 0.26초·건 vs large-v3 1.73초·건, 정확도 차 1.35%p — config 주석 참고)
         final_model = self.fast_model if REALTIME_FINAL_USES_FAST_MODEL else self.precise_model
+        cancel_event = threading.Event()
         precise_task = loop.run_in_executor(
-            None, self._transcribe, final_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt
+            None, self._transcribe, final_model, audio, PRECISE_BEAM_SIZE, self.initial_prompt,
+            cancel_event,
         )
         if self.fixed_speaker is not None:
             # 각자 PC 모드 — 참가자가 이미 자기 이름으로 접속했으므로 화자 식별 자체가 불필요
@@ -587,7 +607,7 @@ class RealtimeSTTSession:
             speaker_label = self.fixed_speaker
         elif self.speaker_identifier is not None:
             precise_segments, speaker_label = await self._transcribe_with_speakers(
-                audio, precise_task, final_model
+                audio, precise_task, final_model, cancel_event
             )
         else:
             precise_segments = await precise_task
@@ -789,6 +809,12 @@ class RealtimeSTTSession:
         '이전 결과와 일치하는 앞부분'만 확정 텍스트로 흘려보낸다.
         발화자가 안 쉬고 계속 말해도 화면에 실시간으로 텍스트가 갱신되는 효과.
         확정 여부는 결국 process_chunk()의 Precise Pass가 최종 보정한다.
+
+        ⚠️ 확정된 앞부분을 재스캔에서 빼는 트림 최적화는 시도했다가 되돌렸다
+        (2026-10-02, PR #163 리뷰). 지연 지표(latency=)는 정밀 패스 시간이라 이 경로와
+        무관해 효과가 없었고, 단어 비율 근사로 자르면 앞 문맥을 잃어 이미 확정한
+        단어가 뒤늦게 달라질 수 있는 새 실패 모드만 생긴다. 근거는
+        finetune/stt/NEXT.md 10번 참고.
         """
         now = time.monotonic()
         if now - self._last_partial_at < REALTIME_PARTIAL_INTERVAL_SEC:

@@ -17,3 +17,6 @@ torchaudio>=2.2.0
 
 # LoRA 파인튜닝 (finetune/stt/train_lora.py)
 peft>=0.19.0
+
+# 유닛테스트 (backend/modules/stt/tests/) — GPU/모델 없이 순수 로직만 검증
+pytest>=8.0.0
