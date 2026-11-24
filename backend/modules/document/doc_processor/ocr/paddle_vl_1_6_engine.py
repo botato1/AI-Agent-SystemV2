@@ -10,6 +10,10 @@ _model = None
 _processor = None
 
 MODEL_ID = "PaddlePaddle/PaddleOCR-VL-1.6"
+# 2026-11-06 커밋(132c45f)이 modeling_paddleocr_vl.py의 create_causal_mask 호출부를 바꾸면서
+# cache_position 인자 누락 에러를 일으킴 (_patch_causal_mask가 그 변경을 못 따라감).
+# 그 직전 커밋(2026-08-08)으로 고정해 자동 업데이트로 인한 회귀를 막는다.
+MODEL_REVISION = "c5630abae1d940eafe0697512a0325494b02ab42"
 
 
 def _patch_causal_mask():
@@ -36,11 +40,12 @@ def _load():
         print(f"[VL-1.6] Loading {MODEL_ID} via transformers...")
         _model = AutoModelForCausalLM.from_pretrained(
             MODEL_ID,
+            revision=MODEL_REVISION,
             trust_remote_code=True,
             dtype=torch.bfloat16,
             device_map="auto",
         ).eval()
-        _processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+        _processor = AutoProcessor.from_pretrained(MODEL_ID, revision=MODEL_REVISION, trust_remote_code=True)
         print("[VL-1.6] PaddleOCR-VL-1.6 loaded.")
     return _model, _processor
 
