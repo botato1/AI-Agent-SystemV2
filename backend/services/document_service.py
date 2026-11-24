@@ -20,7 +20,7 @@ from backend.services import similarity_service
 
 
 # 8003 문서 처리 서버 URL
-DOCUMENT_PROCESS_URL = "http://61.81.98.82:8003/api/document"
+DOCUMENT_PROCESS_URL = "http://61.81.98.86:8003/api/document"
 DOCUMENT_PROCESS_BASE_URL = DOCUMENT_PROCESS_URL.rsplit("/api/document", 1)[0]
 
 
